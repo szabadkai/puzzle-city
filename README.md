@@ -4,6 +4,8 @@ A small, polished sandbox city-building prototype inspired by effortless archite
 
 Click the water to raise a foundation, click existing structures to build upward, and arrange neighboring pieces to discover courtyards, arches, bridges, towers, docks, and other procedural transformations.
 
+Every accessible home attracts a named resident. Citizens follow the town's quays and courtyards using A* routes, keep daily routines, form friendships, and can be clicked to reveal their small lives. A full day passes in about eight minutes, with pause, normal, and fast simulation controls.
+
 ## Controls
 
 - Left click: build

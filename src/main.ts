@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { CityRenderer } from './city';
+import { CitizenSystem } from './citizens';
 import type { SavedTown } from './types';
 import './style.css';
 
@@ -10,11 +11,31 @@ const STORAGE_KEY = 'little-tides-town-v1';
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="hud">
     <div class="brand"><h1>Little Tides</h1><p>潮町 · a town from the sea</p></div>
+    <div class="time-widget" aria-label="Time and simulation speed">
+      <span id="clock-display">Day 1 · 07:30</span>
+      <div class="speed-controls">
+        <button data-speed="0" aria-label="Pause simulation">Ⅱ</button>
+        <button data-speed="1" class="active" aria-label="Normal simulation speed">1×</button>
+        <button data-speed="3" aria-label="Triple simulation speed">3×</button>
+      </div>
+    </div>
     <div class="top-actions">
       <button id="center" aria-label="Center camera">Center view</button>
       <button id="reset" aria-label="Start a new town">New tide</button>
     </div>
     <div class="toast" id="toast"></div>
+    <aside class="citizen-card" id="citizen-card" aria-live="polite">
+      <button class="card-close" id="card-close" aria-label="Close citizen card">×</button>
+      <span class="card-kicker">Town resident</span>
+      <h2 id="citizen-name"></h2>
+      <p class="card-role" id="citizen-role"></p>
+      <p id="citizen-home"></p>
+      <dl>
+        <div><dt>Likes</dt><dd id="citizen-likes"></dd></div>
+        <div><dt>Now</dt><dd id="citizen-activity"></dd></div>
+      </dl>
+      <p class="card-relationship" id="citizen-relationship"></p>
+    </aside>
     <div class="recipe-note" id="note"><strong>Harbor notebook</strong><span>Click the water. Old walls and new stories will find their own shape.</span></div>
     <div class="hint" id="hint">
       <span><i class="mouse"></i> click to build</span>
@@ -25,7 +46,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 `;
 
 const saved = loadTown();
-let seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
+const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
+let timeOfDay = saved?.timeOfDay ?? 7.5;
+let day = saved?.day ?? 1;
+let simulationSpeed = 1;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x91c7c1);
@@ -73,12 +97,13 @@ sun.shadow.camera.far = 60;
 sun.shadow.bias = -.0005;
 scene.add(sun);
 
-const waterUniforms = { uTime: { value: 0 }, uSun: { value: new THREE.Vector3(-.5, .8, .4) } };
+const waterUniforms = { uTime: { value: 0 }, uDay: { value: 1 } };
 const waterMaterial = new THREE.ShaderMaterial({
   uniforms: waterUniforms,
   transparent: false,
   vertexShader: `
     uniform float uTime;
+    uniform float uDay;
     varying float vWave;
     varying vec3 vWorld;
     void main() {
@@ -93,6 +118,7 @@ const waterMaterial = new THREE.ShaderMaterial({
   `,
   fragmentShader: `
     uniform float uTime;
+    uniform float uDay;
     varying float vWave;
     varying vec3 vWorld;
     void main() {
@@ -101,6 +127,8 @@ const waterMaterial = new THREE.ShaderMaterial({
       vec3 pale = vec3(.24, .61, .58);
       vec3 color = mix(deep, pale, .50 + vWave * 1.75 + ribbons * .055);
       color += vec3(.055, .035, .008) * ribbons;
+      color *= mix(.34, 1.0, uDay);
+      color += vec3(.018, .026, .055) * (1.0 - uDay);
       gl_FragColor = vec4(color, 1.0);
     }
   `,
@@ -122,6 +150,8 @@ scene.add(seabed);
 const city = new CityRenderer(seed);
 scene.add(city.root);
 if (saved) city.load(saved.cells);
+const citizens = new CitizenSystem(seed, city.cells, saved?.citizens ?? []);
+scene.add(citizens.root);
 
 const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xffd894, transparent: true, opacity: .56, depthWrite: false });
 const hover = new THREE.Mesh(new RoundedBoxGeometry(CityRenderer.cellSize() * .9, .16, CityRenderer.cellSize() * .9, 4, .12), hoverMaterial);
@@ -139,6 +169,7 @@ let dragged = false;
 let toastTimer = 0;
 let saveTimer = 0;
 let audioContext: AudioContext | null = null;
+let selectedCitizenId: string | null = null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   pointerStart.set(event.clientX, event.clientY);
@@ -154,7 +185,11 @@ renderer.domElement.addEventListener('pointermove', (event) => {
 renderer.domElement.addEventListener('pointerup', (event) => {
   renderer.domElement.classList.remove('dragging');
   if (dragged || !hoveredCell) return;
-  if (event.button === 0) build(hoveredCell.x, hoveredCell.z);
+  if (event.button === 0) {
+    if (inspectCitizen(event.clientX, event.clientY)) return;
+    hideCitizenCard();
+    build(hoveredCell.x, hoveredCell.z);
+  }
   if (event.button === 2) demolish(hoveredCell.x, hoveredCell.z);
 });
 
@@ -185,6 +220,36 @@ function updateHover(clientX: number, clientY: number) {
   hoverMaterial.color.setHex(allowed ? 0xffd894 : 0xc65f57);
 }
 
+function inspectCitizen(clientX: number, clientY: number) {
+  pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const intersection = raycaster.intersectObject(citizens.root, true)[0];
+  const citizenId = citizens.citizenIdFrom(intersection?.object ?? null);
+  if (!citizenId) return false;
+  selectedCitizenId = citizenId;
+  updateCitizenCard();
+  hover.visible = false;
+  return true;
+}
+
+function updateCitizenCard() {
+  if (!selectedCitizenId) return;
+  const card = citizens.card(selectedCitizenId);
+  if (!card) return false;
+  document.querySelector('#citizen-name')!.textContent = card.name;
+  document.querySelector('#citizen-role')!.textContent = card.occupation;
+  document.querySelector('#citizen-home')!.textContent = card.home;
+  document.querySelector('#citizen-likes')!.textContent = card.likes;
+  document.querySelector('#citizen-activity')!.textContent = card.activity;
+  document.querySelector('#citizen-relationship')!.textContent = card.relationship;
+  document.querySelector('#citizen-card')!.classList.add('show');
+}
+
+function hideCitizenCard() {
+  selectedCitizenId = null;
+  document.querySelector('#citizen-card')!.classList.remove('show');
+}
+
 function build(x: number, z: number) {
   const before = city.topologyLabel(x, z);
   if (!city.place(x, z)) {
@@ -193,6 +258,7 @@ function build(x: number, z: number) {
     return;
   }
   const after = city.topologyLabel(x, z);
+  citizens.rebuild(city.cells);
   popSound();
   persistSoon();
   document.querySelector('#hint')?.classList.add('hidden');
@@ -215,6 +281,8 @@ function build(x: number, z: number) {
 
 function demolish(x: number, z: number) {
   if (!city.remove(x, z)) return;
+  citizens.rebuild(city.cells);
+  hideCitizenCard();
   softTone(190, .07);
   persistSoon();
 }
@@ -225,14 +293,21 @@ function persistSoon() {
 }
 
 function saveTown() {
-  const data: SavedTown = { version: 1, seed, cells: city.serialize() };
+  const data: SavedTown = {
+    version: 2,
+    seed,
+    cells: city.serialize(),
+    timeOfDay,
+    day,
+    citizens: citizens.serialize(),
+  };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
 function loadTown(): SavedTown | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedTown | null;
-    return parsed?.version === 1 ? parsed : null;
+    return parsed?.version === 1 || parsed?.version === 2 ? parsed : null;
   } catch {
     return null;
   }
@@ -285,6 +360,16 @@ document.querySelector('#reset')!.addEventListener('click', () => {
   if (!confirm('Let this town drift away and begin with a new tide?')) return;
   localStorage.removeItem(STORAGE_KEY);
   location.reload();
+});
+
+document.querySelector('#card-close')!.addEventListener('click', hideCitizenCard);
+document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) => {
+  button.addEventListener('click', () => {
+    simulationSpeed = Number(button.dataset.speed);
+    document.querySelectorAll('[data-speed]').forEach((item) => item.classList.toggle('active', item === button));
+    showToast(simulationSpeed === 0 ? 'The town holds its breath.' : simulationSpeed === 3 ? 'The tide of time quickens.' : 'The town settles into its rhythm.');
+    persistSoon();
+  });
 });
 
 const ambience = createAmbience();
@@ -345,9 +430,21 @@ function createAmbience() {
   sunDisc.position.set(-17, 14, -28);
   sunDisc.lookAt(camera.position);
   root.add(sunDisc);
+
+  const starPositions: number[] = [];
+  for (let i = 0; i < 170; i++) {
+    const angle = i * 2.39996;
+    const radius = 28 + (i % 17) * 1.15;
+    starPositions.push(Math.cos(angle) * radius, 12 + (i % 13) * 1.35, Math.sin(angle) * radius);
+  }
+  const starGeometry = new THREE.BufferGeometry();
+  starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+  const starMaterial = new THREE.PointsMaterial({ color: 0xffe4a3, size: .13, transparent: true, opacity: 0, depthWrite: false });
+  const stars = new THREE.Points(starGeometry, starMaterial);
+  root.add(stars);
   return {
     root,
-    update(time: number) {
+    update(time: number, daylight: number) {
       const angle = time * .045;
       boat.position.set(Math.cos(angle) * 16, -.12 + Math.sin(time * 1.4) * .07, Math.sin(angle) * 12);
       boat.rotation.y = -angle + Math.PI / 2;
@@ -357,20 +454,76 @@ function createAmbience() {
       birds.rotation.y = -birdAngle;
       birds.children.forEach((bird, i) => { bird.rotation.z = Math.sin(time * 5 + i) * .22; });
       clouds.position.x = Math.sin(time * .018) * 2.5;
+      cloudMaterial.opacity = .12 + daylight * .32;
+      starMaterial.opacity = Math.pow(1 - daylight, 2) * (.62 + Math.sin(time * .7) * .08);
+      (sunDisc.material as THREE.MeshBasicMaterial).opacity = daylight * .68;
     },
   };
 }
 
 const clock = new THREE.Clock();
+const daySky = new THREE.Color(0x91c7c1);
+const nightSky = new THREE.Color(0x192b43);
+const dawnSky = new THREE.Color(0xc47f72);
+const currentSky = new THREE.Color();
+let clockUpdate = 0;
+let autosaveElapsed = 0;
+
+function daylightAt(hour: number) {
+  const solar = Math.sin((hour - 6) / 12 * Math.PI);
+  return THREE.MathUtils.clamp(solar * .9 + .1, .04, 1);
+}
+
+function updateTimeDisplay() {
+  const hours = Math.floor(timeOfDay);
+  const minutes = Math.floor((timeOfDay - hours) * 60);
+  document.querySelector('#clock-display')!.textContent = `Day ${day} · ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')} · ${citizens.population()} ${citizens.population() === 1 ? 'resident' : 'residents'}`;
+  updateCitizenCard();
+}
+
 function animate() {
   requestAnimationFrame(animate);
-  const time = clock.getElapsedTime();
+  const delta = Math.min(clock.getDelta(), .1);
+  const time = clock.elapsedTime;
+  const deltaHours = delta * simulationSpeed * .05;
+  timeOfDay += deltaHours;
+  if (timeOfDay >= 24) {
+    timeOfDay %= 24;
+    day += 1;
+    setNote('Another day has folded itself into the harbor. The routines remain, but never quite repeat.');
+  }
+  const absoluteHours = day * 24 + timeOfDay;
+  const daylight = daylightAt(timeOfDay);
+  document.body.classList.toggle('night', daylight < .24);
+  const twilight = Math.max(0, 1 - Math.abs(timeOfDay - 18.6) / 2.4, 1 - Math.abs(timeOfDay - 5.7) / 2.1);
+  currentSky.copy(nightSky).lerp(daySky, daylight).lerp(dawnSky, twilight * .28);
+  scene.background = currentSky;
+  if (scene.fog instanceof THREE.FogExp2) scene.fog.color.copy(currentSky);
+  hemi.intensity = .42 + daylight * 1.83;
+  sun.intensity = .12 + daylight * 4.58;
+  const sunAngle = (timeOfDay - 6) / 24 * Math.PI * 2;
+  sun.position.set(Math.cos(sunAngle) * 18, 5 + daylight * 20, Math.sin(sunAngle) * 16);
+  renderer.toneMappingExposure = .72 + daylight * .36;
   waterUniforms.uTime.value = time;
+  waterUniforms.uDay.value = daylight;
   city.update(time);
-  ambience.update(time);
+  city.setDaylight(daylight);
+  citizens.update(delta * simulationSpeed, timeOfDay, absoluteHours, time);
+  ambience.update(time, daylight);
+  clockUpdate += delta;
+  autosaveElapsed += delta;
+  if (clockUpdate > .25) {
+    updateTimeDisplay();
+    clockUpdate = 0;
+  }
+  if (autosaveElapsed > 12) {
+    saveTown();
+    autosaveElapsed = 0;
+  }
   controls.update();
   renderer.render(scene, camera);
 }
+updateTimeDisplay();
 animate();
 
 window.addEventListener('resize', () => {

@@ -7,9 +7,23 @@ export type Cell = {
 };
 
 export type SavedTown = {
-  version: 1;
+  version: 1 | 2;
   seed: number;
   cells: Cell[];
+  timeOfDay?: number;
+  day?: number;
+  citizens?: CitizenSave[];
+};
+
+export type CitizenSave = {
+  id: string;
+  name: string;
+  homeKey: string;
+  position: [number, number];
+  occupation: string;
+  traits: string[];
+  relationships: string[];
+  color: number;
 };
 
 export const keyOf = (x: number, z: number) => `${x},${z}`;

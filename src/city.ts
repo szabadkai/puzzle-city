@@ -34,7 +34,7 @@ export class CityRenderer {
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
   private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, roughness: 1 });
   private readonly stoneDark = new THREE.MeshStandardMaterial({ color: 0x786f63, roughness: 1 });
-  private readonly window = new THREE.MeshStandardMaterial({ color: 0x193e47, roughness: .35, emissive: 0x142c30, emissiveIntensity: .32 });
+  private readonly window = new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 });
   private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
   private readonly green = new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 });
   private readonly leaf = new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 });
@@ -115,7 +115,16 @@ export class CityRenderer {
       if (tree) tree.rotation.z = Math.sin(time * 1.35 + group.position.x) * .025;
       const flag = group.getObjectByName('flag');
       if (flag) flag.rotation.y = Math.sin(time * 3 + group.position.z) * .15;
+      group.traverse((object) => {
+        if (object.name.startsWith('laundry-')) object.rotation.z = Math.sin(time * 2.2 + object.id) * .045;
+      });
     }
+  }
+
+  setDaylight(daylight: number) {
+    const night = 1 - daylight;
+    this.window.emissiveIntensity = .06 + night * 2.15;
+    this.warmLight.emissiveIntensity = .4 + night * 3.8;
   }
 
   topologyLabel(x: number, z: number) {

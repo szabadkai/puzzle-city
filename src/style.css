@@ -39,6 +39,76 @@ canvas.dragging { cursor: grabbing; }
 }
 .brand h1 { font: 600 28px/1 'Fraunces', serif; margin: 0; letter-spacing: -.5px; }
 .brand p { margin: 7px 0 0; font-size: 10px; letter-spacing: 2.2px; text-transform: uppercase; opacity: .7; }
+.brand { transition: color 1.2s ease, text-shadow 1.2s ease; }
+.night .brand { color: rgba(255,225,172,.86); text-shadow: 0 2px 18px rgba(255,177,82,.24); }
+
+.time-widget {
+  position: absolute;
+  top: 87px;
+  left: 28px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 7px 6px 12px;
+  border: 1px solid rgba(255,231,190,.42);
+  border-radius: 99px;
+  background: rgba(238,224,190,.58);
+  box-shadow: 0 7px 25px rgba(29,67,66,.08);
+  backdrop-filter: blur(14px);
+  color: rgba(37,55,52,.75);
+  font-size: 10px;
+  letter-spacing: .2px;
+  pointer-events: auto;
+}
+.speed-controls { display: flex; gap: 3px; }
+.speed-controls button {
+  min-width: 27px;
+  height: 24px;
+  padding: 0 6px;
+  background: rgba(255,240,205,.4);
+  border-color: transparent;
+  box-shadow: none;
+}
+.speed-controls button.active { color: #fff4d6; background: #54746f; }
+
+.citizen-card {
+  position: absolute;
+  left: 26px;
+  bottom: 26px;
+  width: 236px;
+  padding: 18px 18px 16px;
+  border: 1px solid rgba(255,236,199,.6);
+  border-radius: 15px 15px 15px 4px;
+  background: rgba(235,217,177,.9);
+  color: #34433d;
+  box-shadow: 0 18px 50px rgba(21,51,49,.2);
+  backdrop-filter: blur(16px);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(12px) rotate(-.5deg);
+  transition: opacity .22s ease, transform .22s ease;
+  visibility: hidden;
+}
+.citizen-card.show { opacity: 1; transform: translateY(0) rotate(-.5deg); visibility: visible; }
+.citizen-card .card-close {
+  position: absolute;
+  right: 9px;
+  top: 9px;
+  padding: 4px 7px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 18px;
+}
+.card-kicker { color: #a8463e; font-size: 9px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; }
+.citizen-card h2 { margin: 5px 0 0; font: 600 25px/1.05 'Fraunces', serif; color: #293b38; }
+.citizen-card p { margin: 7px 0 0; font-size: 11px; line-height: 1.4; }
+.citizen-card .card-role { margin-top: 3px; color: #a8463e; font-weight: 600; }
+.citizen-card dl { margin: 13px 0 0; }
+.citizen-card dl div { display: grid; grid-template-columns: 36px 1fr; gap: 7px; margin-top: 6px; font-size: 11px; line-height: 1.35; }
+.citizen-card dt { color: rgba(44,63,57,.55); }
+.citizen-card dd { margin: 0; }
+.citizen-card .card-relationship { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(66,75,59,.16); font-family: 'Fraunces', serif; font-style: italic; color: rgba(46,59,50,.7); }
 
 .hint {
   position: absolute;
@@ -116,6 +186,8 @@ button:active { transform: translateY(1px); }
   .hud { padding: 16px; }
   .brand { top: 18px; left: 18px; }
   .brand h1 { font-size: 23px; }
+  .time-widget { top: 72px; left: 18px; }
+  .citizen-card { left: 16px; bottom: 62px; width: 220px; }
   .recipe-note { display: none; }
   .hint { bottom: 16px; gap: 10px; font-size: 10px; }
   .top-actions { top: 15px; right: 15px; }

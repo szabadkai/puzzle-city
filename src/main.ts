@@ -9,13 +9,13 @@ const STORAGE_KEY = 'little-tides-town-v1';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="hud">
-    <div class="brand"><h1>Little Tides</h1><p>a town from the sea</p></div>
+    <div class="brand"><h1>Little Tides</h1><p>潮町 · a town from the sea</p></div>
     <div class="top-actions">
       <button id="center" aria-label="Center camera">Center view</button>
       <button id="reset" aria-label="Start a new town">New tide</button>
     </div>
     <div class="toast" id="toast"></div>
-    <div class="recipe-note" id="note"><strong>Field note</strong><span>Click the water. The town will decide what it wants to become.</span></div>
+    <div class="recipe-note" id="note"><strong>Harbor notebook</strong><span>Click the water. Old walls and new stories will find their own shape.</span></div>
     <div class="hint" id="hint">
       <span><i class="mouse"></i> click to build</span>
       <span>right-click to undo</span>
@@ -28,8 +28,8 @@ const saved = loadTown();
 let seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x9fdddf);
-scene.fog = new THREE.FogExp2(0x9fdddf, .012);
+scene.background = new THREE.Color(0x91c7c1);
+scene.fog = new THREE.FogExp2(0x91c7c1, .0135);
 
 const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, .1, 150);
 camera.position.set(18, 19, 20);
@@ -58,9 +58,9 @@ controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
 controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
 controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 
-const hemi = new THREE.HemisphereLight(0xfff4da, 0x4c8990, 2.4);
+const hemi = new THREE.HemisphereLight(0xffe8bd, 0x315f63, 2.25);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffe5bd, 4.2);
+const sun = new THREE.DirectionalLight(0xffc984, 4.7);
 sun.position.set(-14, 23, 12);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
@@ -97,9 +97,10 @@ const waterMaterial = new THREE.ShaderMaterial({
     varying vec3 vWorld;
     void main() {
       float ribbons = sin((vWorld.x + vWorld.z) * .7 + uTime * .45) * .5 + .5;
-      vec3 deep = vec3(.16, .57, .64);
-      vec3 pale = vec3(.34, .74, .76);
-      vec3 color = mix(deep, pale, .46 + vWave * 1.9 + ribbons * .045);
+      vec3 deep = vec3(.075, .34, .37);
+      vec3 pale = vec3(.24, .61, .58);
+      vec3 color = mix(deep, pale, .50 + vWave * 1.75 + ribbons * .055);
+      color += vec3(.055, .035, .008) * ribbons;
       gl_FragColor = vec4(color, 1.0);
     }
   `,
@@ -112,7 +113,7 @@ scene.add(water);
 
 const seabed = new THREE.Mesh(
   new THREE.CylinderGeometry(22.5, 25, .9, 28),
-  new THREE.MeshStandardMaterial({ color: 0xb4c5a6, roughness: 1 }),
+  new THREE.MeshStandardMaterial({ color: 0x7d9274, roughness: 1 }),
 );
 seabed.position.y = -1.2;
 seabed.receiveShadow = true;
@@ -122,7 +123,7 @@ const city = new CityRenderer(seed);
 scene.add(city.root);
 if (saved) city.load(saved.cells);
 
-const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xfff5c4, transparent: true, opacity: .52, depthWrite: false });
+const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xffd894, transparent: true, opacity: .56, depthWrite: false });
 const hover = new THREE.Mesh(new RoundedBoxGeometry(CityRenderer.cellSize() * .9, .16, CityRenderer.cellSize() * .9, 4, .12), hoverMaterial);
 hover.position.y = .04;
 hover.visible = false;
@@ -181,7 +182,7 @@ function updateHover(clientX: number, clientY: number) {
   const allowed = Boolean(cell) || city.isBuildable(x, z);
   hover.visible = true;
   hover.position.set(x * size, cell ? .35 + cell.height * 1.42 : .04, z * size);
-  hoverMaterial.color.setHex(allowed ? 0xfff3ba : 0xd5726b);
+  hoverMaterial.color.setHex(allowed ? 0xffd894 : 0xc65f57);
 }
 
 function build(x: number, z: number) {
@@ -291,8 +292,8 @@ scene.add(ambience.root);
 
 function createAmbience() {
   const root = new THREE.Group();
-  const sailMaterial = new THREE.MeshStandardMaterial({ color: 0xffedcb, side: THREE.DoubleSide, roughness: .85 });
-  const hullMaterial = new THREE.MeshStandardMaterial({ color: 0x9a5147, roughness: .9 });
+  const sailMaterial = new THREE.MeshStandardMaterial({ color: 0xb9493e, side: THREE.DoubleSide, roughness: .9 });
+  const hullMaterial = new THREE.MeshStandardMaterial({ color: 0x593e34, roughness: .95 });
   const boat = new THREE.Group();
   const hull = new THREE.Mesh(new THREE.CapsuleGeometry(.25, .78, 4, 8), hullMaterial);
   hull.rotation.z = Math.PI / 2;
@@ -306,6 +307,9 @@ function createAmbience() {
     new THREE.Vector3(.02, .83, 0), new THREE.Vector3(.02, .12, 0), new THREE.Vector3(.52, .18, 0),
   ]), sailMaterial);
   boat.add(sail);
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(.45, .05, .34), new THREE.MeshStandardMaterial({ color: 0xd7b260, roughness: 1 }));
+  canopy.position.set(-.22, .28, 0);
+  boat.add(canopy);
   root.add(boat);
 
   const birds = new THREE.Group();
@@ -318,6 +322,29 @@ function createAmbience() {
     birds.add(bird);
   }
   root.add(birds);
+
+  const cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
+  const clouds = new THREE.Group();
+  for (let c = 0; c < 5; c++) {
+    const cloud = new THREE.Group();
+    for (let puff = 0; puff < 4; puff++) {
+      const shape = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1 + (puff % 2) * .45, 1), cloudMaterial);
+      shape.scale.set(1.65, .55, .7);
+      shape.position.set(puff * 1.25, Math.sin(puff) * .32, 0);
+      cloud.add(shape);
+    }
+    cloud.position.set(-24 + c * 11, 10 + (c % 2) * 2.5, -20 - c * 2);
+    clouds.add(cloud);
+  }
+  root.add(clouds);
+
+  const sunDisc = new THREE.Mesh(
+    new THREE.CircleGeometry(2.2, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffc36f, transparent: true, opacity: .65, depthWrite: false }),
+  );
+  sunDisc.position.set(-17, 14, -28);
+  sunDisc.lookAt(camera.position);
+  root.add(sunDisc);
   return {
     root,
     update(time: number) {
@@ -329,6 +356,7 @@ function createAmbience() {
       birds.position.set(Math.cos(birdAngle) * 9, 7.5 + Math.sin(time * .35), Math.sin(birdAngle) * 9);
       birds.rotation.y = -birdAngle;
       birds.children.forEach((bird, i) => { bird.rotation.z = Math.sin(time * 5 + i) * .22; });
+      clouds.position.x = Math.sin(time * .018) * 2.5;
     },
   };
 }

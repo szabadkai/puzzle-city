@@ -6,6 +6,7 @@
 - **Observation over management.** Town life should be legible through motion and visual change, not tables.
 - **Discovery over instruction.** Interesting combinations quietly produce consequences.
 - **A warm miniature.** Every system should help the town feel like a small physical diorama.
+- **A storied harbor.** Layered eaves, laundry balconies, hand-painted signs, rooftop tanks, pipes, awnings, and warm window light suggest a fictional old East Asian port assembled across generations.
 
 ## World representation
 

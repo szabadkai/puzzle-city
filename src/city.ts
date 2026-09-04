@@ -6,8 +6,10 @@ import { hash, pick } from './random';
 const CELL = 2.45;
 const FLOOR = 1.42;
 const BASE_Y = 0.05;
-const WALL_COLORS = [0xef9b72, 0xf2c66d, 0xe77969, 0x7ebeb3, 0x87a8c3, 0xd99bc0, 0xf0dfb1];
-const ROOF_COLORS = [0xb44942, 0xd46c45, 0x4f7d79, 0x66758c, 0x934f58];
+const WALL_COLORS = [0xd88966, 0xd9b967, 0xbc6c5c, 0x73a69a, 0x7390a1, 0xb9828d, 0xd8c99f, 0x9f9a7e];
+const ROOF_COLORS = [0x733e38, 0xa6533c, 0x315f5b, 0x3f5260, 0x5b4748, 0x354747];
+const SIGN_COLORS = [0xb63d32, 0x236d67, 0xd38b38, 0x314d66];
+const SIGN_TEXT = ['茶', '花', '本', '湯', '魚', '宿'];
 
 type Direction = 0 | 1 | 2 | 3;
 
@@ -27,16 +29,18 @@ export class CityRenderer {
   readonly root = new THREE.Group();
   readonly cells = new Map<string, Cell>();
   private readonly pieces = new Map<string, THREE.Group>();
+  private readonly signMaterials = new Map<string, THREE.MeshStandardMaterial>();
   private readonly seed: number;
-  private readonly cream = new THREE.MeshStandardMaterial({ color: 0xfff0cc, roughness: .88 });
-  private readonly stone = new THREE.MeshStandardMaterial({ color: 0xd8c9a9, roughness: .95 });
-  private readonly stoneDark = new THREE.MeshStandardMaterial({ color: 0xa99477, roughness: 1 });
-  private readonly window = new THREE.MeshStandardMaterial({ color: 0x244b58, roughness: .45, emissive: 0x10252b, emissiveIntensity: .15 });
-  private readonly dark = new THREE.MeshStandardMaterial({ color: 0x563f39, roughness: .85 });
-  private readonly green = new THREE.MeshStandardMaterial({ color: 0x5d9c68, roughness: 1 });
-  private readonly leaf = new THREE.MeshStandardMaterial({ color: 0x70a95f, roughness: 1 });
-  private readonly wood = new THREE.MeshStandardMaterial({ color: 0x9d6547, roughness: .95 });
-  private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3f6466, roughness: .7 });
+  private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
+  private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, roughness: 1 });
+  private readonly stoneDark = new THREE.MeshStandardMaterial({ color: 0x786f63, roughness: 1 });
+  private readonly window = new THREE.MeshStandardMaterial({ color: 0x193e47, roughness: .35, emissive: 0x142c30, emissiveIntensity: .32 });
+  private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
+  private readonly green = new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 });
+  private readonly leaf = new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 });
+  private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
+  private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
+  private readonly warmLight = new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 });
 
   constructor(seed: number) {
     this.seed = seed;
@@ -200,6 +204,7 @@ export class CityRenderer {
       towerRoof.position.y = topY + .7;
       towerRoof.rotation.y = Math.PI / 8;
       group.add(towerRoof);
+      this.addRoofEaves(group, topY, roof, cell);
       this.addChimney(group, topY + .25, -.58, .38);
       this.addFlag(group, topY + 1.55);
     } else if (count <= 2) {
@@ -207,6 +212,7 @@ export class CityRenderer {
       cap.position.y = topY + .43;
       cap.rotation.y = Math.PI / 4;
       group.add(cap);
+      this.addRoofEaves(group, topY, roof, cell);
       if (hash(this.seed, cell.x, cell.z, 44) > .48) this.addChimney(group, topY + .2, -.55, .34);
     } else {
       const roofDeck = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .91, .18, CELL * .91, 2, .05), roof));
@@ -220,9 +226,10 @@ export class CityRenderer {
         group.add(parapet);
       }
       if (count === 4) this.addRoofGarden(group, topY + .2, cell);
+      else if (cell.height >= 2 && hash(this.seed, cell.x, cell.z, 146) > .5) this.addWaterTank(group, topY + .18);
     }
 
-    if (count === 2 && this.isCorner(neighborHeights)) this.addBalcony(group, cell, topY);
+    if ((count === 2 && this.isCorner(neighborHeights)) || (cell.height >= 2 && count <= 1)) this.addBalcony(group, cell, topY);
     this.addWaterEdges(group, cell, neighborHeights);
   }
 
@@ -237,9 +244,11 @@ export class CityRenderer {
       door.position.set(px, .34 + .43, pz);
       door.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       group.add(door);
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(.075, 8, 6), new THREE.MeshStandardMaterial({ color: 0xffd58a, emissive: 0xffb852, emissiveIntensity: .7 }));
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(.075, 8, 6), this.warmLight);
       lamp.position.set(px + lateral.x * .36, 1.16, pz + lateral.z * .36);
       group.add(lamp);
+      this.addAwning(group, cell, dir, lateral, px, pz);
+      if (hash(this.seed, cell.x, cell.z, 710 + dir) > .18) this.addHangingSign(group, cell, dir, lateral, px, pz);
     }
     for (let i = 0; i < windowCount; i++) {
       if (isDoor && i === 0) continue;
@@ -252,6 +261,77 @@ export class CityRenderer {
       sill.position.set(px + lateral.x * offset, y - .29, pz + lateral.z * offset);
       group.add(sill);
     }
+    if (level > 0 && hash(this.seed, cell.x, cell.z, 810 + dir * 11 + level) > .77) {
+      this.addAirConditioner(group, dir, lateral, px, pz, y - .2);
+    }
+    if (level === 0 && hash(this.seed, cell.x, cell.z, 850 + dir) > .8) this.addPipe(group, dir, lateral, px, pz);
+  }
+
+  private addAwning(group: THREE.Group, cell: Cell, dir: Direction, lateral: THREE.Vector3, px: number, pz: number) {
+    const [dx, dz] = CARDINALS[dir];
+    const colors = [0xb5463e, 0x3f7770, 0xd08b3e];
+    const awningMaterial = new THREE.MeshStandardMaterial({ color: pick(colors, hash(this.seed, cell.x, cell.z, 690 + dir)), roughness: .9 });
+    for (let i = 0; i < 5; i++) {
+      const strip = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .42 : .24, .08, dir % 2 ? .24 : .42), i % 2 ? this.cream : awningMaterial));
+      const offset = (i - 2) * .21;
+      strip.position.set(px + dx * .21 + lateral.x * offset, 1.25, pz + dz * .21 + lateral.z * offset);
+      strip.rotation.set(lateral.z * -.13, 0, lateral.x * .13);
+      group.add(strip);
+    }
+  }
+
+  private addHangingSign(group: THREE.Group, cell: Cell, dir: Direction, lateral: THREE.Vector3, px: number, pz: number) {
+    const signIndex = Math.floor(hash(this.seed, cell.x, cell.z, 722 + dir) * SIGN_TEXT.length);
+    const text = SIGN_TEXT[signIndex];
+    const color = SIGN_COLORS[signIndex % SIGN_COLORS.length];
+    const materialKey = `${text}-${color}`;
+    let material = this.signMaterials.get(materialKey);
+    if (!material) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 96;
+      canvas.height = 192;
+      const context = canvas.getContext('2d')!;
+      context.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+      context.fillRect(4, 4, 88, 184);
+      context.strokeStyle = '#ead9ad';
+      context.lineWidth = 5;
+      context.strokeRect(8, 8, 80, 176);
+      context.fillStyle = '#fff1c7';
+      context.font = 'bold 66px serif';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(text, 48, 98);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      material = new THREE.MeshStandardMaterial({ map: texture, side: THREE.DoubleSide, roughness: .78, emissive: color, emissiveIntensity: .08 });
+      this.signMaterials.set(materialKey, material);
+    }
+    const [dx, dz] = CARDINALS[dir];
+    const sign = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.42, .86), material));
+    sign.position.set(px + dx * .13 + lateral.x * .73, 1.31, pz + dz * .13 + lateral.z * .73);
+    sign.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+    group.add(sign);
+    const bracket = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .22 : .03, .03, dir % 2 ? .03 : .22), this.metal));
+    bracket.position.set(px + dx * .08 + lateral.x * .73, 1.79, pz + dz * .08 + lateral.z * .73);
+    group.add(bracket);
+  }
+
+  private addAirConditioner(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, y: number) {
+    const [dx, dz] = CARDINALS[dir];
+    const unit = shadow(new THREE.Mesh(new RoundedBoxGeometry(dir % 2 ? .18 : .5, .32, dir % 2 ? .5 : .18, 2, .03), this.cream));
+    unit.position.set(px + dx * .12 + lateral.x * .52, y, pz + dz * .12 + lateral.z * .52);
+    group.add(unit);
+    const fan = new THREE.Mesh(new THREE.TorusGeometry(.09, .018, 5, 10), this.metal);
+    fan.position.set(unit.position.x + dx * .1, y, unit.position.z + dz * .1);
+    fan.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+    group.add(fan);
+  }
+
+  private addPipe(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number) {
+    const [dx, dz] = CARDINALS[dir];
+    const pipe = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.027, .027, 1.18, 6), this.metal));
+    pipe.position.set(px + dx * .08 + lateral.x * .94, .92, pz + dz * .08 + lateral.z * .94);
+    group.add(pipe);
   }
 
   private doorDirection(cell: Cell): Direction {
@@ -302,6 +382,47 @@ export class CityRenderer {
     const rail = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .06 : 1.26, .28, dir % 2 ? 1.26 : .06), this.metal));
     rail.position.set(dx * 1.47, topY - .52, dz * 1.47);
     group.add(rail);
+    const lateral = new THREE.Vector3(dz, 0, -dx);
+    const line = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.012, .012, 1.04, 5), this.dark));
+    line.position.set(dx * 1.53, topY - .32, dz * 1.53);
+    line.rotation.z = Math.PI / 2;
+    line.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+    group.add(line);
+    const laundryColors = [0xe9cf9d, 0xb7514a, 0x547f86];
+    for (let i = 0; i < 3; i++) {
+      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(.27, .31 + i * .03), new THREE.MeshStandardMaterial({ color: laundryColors[i], side: THREE.DoubleSide, roughness: 1 }));
+      cloth.position.set(dx * 1.55 + lateral.x * (i - 1) * .34, topY - .5, dz * 1.55 + lateral.z * (i - 1) * .34);
+      cloth.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      cloth.name = `laundry-${i}`;
+      group.add(cloth);
+    }
+  }
+
+  private addRoofEaves(group: THREE.Group, y: number, roofMaterial: THREE.Material, cell: Cell) {
+    const eave = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.13, .11, CELL * 1.13, 2, .04), roofMaterial));
+    eave.position.y = y + .04;
+    group.add(eave);
+    const ridge = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, CELL * .9, 8), this.dark));
+    ridge.position.y = y + .88;
+    ridge.rotation.z = Math.PI / 2;
+    ridge.rotation.y = hash(this.seed, cell.x, cell.z, 126) > .5 ? Math.PI / 2 : 0;
+    group.add(ridge);
+    for (const side of [-1, 1]) {
+      const cap = shadow(new THREE.Mesh(new THREE.SphereGeometry(.09, 7, 5), this.dark));
+      cap.position.set(side * .49 * (ridge.rotation.y ? 0 : 1), y + .88, side * .49 * (ridge.rotation.y ? 1 : 0));
+      group.add(cap);
+    }
+  }
+
+  private addWaterTank(group: THREE.Group, y: number) {
+    const tank = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.36, .4, .62, 10), this.metal));
+    tank.position.set(.3, y + .38, -.25);
+    group.add(tank);
+    for (const x of [.05, .55]) {
+      const leg = shadow(new THREE.Mesh(new THREE.BoxGeometry(.05, .25, .05), this.dark));
+      leg.position.set(x, y + .1, -.25);
+      group.add(leg);
+    }
   }
 
   private addChimney(group: THREE.Group, y: number, x: number, z: number) {

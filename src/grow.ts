@@ -1,10 +1,13 @@
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenSave, type JournalEntry, type JournalIllustration, keyOf } from './types';
+import { analyzeWaterTopology } from './water';
+import { findPlazaAnchors } from './topology';
 
-export type TopologyFeature = 'courtyard' | 'arch' | 'bridge' | 'tower';
+export type TopologyFeature = 'courtyard' | 'arch' | 'bridge' | 'tower' | 'plaza';
 export type GridPoint = Readonly<{ x: number; z: number }>;
 
 export type WorldSnapshot = Readonly<{
   cells: readonly Readonly<Cell>[];
+  citizens: readonly Readonly<CitizenSave>[];
   topology: Readonly<Record<TopologyFeature, readonly GridPoint[]>>;
   population: number;
   day: number;
@@ -12,6 +15,7 @@ export type WorldSnapshot = Readonly<{
   businesses: readonly Readonly<BusinessSave>[];
   businessCounts: Readonly<Record<BusinessType, number>>;
   relationshipCount: number;
+  water: Readonly<{ dockCount: number; canalCount: number; shelteredCount: number }>;
   priorDiscoveries: readonly string[];
 }>;
 
@@ -26,6 +30,8 @@ export type DiscoveryCondition =
   | { kind: 'time'; after: number; before: number }
   | { kind: 'topology'; feature: TopologyFeature; atLeast: number }
   | { kind: 'business'; businessType?: BusinessType; atLeast: number }
+  | { kind: 'citizen'; occupation?: string; trait?: string; atLeast: number }
+  | { kind: 'water'; feature: 'dock' | 'canal' | 'sheltered'; atLeast: number }
   | { kind: 'discovered'; eventId: string };
 
 export type DiscoveryFocus =
@@ -36,6 +42,7 @@ export type DiscoveryFocus =
 export type DiscoveryEffect =
   | { kind: 'city'; action: 'glimmer' | 'decorate' }
   | { kind: 'citizens'; action: 'notice'; activity: string }
+  | { kind: 'citizens'; action: 'assign-occupation'; occupation: string }
   | { kind: 'ambience'; action: 'refresh' }
   | { kind: 'presentation'; action: 'reveal'; caption: string; tone: 'stone' | 'green' | 'water' | 'warm' | 'people' };
 
@@ -60,6 +67,7 @@ type SnapshotInput = {
   cells: Iterable<Cell>;
   citizens: CitizenSave[];
   businesses: BusinessSave[];
+  seed: number;
   day: number;
   timeOfDay: number;
   priorDiscoveries: string[];
@@ -70,7 +78,16 @@ const BUSINESS_TYPES: readonly BusinessType[] = ['bakery', 'cafe', 'workshop', '
 export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
   const cells = [...input.cells].map((cell) => Object.freeze({ ...cell, placedAt: 0 }));
   const cellMap = new Map(cells.map((cell) => [keyOf(cell.x, cell.z), cell]));
-  const topology: Record<TopologyFeature, GridPoint[]> = { courtyard: [], arch: [], bridge: [], tower: [] };
+  const topology: Record<TopologyFeature, GridPoint[]> = { courtyard: [], arch: [], bridge: [], tower: [], plaza: [] };
+  const plazaAnchors = findPlazaAnchors(cellMap);
+  const plazaCells = new Set<string>();
+  for (const anchor of plazaAnchors) {
+    topology.plaza.push(Object.freeze({ x: anchor.x, z: anchor.z }));
+    plazaCells.add(keyOf(anchor.x, anchor.z));
+    plazaCells.add(keyOf(anchor.x + 1, anchor.z));
+    plazaCells.add(keyOf(anchor.x, anchor.z + 1));
+    plazaCells.add(keyOf(anchor.x + 1, anchor.z + 1));
+  }
 
   for (const cell of cells) {
     const neighborCount = CARDINALS.filter(([dx, dz]) => cellMap.has(keyOf(cell.x + dx, cell.z + dz))).length;
@@ -78,6 +95,7 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
   }
   for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
     if (cellMap.has(keyOf(x, z))) continue;
+    if (plazaCells.has(keyOf(x, z))) continue;
     const heights = CARDINALS.map(([dx, dz]) => cellMap.get(keyOf(x + dx, z + dz))?.height ?? 0);
     const count = heights.filter((height) => height > 0).length;
     const point = Object.freeze({ x, z });
@@ -87,19 +105,27 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
   }
 
   const businesses = input.businesses.map((business) => Object.freeze({ ...business }));
+  const citizens = input.citizens.map((citizen) => Object.freeze({
+    ...citizen,
+    traits: [...citizen.traits],
+    relationships: [...citizen.relationships],
+  }));
   const businessCounts = Object.fromEntries(BUSINESS_TYPES.map((type) => [type, businesses.filter((business) => business.type === type).length])) as Record<BusinessType, number>;
   const relationshipPairs = new Set<string>();
-  for (const citizen of input.citizens) for (const friendId of citizen.relationships) {
+  for (const citizen of citizens) for (const friendId of citizen.relationships) {
     relationshipPairs.add([citizen.id, friendId].sort().join('|'));
   }
+  const waterTopology = analyzeWaterTopology(cells, input.seed);
 
   return Object.freeze({
     cells: Object.freeze(cells),
+    citizens: Object.freeze(citizens),
     topology: Object.freeze({
       courtyard: Object.freeze(topology.courtyard),
       arch: Object.freeze(topology.arch),
       bridge: Object.freeze(topology.bridge),
       tower: Object.freeze(topology.tower),
+      plaza: Object.freeze(topology.plaza),
     }),
     population: input.citizens.length,
     day: input.day,
@@ -107,6 +133,11 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
     businesses: Object.freeze(businesses),
     businessCounts: Object.freeze(businessCounts),
     relationshipCount: relationshipPairs.size,
+    water: Object.freeze({
+      dockCount: waterTopology.docks.length,
+      canalCount: waterTopology.canals.length,
+      shelteredCount: waterTopology.sheltered.length,
+    }),
     priorDiscoveries: Object.freeze([...input.priorDiscoveries]),
   });
 }
@@ -122,6 +153,18 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
     case 'day': return snapshot.day >= condition.atLeast;
     case 'topology': return snapshot.topology[condition.feature].length >= condition.atLeast;
     case 'business': return (condition.businessType ? snapshot.businessCounts[condition.businessType] : snapshot.businesses.length) >= condition.atLeast;
+    case 'citizen': return snapshot.citizens.filter((citizen) =>
+      (!condition.occupation || citizen.occupation === condition.occupation)
+      && (!condition.trait || citizen.traits.includes(condition.trait)),
+    ).length >= condition.atLeast;
+    case 'water': {
+      const count = condition.feature === 'dock'
+        ? snapshot.water.dockCount
+        : condition.feature === 'canal'
+          ? snapshot.water.canalCount
+          : snapshot.water.shelteredCount;
+      return count >= condition.atLeast;
+    }
     case 'discovered': return snapshot.priorDiscoveries.includes(condition.eventId);
     case 'time': {
       const { after, before } = condition;
@@ -208,10 +251,39 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: standardEffects('The first stone rises above the tide.', 'stone', 'watching the first walls settle'),
   },
   {
+    id: 'first-dock', repeatable: false, title: 'A Place to Tie Up', illustration: 'fish',
+    note: 'A few timbers reached beyond the quay. The water suddenly felt less like an edge and more like a road.',
+    condition: all(discovered('first-foundation'), { kind: 'water', feature: 'dock', atLeast: 1 }), focus: { kind: 'town' },
+    effects: standardEffects('A little dock reaches into the tide.', 'water', 'watching the first boat tie up'),
+  },
+  {
+    id: 'canal-waters', repeatable: false, title: 'Between Two Banks', illustration: 'arch',
+    note: 'Two rows of houses left a blue lane between them. Even the tide seemed to know where to go.',
+    condition: all(discovered('first-foundation'), { kind: 'water', feature: 'canal', atLeast: 1 }), focus: { kind: 'town' },
+    effects: standardEffects('The water has become a narrow canal.', 'water', 'leaning over the canal wall'),
+  },
+  {
+    id: 'fishing-boat', repeatable: false, title: 'Before the Harbor Wakes', illustration: 'fish',
+    note: 'Before sunrise, a small red sail slipped away from the dock. Someone had decided to follow the fish.',
+    condition: all(discovered('first-dock'), { kind: 'population', atLeast: 2 }), focus: { kind: 'town' },
+    effects: [
+      { kind: 'city', action: 'glimmer' },
+      { kind: 'citizens', action: 'assign-occupation', occupation: 'Fisher' },
+      { kind: 'ambience', action: 'refresh' },
+      reveal('A fishing boat puts out with the morning tide.', 'water'),
+    ],
+  },
+  {
     id: 'sheltered-courtyard', repeatable: false, title: 'A Sheltered Green', illustration: 'garden',
     note: 'Walls gathered close and made a calm pocket. By morning, something green had taken root.',
     condition: all(discovered('first-foundation'), { kind: 'topology', feature: 'courtyard', atLeast: 1 }), focus: { kind: 'topology', feature: 'courtyard' },
     effects: standardEffects('A sheltered garden has taken root.', 'green', 'resting in the new courtyard'),
+  },
+  {
+    id: 'harbor-plaza', repeatable: false, title: 'Room to Linger', illustration: 'street',
+    note: 'The houses stepped back just far enough to leave a little square. By noon, nobody hurried across it.',
+    condition: all(discovered('first-foundation'), { kind: 'topology', feature: 'plaza', atLeast: 1 }), focus: { kind: 'topology', feature: 'plaza' },
+    effects: standardEffects('A harbor plaza opens between the houses.', 'stone', 'sitting together in the new plaza'),
   },
   {
     id: 'sea-arch', repeatable: false, title: 'Room for the Tide', illustration: 'arch',
@@ -280,10 +352,36 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: standardEffects('A lantern waits for the last ferry.', 'warm', 'listening to stories at the inn'),
   },
   {
+    id: 'ferry-route', repeatable: false, title: 'The Last Ferry', illustration: 'inn',
+    note: 'The inn kept one lamp burning by the dock. Soon a small ferry learned to look for it in the dark.',
+    condition: all(discovered('last-lantern'), { kind: 'water', feature: 'dock', atLeast: 1 }, { kind: 'business', businessType: 'inn', atLeast: 1 }), focus: { kind: 'business', businessType: 'inn' },
+    effects: [
+      { kind: 'ambience', action: 'refresh' },
+      { kind: 'citizens', action: 'notice', activity: 'waiting for the last ferry' },
+      reveal('A ferry answers the inn’s last lantern.', 'warm'),
+    ],
+  },
+  {
     id: 'harbor-market', repeatable: false, title: 'A Harbor Market', illustration: 'market',
     note: 'Bread, tea, tools, silver fish, and a bed for travelers: the quay had learned to provide.',
     condition: all(discovered('morning-bread'), discovered('tea-table'), discovered('makers-door'), discovered('morning-catch'), discovered('last-lantern')), focus: { kind: 'town' },
     effects: standardEffects('The whole harbor hums with trade.', 'people', 'making a slow round of the harbor market'),
+  },
+  {
+    id: 'merchant-arrival', repeatable: false, title: 'Cargo on the Tide', illustration: 'market',
+    note: 'A broad little boat found the sheltered water and unloaded bright crates beside the market.',
+    condition: all(discovered('harbor-market'), { kind: 'water', feature: 'dock', atLeast: 1 }, { kind: 'water', feature: 'sheltered', atLeast: 1 }), focus: { kind: 'town' },
+    effects: [
+      { kind: 'ambience', action: 'refresh' },
+      { kind: 'citizens', action: 'notice', activity: 'helping unload the merchant boat' },
+      reveal('A merchant boat has found the sheltered quay.', 'water'),
+    ],
+  },
+  {
+    id: 'tower-bell', repeatable: false, title: 'The Bell Above the Quay', illustration: 'tower',
+    note: 'The merchant left a bronze bell behind. The lookout raised it where both plaza and harbor could hear.',
+    condition: all(discovered('merchant-arrival'), discovered('lookout-tower'), discovered('harbor-plaza')), focus: { kind: 'topology', feature: 'tower' },
+    effects: natureEffects('A bell rises above the harbor.', 'warm', 'listening for the new tower bell'),
   },
   {
     id: 'town-remembers', repeatable: false, title: 'The Town Remembers', illustration: 'town',
@@ -324,7 +422,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   {
     id: 'festival-ribbons', repeatable: false, title: 'Ribbons Across the Street', illustration: 'festival',
     note: 'Nobody announced a festival. Bright scraps simply crossed the street until celebration became inevitable.',
-    condition: all(discovered('town-remembers'), { kind: 'relationships', atLeast: 3 }), focus: { kind: 'town' },
+    condition: all(discovered('town-remembers'), discovered('tower-bell'), { kind: 'relationships', atLeast: 3 }), focus: { kind: 'town' },
     effects: natureEffects('Festival ribbons appear between the eaves.', 'warm', 'hanging bright ribbons over the quay'),
   },
   {

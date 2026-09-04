@@ -2,15 +2,15 @@
 
 A small, polished sandbox city-building prototype inspired by effortless architectural sculpting and miniature living dioramas.
 
-Click the water to raise a foundation, click existing structures to build upward, and arrange neighboring pieces to discover courtyards, arches, bridges, towers, docks, and other procedural transformations.
+Click anywhere in the harbor to raise a foundation, click existing structures to build upward, and arrange neighboring pieces to discover courtyards, plazas, canals, arches, bridges, towers, docks, water stairs, and other procedural transformations. Foundations can stand alone as little islets or grow together into a continuous town.
 
 Every accessible home attracts a named resident. Citizens follow the town's quays and courtyards using A* routes, keep daily routines, form friendships, and can be clicked to reveal their small lives. A full day passes in about eight minutes, with pause, normal, and fast simulation controls.
 
 As the population grows, residents may quietly turn their ground floor into a bakery, café, workshop, fishmonger, or inn. Storefronts emerge from resident traits and occupations; their opening hours then shape where neighbors walk and gather.
 
-The town also keeps an observation journal. Twenty-three quiet discoveries connect its architecture, residents, friendships, time of day, businesses, gardens, wildlife, and a lantern-lit finale. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
+The town also keeps an observation journal. Thirty quiet discoveries connect its architecture, water topology, working boats, residents, friendships, time of day, businesses, gardens, wildlife, and a lantern-lit finale. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
 
-Boats trace the changing shoreline, friends pause for shared meals and conversations, courtyard cuttings spread to rooftop pots, and the harbor gradually gathers gulls, blossom, festival ribbons, fireflies, and lantern light.
+Rowboats trace the changing shoreline; docks can lead to fishing, merchant arrivals, and a last ferry. Friends pause for shared meals and conversations, courtyard cuttings spread to rooftop pots, and the harbor gradually gathers gulls, blossom, festival ribbons, fireflies, and lantern light.
 
 ## Controls
 

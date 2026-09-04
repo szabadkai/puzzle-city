@@ -51,6 +51,7 @@ export type CitizenSave = {
   name: string;
   homeKey: string;
   position: [number, number];
+  elevation?: number;
   occupation: string;
   traits: string[];
   relationships: string[];

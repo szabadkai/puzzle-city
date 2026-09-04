@@ -1,33 +1,26 @@
 import * as THREE from 'three';
-import type { Cell } from './types';
+import type { BusinessSave, Cell, CitizenSave } from './types';
 import { hash } from './random';
+import { analyzeWaterTopology, createShorelineRoute, type WaterTopology } from './water';
 
-const CELL = 2.45;
-
-export function createWaterRoute(cells: Iterable<Cell>, seed: number) {
-  const occupied = [...cells].map((cell) => new THREE.Vector2(cell.x * CELL, cell.z * CELL));
-  const furthest = occupied.reduce((radius, point) => Math.max(radius, point.length()), 0);
-  const baseRadius = THREE.MathUtils.clamp(furthest + 4.8, 11, 27);
-  const points: THREE.Vector3[] = [];
-  for (let index = 0; index < 36; index++) {
-    const angle = index / 36 * Math.PI * 2;
-    let radius = baseRadius + (hash(seed, index, 0, 1601) - .5) * 2.6;
-    let x = Math.cos(angle) * radius;
-    let z = Math.sin(angle) * radius * .84;
-    for (let attempt = 0; attempt < 12 && occupied.some((point) => point.distanceToSquared(new THREE.Vector2(x, z)) < 13); attempt++) {
-      radius += .7;
-      x = Math.cos(angle) * radius;
-      z = Math.sin(angle) * radius * .84;
-    }
-    points.push(new THREE.Vector3(x, -.12, z));
-  }
-  return new THREE.CatmullRomCurve3(points, true, 'catmullrom', .35);
+export function createWaterRoute(cells: Iterable<Cell>, seed: number, lane = 0) {
+  return createShorelineRoute(cells, seed, lane);
 }
+
+type BoatKind = 'rowboat' | 'fishing boat' | 'merchant boat' | 'ferry';
+
+type BoatActor = {
+  kind: BoatKind;
+  model: THREE.Group;
+  route: THREE.CatmullRomCurve3;
+  phase: number;
+  speed: number;
+  bobSpeed: number;
+};
 
 export class HarborAmbience {
   readonly root = new THREE.Group();
-  private readonly boat = new THREE.Group();
-  private readonly skiff = new THREE.Group();
+  private readonly fleet: BoatActor[] = [];
   private readonly birds = new THREE.Group();
   private readonly gulls = new THREE.Group();
   private readonly clouds = new THREE.Group();
@@ -36,13 +29,16 @@ export class HarborAmbience {
   private readonly cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
   private readonly starMaterial = new THREE.PointsMaterial({ color: 0xffe4a3, size: .13, transparent: true, opacity: 0, depthWrite: false });
   private readonly sunDisc: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
-  private route: THREE.CatmullRomCurve3;
+  private cells: Cell[] = [];
+  private businesses: BusinessSave[] = [];
+  private citizens: CitizenSave[] = [];
+  private discoveries = new Set<string>();
+  private topology!: WaterTopology;
 
   constructor(private readonly seed: number, camera: THREE.Camera, cells: Iterable<Cell>) {
     this.root.name = 'harbor-ambience';
-    this.route = createWaterRoute(cells, seed);
-    this.createBoat();
-    this.createSkiff();
+    this.createFleet();
+    this.setTown(cells);
     this.createBirds();
     this.createClouds();
     this.createStars();
@@ -63,32 +59,38 @@ export class HarborAmbience {
     this.root.add(this.sunDisc);
   }
 
-  setTown(cells: Iterable<Cell>) {
-    this.route = createWaterRoute(cells, this.seed);
+  setTown(cells: Iterable<Cell>, businesses: readonly BusinessSave[] = this.businesses, citizens: readonly CitizenSave[] = this.citizens) {
+    this.cells = [...cells].map((cell) => ({ ...cell }));
+    this.businesses = businesses.map((business) => ({ ...business }));
+    this.citizens = citizens.map((citizen) => ({ ...citizen, traits: [...citizen.traits], relationships: [...citizen.relationships] }));
+    this.topology = analyzeWaterTopology(this.cells, this.seed);
+    this.fleet.forEach((boat, index) => { boat.route = createWaterRoute(this.cells, this.seed, index * .42); });
+    this.refreshFleetVisibility();
   }
 
   setDiscoveryState(discoveries: readonly string[]) {
-    const known = new Set(discoveries);
-    this.gulls.visible = known.has('gulls-return');
-    this.petals.visible = known.has('blossom-tide');
-    this.fireflies.visible = known.has('evening-chorus');
+    this.discoveries = new Set(discoveries);
+    this.gulls.visible = this.discoveries.has('gulls-return');
+    this.petals.visible = this.discoveries.has('blossom-tide');
+    this.fireflies.visible = this.discoveries.has('evening-chorus');
+    this.refreshFleetVisibility();
   }
 
+  waterTopology() { return this.topology; }
+
+  activeFleet() { return this.fleet.filter((boat) => boat.model.visible).map((boat) => boat.kind); }
+
   update(time: number, daylight: number) {
-    const progress = (time * .009) % 1;
-    const point = this.route.getPointAt(progress);
-    const tangent = this.route.getTangentAt(progress);
-    this.boat.position.copy(point);
-    this.boat.position.y += Math.sin(time * 1.4) * .07;
-    this.boat.rotation.y = Math.atan2(tangent.x, tangent.z);
-    this.boat.rotation.z = Math.sin(time * 1.1) * .035;
-    const skiffProgress = (progress + .47) % 1;
-    const skiffPoint = this.route.getPointAt(skiffProgress);
-    const skiffTangent = this.route.getTangentAt(skiffProgress);
-    this.skiff.position.copy(skiffPoint);
-    this.skiff.position.y += Math.sin(time * 1.15 + 2) * .055;
-    this.skiff.rotation.y = Math.atan2(skiffTangent.x, skiffTangent.z);
-    this.skiff.rotation.z = Math.sin(time * .95 + 1) * .028;
+    for (const boat of this.fleet) {
+      if (!boat.model.visible) continue;
+      const progress = (time * boat.speed + boat.phase) % 1;
+      const point = boat.route.getPointAt(progress);
+      const tangent = boat.route.getTangentAt(progress);
+      boat.model.position.copy(point);
+      boat.model.position.y += Math.sin(time * boat.bobSpeed + boat.phase * 8) * .055;
+      boat.model.rotation.y = Math.atan2(tangent.x, tangent.z);
+      boat.model.rotation.z = Math.sin(time * boat.bobSpeed * .78 + boat.phase * 5) * .028;
+    }
     const birdAngle = time * .085;
     this.birds.position.set(Math.cos(birdAngle) * 9, 7.5 + Math.sin(time * .35), Math.sin(birdAngle) * 9);
     this.birds.rotation.y = -birdAngle;
@@ -107,7 +109,40 @@ export class HarborAmbience {
     this.fireflies.material.opacity = Math.pow(1 - daylight, 1.6) * (.55 + Math.sin(time * 1.7) * .2);
   }
 
-  private createBoat() {
+  private createFleet() {
+    const emptyRoute = createWaterRoute([], this.seed);
+    const rowboat = this.createRowboat();
+    const fishingBoat = this.createFishingBoat();
+    const merchantBoat = this.createMerchantBoat();
+    const ferry = this.createFerry();
+    this.fleet.push(
+      { kind: 'rowboat', model: rowboat, route: emptyRoute, phase: .08, speed: .012, bobSpeed: 1.15 },
+      { kind: 'fishing boat', model: fishingBoat, route: emptyRoute, phase: .42, speed: .009, bobSpeed: 1.4 },
+      { kind: 'merchant boat', model: merchantBoat, route: emptyRoute, phase: .68, speed: .0065, bobSpeed: 1.05 },
+      { kind: 'ferry', model: ferry, route: emptyRoute, phase: .87, speed: .0075, bobSpeed: .92 },
+    );
+    for (const boat of this.fleet) {
+      boat.model.name = boat.kind.replaceAll(' ', '-');
+      boat.model.visible = false;
+      this.root.add(boat.model);
+    }
+  }
+
+  private refreshFleetVisibility() {
+    if (!this.topology) return;
+    const hasDock = this.topology.docks.length > 0;
+    const hasInn = this.businesses.some((business) => business.type === 'inn');
+    const hasFisher = this.citizens.some((citizen) => citizen.occupation === 'Fisher');
+    for (const boat of this.fleet) {
+      if (boat.kind === 'rowboat') boat.model.visible = this.cells.length > 0;
+      if (boat.kind === 'fishing boat') boat.model.visible = hasDock && hasFisher && this.discoveries.has('fishing-boat');
+      if (boat.kind === 'merchant boat') boat.model.visible = hasDock && this.discoveries.has('merchant-arrival');
+      if (boat.kind === 'ferry') boat.model.visible = hasDock && hasInn && this.discoveries.has('ferry-route');
+    }
+  }
+
+  private createFishingBoat() {
+    const boat = new THREE.Group();
     const sailMaterial = new THREE.MeshStandardMaterial({ color: 0xb9493e, side: THREE.DoubleSide, roughness: .9 });
     const hullMaterial = new THREE.MeshStandardMaterial({ color: 0x593e34, roughness: .95 });
     const hull = new THREE.Mesh(new THREE.CapsuleGeometry(.25, .78, 4, 8), hullMaterial);
@@ -121,11 +156,15 @@ export class HarborAmbience {
     ]), sailMaterial);
     const canopy = new THREE.Mesh(new THREE.BoxGeometry(.45, .05, .34), new THREE.MeshStandardMaterial({ color: 0xd7b260, roughness: 1 }));
     canopy.position.set(-.22, .28, 0);
-    this.boat.add(hull, mast, sail, canopy);
-    this.root.add(this.boat);
+    const nets = new THREE.Mesh(new THREE.TorusGeometry(.2, .025, 5, 12), new THREE.MeshStandardMaterial({ color: 0xbfae83, roughness: 1 }));
+    nets.position.set(-.35, .18, .22);
+    nets.rotation.x = Math.PI / 2;
+    boat.add(hull, mast, sail, canopy, nets);
+    return boat;
   }
 
-  private createSkiff() {
+  private createRowboat() {
+    const boat = new THREE.Group();
     const wood = new THREE.MeshStandardMaterial({ color: 0x685045, roughness: 1 });
     const cloth = new THREE.MeshStandardMaterial({ color: 0xd5bd7d, roughness: 1 });
     const hull = new THREE.Mesh(new THREE.CapsuleGeometry(.18, .55, 3, 7), wood);
@@ -133,9 +172,51 @@ export class HarborAmbience {
     hull.scale.y = .5;
     const cover = new THREE.Mesh(new THREE.BoxGeometry(.38, .04, .27), cloth);
     cover.position.y = .2;
-    this.skiff.add(hull, cover);
-    this.skiff.scale.setScalar(.84);
-    this.root.add(this.skiff);
+    boat.add(hull, cover);
+    boat.scale.setScalar(.84);
+    return boat;
+  }
+
+  private createMerchantBoat() {
+    const boat = new THREE.Group();
+    const hullMaterial = new THREE.MeshStandardMaterial({ color: 0x385e63, roughness: .92 });
+    const deckMaterial = new THREE.MeshStandardMaterial({ color: 0xb7834d, roughness: 1 });
+    const hull = new THREE.Mesh(new THREE.CapsuleGeometry(.3, 1.15, 4, 10), hullMaterial);
+    hull.rotation.z = Math.PI / 2;
+    hull.scale.y = .58;
+    hull.castShadow = true;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(.92, .08, .48), deckMaterial);
+    deck.position.y = .2;
+    boat.add(hull, deck);
+    for (const x of [-.28, .05, .35]) {
+      const crate = new THREE.Mesh(new THREE.BoxGeometry(.23, .22, .23), deckMaterial);
+      crate.position.set(x, .35, x === .05 ? -.1 : .08);
+      boat.add(crate);
+    }
+    boat.scale.setScalar(1.08);
+    return boat;
+  }
+
+  private createFerry() {
+    const boat = new THREE.Group();
+    const hullMaterial = new THREE.MeshStandardMaterial({ color: 0x4c4b54, roughness: .9 });
+    const cabinMaterial = new THREE.MeshStandardMaterial({ color: 0xe2cf9f, roughness: .95 });
+    const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x8d403a, roughness: .86 });
+    const hull = new THREE.Mesh(new THREE.CapsuleGeometry(.32, 1.42, 4, 10), hullMaterial);
+    hull.rotation.z = Math.PI / 2;
+    hull.scale.y = .58;
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(.9, .36, .48), cabinMaterial);
+    cabin.position.y = .34;
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(1.08, .08, .62), roofMaterial);
+    roof.position.y = .56;
+    boat.add(hull, cabin, roof);
+    for (const x of [-.34, 0, .34]) {
+      const window = new THREE.Mesh(new THREE.BoxGeometry(.17, .14, .015), new THREE.MeshStandardMaterial({ color: 0xffc66d, emissive: 0xff9d3d, emissiveIntensity: .8 }));
+      window.position.set(x, .38, .25);
+      boat.add(window);
+    }
+    boat.scale.setScalar(1.12);
+    return boat;
   }
 
   private createBirds() {

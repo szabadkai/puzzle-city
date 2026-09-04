@@ -2,11 +2,13 @@ import * as THREE from 'three';
 import { businessLabel, businessOccupation, isBusinessOpen } from './businesses';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenSave, keyOf } from './types';
 import { hash, pick } from './random';
+import { findPlazaAnchors } from './topology';
 
 const CELL = 2.45;
 const EDGE = CELL / 2;
 const WALK_OUT = EDGE + .24;
 const WALK_Y = .27;
+const BRIDGE_Y = 1.42 * 2.28 + .34;
 const NAMES = ['Mei', 'Ren', 'Aiko', 'Hana', 'Jun', 'Mina', 'Sora', 'Tomo', 'Yuna', 'Bo', 'Kiko', 'Nori', 'Aya', 'Kenji', 'Momo', 'Lin', 'Haru', 'Emi'];
 const TRAITS = ['sociable', 'quiet', 'curious', 'artistic', 'industrious', 'dreamy', 'patient', 'adventurous'];
 const OCCUPATIONS = ['Baker', 'Fisher', 'Gardener', 'Teacher', 'Bookbinder', 'Caretaker', 'Cartographer', 'Cook'];
@@ -39,8 +41,8 @@ export type CitizenCard = {
   relationship: string;
 };
 
-function nodeKey(x: number, z: number) {
-  return `${Math.round(x * 100)},${Math.round(z * 100)}`;
+function nodeKey(x: number, z: number, y = WALK_Y) {
+  return `${Math.round(x * 100)},${Math.round(y * 100)},${Math.round(z * 100)}`;
 }
 
 function parseCellKey(key: string) {
@@ -51,6 +53,7 @@ function parseCellKey(key: string) {
 export class NavGraph {
   readonly nodes = new Map<string, NavNode>();
   readonly entrances = new Map<string, string>();
+  readonly plazas: string[] = [];
   private readonly cells: Map<string, Cell>;
   private readonly seed: number;
 
@@ -60,9 +63,9 @@ export class NavGraph {
     this.build();
   }
 
-  private addNode(x: number, z: number) {
-    const key = nodeKey(x, z);
-    if (!this.nodes.has(key)) this.nodes.set(key, { key, position: new THREE.Vector3(x, WALK_Y, z), links: new Set() });
+  private addNode(x: number, z: number, y = WALK_Y) {
+    const key = nodeKey(x, z, y);
+    if (!this.nodes.has(key)) this.nodes.set(key, { key, position: new THREE.Vector3(x, y, z), links: new Set() });
     return key;
   }
 
@@ -73,6 +76,14 @@ export class NavGraph {
   }
 
   private build() {
+    const plazaAnchors = findPlazaAnchors(this.cells);
+    const plazaCells = new Set<string>();
+    for (const anchor of plazaAnchors) {
+      plazaCells.add(keyOf(anchor.x, anchor.z));
+      plazaCells.add(keyOf(anchor.x + 1, anchor.z));
+      plazaCells.add(keyOf(anchor.x, anchor.z + 1));
+      plazaCells.add(keyOf(anchor.x + 1, anchor.z + 1));
+    }
     for (const cell of this.cells.values()) {
       const open = CARDINALS.map(([dx, dz]) => !this.cells.has(keyOf(cell.x + dx, cell.z + dz)));
       const sides: Array<{ a: string; b: string } | undefined> = [];
@@ -106,6 +117,7 @@ export class NavGraph {
     // Courtyards become tiny walkable shortcuts linking their surrounding doors.
     for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
       if (this.cells.has(keyOf(x, z))) continue;
+      if (plazaCells.has(keyOf(x, z))) continue;
       const neighbors = CARDINALS.map(([dx, dz]) => this.cells.get(keyOf(x + dx, z + dz)));
       if (neighbors.filter(Boolean).length < 3) continue;
       const center = this.addNode(x * CELL, z * CELL);
@@ -115,6 +127,45 @@ export class NavGraph {
         const edge = this.addNode(x * CELL + dx * (CELL - WALK_OUT), z * CELL + dz * (CELL - WALK_OUT));
         this.connect(center, edge);
       });
+    }
+
+    for (const anchor of plazaAnchors) {
+      const coordinates = [
+        [anchor.x, anchor.z], [anchor.x + 1, anchor.z],
+        [anchor.x, anchor.z + 1], [anchor.x + 1, anchor.z + 1],
+      ] as const;
+      const plazaNodes = coordinates.map(([x, z]) => this.addNode(x * CELL, z * CELL));
+      this.plazas.push(...plazaNodes);
+      this.connect(plazaNodes[0], plazaNodes[1]);
+      this.connect(plazaNodes[0], plazaNodes[2]);
+      this.connect(plazaNodes[1], plazaNodes[3]);
+      this.connect(plazaNodes[2], plazaNodes[3]);
+      for (const [x, z] of coordinates) {
+        const center = this.addNode(x * CELL, z * CELL);
+        CARDINALS.forEach(([dx, dz]) => {
+          if (!this.cells.has(keyOf(x + dx, z + dz))) return;
+          const edge = this.addNode(x * CELL + dx * (CELL - WALK_OUT), z * CELL + dz * (CELL - WALK_OUT));
+          this.connect(center, edge);
+        });
+      }
+    }
+
+    for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
+      if (this.cells.has(keyOf(x, z)) || plazaCells.has(keyOf(x, z))) continue;
+      const heights = CARDINALS.map(([dx, dz]) => this.cells.get(keyOf(x + dx, z + dz))?.height ?? 0);
+      const northSouth = heights[0] >= 3 && heights[2] >= 3 && heights[1] === 0 && heights[3] === 0;
+      const eastWest = heights[1] >= 3 && heights[3] >= 3 && heights[0] === 0 && heights[2] === 0;
+      if (!northSouth && !eastWest) continue;
+      const [ax, az] = northSouth ? [0, -(CELL - WALK_OUT)] : [CELL - WALK_OUT, 0];
+      const groundA = this.addNode(x * CELL + ax, z * CELL + az);
+      const groundB = this.addNode(x * CELL - ax, z * CELL - az);
+      const deckA = this.addNode(x * CELL + ax, z * CELL + az, BRIDGE_Y);
+      const deckCenter = this.addNode(x * CELL, z * CELL, BRIDGE_Y);
+      const deckB = this.addNode(x * CELL - ax, z * CELL - az, BRIDGE_Y);
+      this.connect(groundA, deckA);
+      this.connect(deckA, deckCenter);
+      this.connect(deckCenter, deckB);
+      this.connect(deckB, groundB);
     }
   }
 
@@ -142,9 +193,41 @@ export class NavGraph {
     return closest;
   }
 
-  randomNode(value: number, predicate?: (node: NavNode) => boolean) {
-    const options = [...this.nodes.values()].filter((node) => !predicate || predicate(node));
+  randomNode(value: number, from: string, predicate?: (node: NavNode) => boolean) {
+    const reachable = new Set<string>();
+    const pending = [from];
+    while (pending.length) {
+      const key = pending.pop()!;
+      if (reachable.has(key)) continue;
+      reachable.add(key);
+      for (const neighbor of this.nodes.get(key)?.links ?? []) pending.push(neighbor);
+    }
+    const component = [...this.nodes.values()].filter((node) => reachable.has(node.key));
+    const preferred = predicate ? component.filter(predicate) : component;
+    const options = preferred.length ? preferred : component;
     return options.length ? options[Math.floor(value * options.length) % options.length] : undefined;
+  }
+
+  plazaNode(value: number, from: string) {
+    const options = this.plazas.filter((key) => this.canReach(from, key));
+    if (!options.length) return undefined;
+    return this.nodes.get(options[Math.floor(value * options.length) % options.length]);
+  }
+
+  canReach(from: string, to: string) {
+    if (from === to) return true;
+    const visited = new Set([from]);
+    const pending = [from];
+    while (pending.length) {
+      const key = pending.pop()!;
+      for (const neighbor of this.nodes.get(key)?.links ?? []) {
+        if (neighbor === to) return true;
+        if (visited.has(neighbor)) continue;
+        visited.add(neighbor);
+        pending.push(neighbor);
+      }
+    }
+    return false;
   }
 
   path(from: string, to: string) {
@@ -261,6 +344,8 @@ export class CitizenSystem {
       const freeHome = homes.find((home) => !this.citizens.some((other) => other !== citizen && other.homeKey === home));
       if (freeHome) {
         citizen.homeKey = freeHome;
+        const entrance = this.graph.entrance(freeHome);
+        if (entrance) citizen.model.position.copy(entrance.position);
       } else {
         this.removeCitizen(citizen);
       }
@@ -296,7 +381,7 @@ export class CitizenSystem {
 
   private restoreCitizen(data: CitizenSave, movingIn = false) {
     const model = this.createModel(data);
-    model.position.set(data.position[0], WALK_Y, data.position[1]);
+    model.position.set(data.position[0], data.elevation ?? WALK_Y, data.position[1]);
     if (movingIn) model.scale.setScalar(.01);
     this.root.add(model);
     this.citizens.push({
@@ -339,6 +424,7 @@ export class CitizenSystem {
     }
     if (data.occupation === 'Fisher' || data.occupation === 'Gardener') {
       const hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
+      hat.name = 'occupation-hat';
       hat.position.y = .72;
       group.add(hat);
     }
@@ -368,9 +454,11 @@ export class CitizenSystem {
 
   private chooseRoutine(citizen: Citizen, hour: number, absoluteHours: number) {
     const home = this.graph.entrance(citizen.homeKey);
+    const from = this.graph.closest(citizen.model.position);
+    if (!from) return;
     let target = home;
     const choice = hash(this.seed, Math.floor(absoluteHours * 4), this.citizens.indexOf(citizen), 1001);
-    const businessVisit = this.chooseBusinessVisit(citizen, hour, choice);
+    const businessVisit = this.chooseBusinessVisit(citizen, hour, choice, from.key);
     if (hour < 6 || hour >= 22) {
       citizen.activity = 'sleeping at home';
     } else if (businessVisit?.owned) {
@@ -382,7 +470,7 @@ export class CitizenSystem {
         target = businessVisit.target;
       } else {
         citizen.activity = citizen.occupation === 'Fisher' ? 'checking the morning tide' : 'taking an early walk';
-        target = this.graph.randomNode(choice, (node) => Math.hypot(node.position.x, node.position.z) > 2);
+        target = this.graph.randomNode(choice, from.key, (node) => Math.hypot(node.position.x, node.position.z) > 2);
       }
     } else if (hour < 12) {
       if (businessVisit && choice > .35) {
@@ -390,18 +478,19 @@ export class CitizenSystem {
         target = businessVisit.target;
       } else {
         citizen.activity = `working as a ${citizen.occupation.toLowerCase()}`;
-        target = this.graph.randomNode(choice);
+        target = this.graph.randomNode(choice, from.key);
       }
     } else if (hour < 14) {
-      citizen.activity = businessVisit ? this.visitorActivity(businessVisit.business.type) : 'looking for lunch';
-      target = businessVisit?.target ?? this.graph.randomNode(choice);
+      const plaza = choice < .34 ? this.graph.plazaNode(choice * 2.7, from.key) : undefined;
+      citizen.activity = businessVisit ? this.visitorActivity(businessVisit.business.type) : plaza ? 'sitting in the plaza' : 'looking for lunch';
+      target = businessVisit?.target ?? plaza ?? this.graph.randomNode(choice, from.key);
     } else if (hour < 18) {
       if (businessVisit && choice > .55) {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
         target = businessVisit.target;
       } else {
         citizen.activity = citizen.traits.includes('quiet') ? 'watching the harbor' : 'visiting a neighbor';
-        target = this.graph.randomNode(choice);
+        target = this.graph.randomNode(choice, from.key);
       }
     } else if (hour < 21) {
       if (businessVisit) {
@@ -409,20 +498,18 @@ export class CitizenSystem {
         target = businessVisit.target;
       } else {
         citizen.activity = citizen.traits.includes('sociable') ? 'taking an evening stroll' : 'heading home slowly';
-        target = this.graph.randomNode(choice);
+        target = this.graph.randomNode(choice, from.key);
       }
     } else {
       citizen.activity = 'walking home beneath the lanterns';
     }
     if (!target) return;
-    const from = this.graph.closest(citizen.model.position);
-    if (!from) return;
     citizen.targetKey = target.key;
     citizen.path = this.graph.path(from.key, target.key);
     citizen.nextDecisionAt = absoluteHours + .35 + choice * .65;
   }
 
-  private chooseBusinessVisit(citizen: Citizen, hour: number, choice: number) {
+  private chooseBusinessVisit(citizen: Citizen, hour: number, choice: number, from: string) {
     const open = this.businesses.filter((business) => isBusinessOpen(business.type, hour));
     const owned = open.find((business) => business.ownerId === citizen.id);
     const preferredTypes: BusinessType[] = hour < 9
@@ -432,7 +519,13 @@ export class CitizenSystem {
         : hour < 19
           ? ['workshop', 'cafe', 'inn']
           : ['cafe', 'inn'];
-    const options = owned ? [owned] : open.filter((business) => preferredTypes.includes(business.type));
+    const reachable = (business: BusinessSave) => {
+      const entrance = this.graph.entrance(business.cellKey);
+      return entrance && this.graph.canReach(from, entrance.key);
+    };
+    const options = owned && reachable(owned)
+      ? [owned]
+      : open.filter((business) => preferredTypes.includes(business.type) && reachable(business));
     const business = options[Math.floor(choice * options.length) % options.length];
     if (!business) return null;
     const target = this.graph.entrance(business.cellKey);
@@ -465,12 +558,11 @@ export class CitizenSystem {
     const left = citizen.leftLeg;
     const right = citizen.rightLeg;
     if (!target) {
-      citizen.model.position.y = WALK_Y + Math.sin(realTime * 1.4 + citizen.stepPhase) * .006;
+      citizen.model.rotation.z = Math.sin(realTime * 1.4 + citizen.stepPhase) * .006;
       if (left && right) left.rotation.x = right.rotation.x = 0;
       return;
     }
     const direction = this.walkDirection.copy(target).sub(citizen.model.position);
-    direction.y = 0;
     const distance = direction.length();
     const step = Math.min(distance, deltaSeconds * .58);
     if (distance > .001) {
@@ -479,13 +571,14 @@ export class CitizenSystem {
       citizen.model.rotation.y = Math.atan2(direction.x, direction.z);
     }
     citizen.stepPhase += deltaSeconds * 8;
-    citizen.model.position.y = WALK_Y + Math.abs(Math.sin(citizen.stepPhase)) * .025;
+    citizen.model.rotation.z = Math.sin(citizen.stepPhase) * .025;
     if (left && right) {
       left.rotation.x = Math.sin(citizen.stepPhase) * .5;
       right.rotation.x = -Math.sin(citizen.stepPhase) * .5;
     }
     if (distance < .055) {
       citizen.model.position.x = target.x;
+      citizen.model.position.y = target.y;
       citizen.model.position.z = target.z;
       citizen.path.shift();
     }
@@ -551,6 +644,35 @@ export class CitizenSystem {
     }
   }
 
+  assignOccupation(occupation: string) {
+    const existing = this.citizens.find((citizen) => citizen.occupation === occupation);
+    if (existing) {
+      existing.activity = `preparing to work as a ${occupation.toLowerCase()}`;
+      return existing.id;
+    }
+    const businessOwners = new Set(this.businesses.map((business) => business.ownerId));
+    const citizen = this.citizens
+      .filter((candidate) => !businessOwners.has(candidate.id))
+      .sort((a, b) => {
+        const waterEdges = (candidate: Citizen) => {
+          const home = parseCellKey(candidate.homeKey);
+          return CARDINALS.filter(([dx, dz]) => !this.cells.has(keyOf(home.x + dx, home.z + dz))).length;
+        };
+        return waterEdges(b) - waterEdges(a);
+      })[0];
+    if (!citizen) return null;
+    citizen.occupation = occupation;
+    citizen.activity = `preparing to work as a ${occupation.toLowerCase()}`;
+    if ((occupation === 'Fisher' || occupation === 'Gardener') && !citizen.model.getObjectByName('occupation-hat')) {
+      const hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
+      hat.name = 'occupation-hat';
+      hat.position.y = .72;
+      hat.userData.citizenId = citizen.id;
+      citizen.model.add(hat);
+    }
+    return citizen.id;
+  }
+
   card(id: string): CitizenCard | null {
     const citizen = this.citizens.find((item) => item.id === id);
     if (!citizen) return null;
@@ -579,6 +701,7 @@ export class CitizenSystem {
       name: citizen.name,
       homeKey: citizen.homeKey,
       position: [citizen.model.position.x, citizen.model.position.z],
+      elevation: citizen.model.position.y,
       occupation: citizen.occupation,
       traits: [...citizen.traits],
       relationships: [...citizen.relationships],

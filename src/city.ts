@@ -3,6 +3,8 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, keyOf } from './types';
 import { hash, pick } from './random';
+import { plazaAnchorAt } from './topology';
+import { hasDock, hasWaterStairs } from './water';
 
 const CELL = 2.45;
 const FLOOR = 1.42;
@@ -96,6 +98,15 @@ export class CityRenderer {
     return new THREE.Vector3(x * CELL, 0, z * CELL);
   }
 
+  cellFromObject(object: THREE.Object3D | null) {
+    for (let current = object; current && current !== this.root; current = current.parent) {
+      const x = current.userData.cellX;
+      const z = current.userData.cellZ;
+      if (Number.isInteger(x) && Number.isInteger(z)) return { x, z };
+    }
+    return null;
+  }
+
   celebrateAt(x: number, z: number) {
     if (this.discoveryGlow) {
       this.root.remove(this.discoveryGlow.mesh);
@@ -113,9 +124,7 @@ export class CityRenderer {
   }
 
   isBuildable(x: number, z: number) {
-    if (Math.hypot(x, z) > 8.8) return false;
-    if (this.cells.size === 0) return true;
-    return CARDINALS.some(([dx, dz]) => this.cells.has(keyOf(x + dx, z + dz)));
+    return Math.hypot(x, z) <= 8.8;
   }
 
   place(x: number, z: number) {
@@ -248,6 +257,8 @@ export class CityRenderer {
   private buildAt(x: number, z: number) {
     const group = new THREE.Group();
     group.position.set(x * CELL, 0, z * CELL);
+    group.userData.cellX = x;
+    group.userData.cellZ = z;
     const cell = this.get(x, z);
     if (cell) this.buildCell(group, cell);
     else this.buildFeature(group, x, z);
@@ -326,6 +337,7 @@ export class CityRenderer {
       this.addRoofEaves(group, topY, roof, cell);
       this.addChimney(group, topY + .25, -.58, .38);
       this.addFlag(group, topY + 1.55);
+      if (this.discoveries.has('tower-bell')) this.addTowerBell(group, topY + .18);
     } else if (count <= 2) {
       const cap = shadow(new THREE.Mesh(new THREE.ConeGeometry(CELL * .82, .88, 4), roof));
       cap.position.y = topY + .43;
@@ -613,19 +625,30 @@ export class CityRenderer {
     heights.forEach((height, index) => {
       if (height > 0) return;
       const dir = index as Direction;
+      const [dx, dz] = CARDINALS[dir];
+      const adjacentFeature = this.emptyFeature(cell.x + dx, cell.z + dz);
+      if (adjacentFeature === 'courtyard garden' || adjacentFeature === 'harbor plaza') return;
       const [px, pz] = this.edgePosition(dir, CELL * .51);
       const quay = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .24 : CELL * .98, .68, dir % 2 ? CELL * .98 : .24), this.stoneDark));
       quay.position.set(px, -.17, pz);
       group.add(quay);
-      if (cell.height === 1 && hash(this.seed, cell.x, cell.z, 200 + dir) > .74) {
+      if (hasDock(cell, dir, this.seed)) {
         const dock = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? 1.1 : .82, .12, dir % 2 ? .82 : 1.1), this.wood));
-        const [dx, dz] = CARDINALS[dir];
         dock.position.set(dx * (CELL * .78), -.03, dz * (CELL * .78));
         group.add(dock);
         for (const side of [-1, 1]) {
           const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.055, .07, .55, 7), this.wood), false);
           post.position.set(dock.position.x + (dir % 2 === 0 ? side * .28 : 0), .06, dock.position.z + (dir % 2 ? side * .28 : 0));
           group.add(post);
+        }
+      } else if (hasWaterStairs(cell, dir, this.seed)) {
+        for (let step = 0; step < 3; step++) {
+          const stair = shadow(new THREE.Mesh(
+            new THREE.BoxGeometry(dir % 2 ? .62 : .32, .1, dir % 2 ? .32 : .62),
+            this.stone,
+          ));
+          stair.position.set(dx * (CELL * .59 + step * .25), -.02 - step * .09, dz * (CELL * .59 + step * .25));
+          group.add(stair);
         }
       }
     });
@@ -711,6 +734,17 @@ export class CityRenderer {
     group.userData.flag = flag;
   }
 
+  private addTowerBell(group: THREE.Group, y: number) {
+    const frame = shadow(new THREE.Mesh(new THREE.BoxGeometry(.72, .06, .08), this.wood));
+    frame.position.set(0, y + .82, .76);
+    const bell = shadow(new THREE.Mesh(new THREE.ConeGeometry(.18, .3, 10, 1, true), this.warmLight), false);
+    bell.position.set(0, y + .62, .76);
+    bell.rotation.x = Math.PI;
+    const clapper = shadow(new THREE.Mesh(new THREE.SphereGeometry(.055, 7, 5), this.dark), false);
+    clapper.position.set(0, y + .45, .76);
+    group.add(frame, bell, clapper);
+  }
+
   private addRoofGarden(group: THREE.Group, y: number, cell: Cell) {
     const planter = shadow(new THREE.Mesh(new RoundedBoxGeometry(.82, .24, .56, 2, .05), this.stone));
     planter.position.set(-.3, y + .12, .1);
@@ -783,6 +817,7 @@ export class CityRenderer {
   }
 
   private emptyFeature(x: number, z: number): string | null {
+    if (plazaAnchorAt(x, z, this.cells)) return 'harbor plaza';
     const h = CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz)?.height ?? 0);
     const count = h.filter((value) => value > 0).length;
     if (count >= 3) return 'courtyard garden';
@@ -790,13 +825,49 @@ export class CityRenderer {
     if (h[1] >= 3 && h[3] >= 3 && h[0] === 0 && h[2] === 0) return 'high bridge';
     if (h[0] >= 2 && h[2] >= 2 && h[1] === 0 && h[3] === 0) return 'sea arch';
     if (h[1] >= 2 && h[3] >= 2 && h[0] === 0 && h[2] === 0) return 'sea arch';
+    if (h[0] >= 1 && h[2] >= 1 && h[1] === 0 && h[3] === 0) return 'narrow canal';
+    if (h[1] >= 1 && h[3] >= 1 && h[0] === 0 && h[2] === 0) return 'narrow canal';
     return null;
   }
 
   private buildFeature(group: THREE.Group, x: number, z: number) {
     const feature = this.emptyFeature(x, z);
-    if (feature === 'courtyard garden') this.buildCourtyard(group, x, z);
+    if (feature === 'harbor plaza') this.buildPlaza(group, x, z);
+    else if (feature === 'courtyard garden') this.buildCourtyard(group, x, z);
+    else if (feature === 'narrow canal') this.buildCanal(group, x, z);
     else if (feature) this.buildCrossing(group, x, z, feature === 'high bridge');
+  }
+
+  private buildCanal(group: THREE.Group, x: number, z: number) {
+    const h = CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz)?.height ?? 0);
+    const northSouthBanks = h[0] > 0 && h[2] > 0;
+    for (const side of [-1, 1]) {
+      const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.055, .07, .48, 7), this.wood), false);
+      post.position.set(northSouthBanks ? side * .72 : 0, .02, northSouthBanks ? 0 : side * .72);
+      group.add(post);
+    }
+  }
+
+  private buildPlaza(group: THREE.Group, x: number, z: number) {
+    const anchor = plazaAnchorAt(x, z, this.cells);
+    if (!anchor) return;
+    const platform = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .96, .18, CELL * .96, 2, .06), this.stone));
+    platform.position.y = .08;
+    group.add(platform);
+    for (const offset of [-.52, .52]) {
+      const inlay = shadow(new THREE.Mesh(new THREE.BoxGeometry(CELL * .78, .025, .035), this.stoneDark), false);
+      inlay.position.set(0, .185, offset);
+      group.add(inlay);
+    }
+    if (x === anchor.x && z === anchor.z) {
+      const basin = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.5, .58, .18, 16), this.stoneDark));
+      basin.position.set(CELL / 2, .27, CELL / 2);
+      const water = new THREE.Mesh(new THREE.CylinderGeometry(.42, .42, .025, 16), new THREE.MeshStandardMaterial({ color: 0x69a7a3, roughness: .35 }));
+      water.position.set(CELL / 2, .375, CELL / 2);
+      const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.07, .1, .65, 9), this.stone));
+      post.position.set(CELL / 2, .62, CELL / 2);
+      group.add(basin, water, post);
+    }
   }
 
   private buildCourtyard(group: THREE.Group, x: number, z: number) {
@@ -852,6 +923,28 @@ export class CityRenderer {
         const rail = shadow(new THREE.Mesh(new THREE.BoxGeometry(northSouth ? .08 : CELL, .34, northSouth ? CELL : .08), this.metal));
         rail.position.set(northSouth ? side * .55 : 0, y + .52, northSouth ? 0 : side * .55);
         group.add(rail);
+      }
+      const deckY = y + .34;
+      const ladderHeight = deckY - .27;
+      for (const end of [-1, 1]) {
+        for (const side of [-1, 1]) {
+          const upright = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, ladderHeight, 6), this.metal), false);
+          upright.position.set(
+            northSouth ? side * .18 : end * (CELL - (CELL / 2 + .24)),
+            .27 + ladderHeight / 2,
+            northSouth ? end * (CELL - (CELL / 2 + .24)) : side * .18,
+          );
+          group.add(upright);
+        }
+        for (let rung = 0; rung < 8; rung++) {
+          const step = shadow(new THREE.Mesh(new THREE.BoxGeometry(northSouth ? .42 : .045, .035, northSouth ? .045 : .42), this.wood), false);
+          step.position.set(
+            northSouth ? 0 : end * (CELL - (CELL / 2 + .24)),
+            .48 + rung * (ladderHeight - .35) / 7,
+            northSouth ? end * (CELL - (CELL / 2 + .24)) : 0,
+          );
+          group.add(step);
+        }
       }
     }
   }

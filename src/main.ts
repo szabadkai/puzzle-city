@@ -6,7 +6,7 @@ import { CitizenSystem } from './citizens';
 import { BusinessSystem, type BusinessUpdate } from './businesses';
 import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
 import { HarborAmbience } from './harbor';
-import type { JournalEntry, SavedTown } from './types';
+import type { JournalEntry, JournalIllustration, SavedTown } from './types';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
@@ -44,9 +44,38 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </aside>
     <div class="recipe-note" id="note"><strong>Harbor notebook</strong><span>Click the water. Old walls and new stories will find their own shape.</span></div>
     <div class="hint" id="hint">
-      <span><i class="mouse"></i> click to build</span>
-      <span>right-click to undo</span>
-      <span>drag to orbit · scroll to zoom</span>
+      <span class="desktop-hint"><i class="mouse"></i> click to build</span>
+      <span class="desktop-hint">right-click to remove</span>
+      <span class="desktop-hint">drag to orbit · scroll to zoom</span>
+      <span class="touch-hint">Tap the water to build · drag to orbit · pinch to zoom</span>
+    </div>
+    <nav class="mobile-controls" aria-label="Touch controls">
+      <button class="touch-action active" data-touch-mode="build" aria-pressed="true">
+        <span class="touch-action-icon" aria-hidden="true">＋</span><span>Build</span>
+      </button>
+      <button class="touch-action" data-touch-mode="remove" aria-pressed="false">
+        <span class="touch-action-icon" aria-hidden="true">−</span><span>Remove</span>
+      </button>
+      <button class="touch-action" id="touch-center">
+        <span class="touch-action-icon touch-compass" aria-hidden="true">⌖</span><span>Center</span>
+      </button>
+      <button class="touch-action" id="touch-help-toggle" aria-expanded="false">
+        <span class="touch-action-icon" aria-hidden="true">?</span><span>Help</span>
+      </button>
+    </nav>
+    <div class="touch-guide-scrim" id="touch-guide" aria-hidden="true">
+      <section class="touch-guide" role="dialog" aria-modal="true" aria-labelledby="touch-guide-title">
+        <span class="guide-kicker">How to play</span>
+        <button class="guide-close" id="touch-guide-close" aria-label="Close touch guide">×</button>
+        <h2 id="touch-guide-title">Shape the harbor by touch</h2>
+        <div class="gesture-list">
+          <div><span class="gesture-icon" aria-hidden="true">☝</span><p><strong>Tap</strong> the water to build. Tap a resident to meet them.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to orbit around your town.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Pinch</strong> with two fingers to zoom and move the view.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">−</span><p>Choose <strong>Remove</strong>, then tap a building to take down one floor.</p></div>
+        </div>
+        <button class="guide-done" id="touch-guide-done">Got it</button>
+      </section>
     </div>
     <div class="journal-scrim" id="journal-scrim" aria-hidden="true">
       <aside class="journal" role="dialog" aria-modal="true" aria-labelledby="journal-title">
@@ -178,14 +207,19 @@ businesses.maintain(citizens.residents(), city.cells);
 city.setBusinesses(businesses.all());
 citizens.setBusinesses(businesses.all());
 const grow = new GrowSystem(DISCOVERY_EVENTS, saved?.discoveries ?? [], saved?.journal ?? [], commitDiscoveryEffect);
-renderJournal();
 const lastJournalEntry = grow.entries().at(-1);
 if (lastJournalEntry) setNote(lastJournalEntry.note);
 city.setDiscoveryState(grow.discoveredIds());
 
-const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xffd894, transparent: true, opacity: .56, depthWrite: false });
-const hover = new THREE.Mesh(new RoundedBoxGeometry(CityRenderer.cellSize() * .9, .16, CityRenderer.cellSize() * .9, 4, .12), hoverMaterial);
-hover.position.y = .04;
+const previewHeight = 1.28;
+const hoverGeometry = new RoundedBoxGeometry(CityRenderer.cellSize() * .9, previewHeight, CityRenderer.cellSize() * .9, 4, .12);
+const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xffd894, transparent: true, opacity: .24, depthWrite: false });
+const hoverOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xffd894, transparent: true, opacity: .9 });
+const hover = new THREE.Mesh(hoverGeometry, hoverMaterial);
+const hoverOutline = new THREE.LineSegments(new THREE.EdgesGeometry(hoverGeometry, 24), hoverOutlineMaterial);
+hover.add(hoverOutline);
+hover.position.y = .12;
+hover.renderOrder = 3;
 hover.visible = false;
 scene.add(hover);
 
@@ -194,49 +228,106 @@ const pointer = new THREE.Vector2();
 const interactionPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const hit = new THREE.Vector3();
 let hoveredCell: { x: number; z: number } | null = null;
-let pointerStart = new THREE.Vector2();
+const pointerStart = new THREE.Vector2();
+const activePointers = new Set<number>();
+let gesturePointerId: number | null = null;
+let multiTouchGesture = false;
 let dragged = false;
 let toastTimer = 0;
 let saveTimer = 0;
 let audioContext: AudioContext | null = null;
 let selectedCitizenId: string | null = null;
+let touchMode: 'build' | 'remove' = 'build';
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
-  pointerStart.set(event.clientX, event.clientY);
-  dragged = false;
-  renderer.domElement.classList.add('dragging');
+  activePointers.add(event.pointerId);
+  if (activePointers.size === 1) {
+    gesturePointerId = event.pointerId;
+    pointerStart.set(event.clientX, event.clientY);
+    dragged = false;
+    multiTouchGesture = false;
+    updateHover(event.clientX, event.clientY);
+  } else {
+    dragged = true;
+    multiTouchGesture = true;
+    hover.visible = false;
+  }
 });
 
 renderer.domElement.addEventListener('pointermove', (event) => {
-  if (Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > 5) dragged = true;
+  if (event.pointerId !== gesturePointerId || multiTouchGesture) return;
+  const dragThreshold = event.pointerType === 'touch' ? 10 : 5;
+  if (Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > dragThreshold) {
+    dragged = true;
+    renderer.domElement.classList.add('dragging');
+  }
   updateHover(event.clientX, event.clientY);
 });
 
 renderer.domElement.addEventListener('pointerup', (event) => {
-  renderer.domElement.classList.remove('dragging');
-  if (dragged || !hoveredCell) return;
+  const completesGesture = event.pointerId === gesturePointerId;
+  activePointers.delete(event.pointerId);
+  if (!activePointers.size) renderer.domElement.classList.remove('dragging');
+  if (!completesGesture || dragged || multiTouchGesture) {
+    if (!activePointers.size) resetPointerGesture();
+    return;
+  }
+  updateHover(event.clientX, event.clientY);
+  if (!hoveredCell) {
+    resetPointerGesture();
+    return;
+  }
   if (event.button === 0) {
-    if (inspectCitizen(event.clientX, event.clientY)) return;
-    hideCitizenCard();
-    build(hoveredCell.x, hoveredCell.z);
+    if (touchMode === 'remove') {
+      hideCitizenCard();
+      demolish(hoveredCell.x, hoveredCell.z);
+    } else if (!inspectCitizen(event.clientX, event.clientY)) {
+      hideCitizenCard();
+      build(hoveredCell.x, hoveredCell.z);
+    }
   }
   if (event.button === 2) demolish(hoveredCell.x, hoveredCell.z);
+  if (event.pointerType === 'touch') {
+    hover.visible = false;
+    hoveredCell = null;
+  }
+  resetPointerGesture();
+});
+
+renderer.domElement.addEventListener('pointercancel', (event) => {
+  activePointers.delete(event.pointerId);
+  if (!activePointers.size) resetPointerGesture();
 });
 
 renderer.domElement.addEventListener('pointerleave', () => {
+  if (activePointers.size) return;
   hover.visible = false;
   hoveredCell = null;
   renderer.domElement.classList.remove('dragging');
 });
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 
+function resetPointerGesture() {
+  gesturePointerId = null;
+  multiTouchGesture = false;
+  dragged = false;
+  renderer.domElement.classList.remove('dragging');
+}
+
 function updateHover(clientX: number, clientY: number) {
   pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  if (!raycaster.ray.intersectPlane(interactionPlane, hit)) return;
   const size = CityRenderer.cellSize();
-  const x = Math.round(hit.x / size);
-  const z = Math.round(hit.z / size);
+  const cityHit = raycaster.intersectObject(city.root, true)
+    .map((intersection) => city.cellFromObject(intersection.object))
+    .find((cell) => cell !== null);
+  if (!cityHit && !raycaster.ray.intersectPlane(interactionPlane, hit)) {
+    hover.visible = false;
+    hoveredCell = null;
+    return;
+  }
+  const x = cityHit?.x ?? Math.round(hit.x / size);
+  const z = cityHit?.z ?? Math.round(hit.z / size);
   if (Math.hypot(x, z) > 9.25) {
     hover.visible = false;
     hoveredCell = null;
@@ -244,10 +335,13 @@ function updateHover(clientX: number, clientY: number) {
   }
   hoveredCell = { x, z };
   const cell = city.get(x, z);
-  const allowed = Boolean(cell) || city.isBuildable(x, z);
+  const allowed = touchMode === 'remove' ? Boolean(cell) : cell ? cell.height < 5 : city.isBuildable(x, z);
+  const color = allowed ? (touchMode === 'remove' ? 0xc65f57 : 0xffd894) : 0x82918c;
   hover.visible = true;
-  hover.position.set(x * size, cell ? .35 + cell.height * 1.42 : .04, z * size);
-  hoverMaterial.color.setHex(allowed ? 0xffd894 : 0xc65f57);
+  hover.scale.y = cell ? 1 : .12;
+  hover.position.set(x * size, cell ? .34 + cell.height * 1.42 + previewHeight / 2 : .12, z * size);
+  hoverMaterial.color.setHex(color);
+  hoverOutlineMaterial.color.setHex(color);
 }
 
 function inspectCitizen(clientX: number, clientY: number) {
@@ -283,13 +377,13 @@ function hideCitizenCard() {
 function build(x: number, z: number) {
   const before = city.topologyLabel(x, z);
   if (!city.place(x, z)) {
-    showToast(city.get(x, z) ? 'That tower is tall enough.' : 'Build beside the town to coax it outward.');
+    showToast(city.get(x, z) ? 'That tower is tall enough.' : 'The water is too deep to build there.');
     softTone(150, .05);
     return;
   }
   const after = city.topologyLabel(x, z);
   citizens.rebuild(city.cells);
-  ambience.setTown(city.cells.values());
+  refreshAmbience();
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), false);
   performanceWarmup = 0;
   performanceCooldown = 0;
@@ -304,7 +398,7 @@ function build(x: number, z: number) {
 function demolish(x: number, z: number) {
   if (!city.remove(x, z)) return;
   citizens.rebuild(city.cells);
-  ambience.setTown(city.cells.values());
+  refreshAmbience();
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), true);
   performanceWarmup = 0;
   performanceCooldown = 0;
@@ -361,6 +455,7 @@ function currentSnapshot() {
     cells: city.cells.values(),
     citizens: citizens.residents(),
     businesses: businesses.serialize(),
+    seed,
     day,
     timeOfDay,
     priorDiscoveries: grow.discoveredIds(),
@@ -384,11 +479,12 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
     return;
   }
   if (effect.kind === 'citizens') {
-    citizens.noticeDiscovery(effect.activity);
+    if (effect.action === 'notice') citizens.noticeDiscovery(effect.activity);
+    else citizens.assignOccupation(effect.occupation);
     return;
   }
   if (effect.kind === 'ambience') {
-    ambience.setDiscoveryState(grow.discoveredIds());
+    refreshAmbience();
     return;
   }
   showToast(effect.caption);
@@ -417,7 +513,8 @@ function updateGrowInspector() {
   const heading = document.createElement('strong');
   heading.textContent = 'GROW inspector';
   const summary = document.createElement('p');
-  summary.textContent = `${snapshot.cells.length} cells · ${snapshot.population} residents · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${complete}/${events.length} discoveries`;
+  const fleet = ambience.activeFleet();
+  summary.textContent = `${snapshot.cells.length} cells · ${snapshot.population} residents · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · fleet: ${fleet.join(', ') || 'none'} · ${complete}/${events.length} discoveries`;
   const eligibleTitle = document.createElement('span');
   eligibleTitle.textContent = 'Eligible next';
   const eligibleList = document.createElement('p');
@@ -444,6 +541,109 @@ function renderJournal() {
   for (const entry of entries) list.append(createJournalEntry(entry));
 }
 
+const JOURNAL_SKETCHES: Record<JournalIllustration, string> = {
+  foundation: `
+    <path class="wash" d="M27 55 Q52 48 79 55 L77 66 Q51 70 25 64Z"/>
+    <path d="M22 58 Q52 52 84 58 M29 57 L31 43 L72 41 L76 56 M31 43 Q50 38 72 41 M39 43 L38 55 M52 41 L53 54 M64 42 L65 55"/>
+    <path class="faint" d="M27 61 Q52 56 79 61 M33 46 Q52 41 70 44"/>`,
+  garden: `
+    <path class="wash botanical" d="M33 53 Q31 29 51 28 Q72 30 69 54Z"/>
+    <path d="M20 61 Q51 55 86 60 M31 55 Q35 49 39 55 Q43 46 47 54 Q52 43 57 54 Q62 47 68 55 M50 55 Q49 42 52 28 M51 40 Q43 35 40 28 M52 37 Q61 32 65 24"/>
+    <path class="faint" d="M35 58 Q51 52 72 58 M39 29 Q44 27 47 34 M58 31 Q63 27 66 25"/>`,
+  arch: `
+    <path class="wash water" d="M12 59 Q42 52 95 58 L95 70 L10 70Z"/>
+    <path d="M12 59 Q38 53 96 58 M24 56 L25 27 L43 23 L46 55 M62 55 L65 22 L83 28 L84 57 M42 54 Q53 35 65 54 M30 31 L41 28 M68 27 L79 32"/>
+    <path class="faint" d="M16 63 Q51 57 91 63 M44 57 Q53 40 63 56"/>`,
+  bridge: `
+    <path class="wash water" d="M9 57 Q50 51 99 58 L98 70 L8 70Z"/>
+    <path d="M10 59 Q51 53 98 59 M18 55 L21 32 L37 27 L39 53 M69 53 L71 26 L88 32 L90 56 M36 33 Q53 22 72 31 M37 37 Q54 29 71 35 M43 34 L44 43 M51 30 L52 40 M61 30 L62 40"/>
+    <path class="faint" d="M14 64 Q51 58 94 63"/>`,
+  tower: `
+    <path class="wash" d="M39 61 L41 21 L69 20 L72 62Z"/>
+    <path d="M25 62 Q54 57 84 62 M41 59 L42 21 L68 20 L71 60 M38 22 Q54 14 72 21 M48 18 L49 11 M57 17 L58 9 M64 18 L66 12 M48 31 L62 30 M48 39 L63 38 M49 48 L64 47"/>
+    <path class="faint" d="M45 59 L46 24 M70 62 Q53 56 37 62"/>`,
+  neighbors: `
+    <path class="wash warm" d="M27 58 L29 33 L48 30 L50 58 M58 58 L59 27 L80 31 L82 59Z"/>
+    <path d="M17 61 Q52 56 91 61 M27 57 L29 33 L48 30 L50 58 M58 58 L59 27 L80 31 L82 59 M26 34 Q38 25 51 31 M56 29 Q70 20 83 30 M38 57 L38 43 M70 58 L70 42 M43 38 Q52 35 60 37"/>
+    <circle cx="52" cy="36" r="2"/><circle cx="56" cy="36" r="2"/>`,
+  street: `
+    <path class="wash" d="M14 56 L18 35 L33 31 L36 55 L40 29 L55 25 L58 54 L63 34 L79 30 L85 56Z"/>
+    <path d="M10 61 Q49 53 98 61 M16 56 L18 35 L33 31 L36 55 M38 55 L40 29 L55 25 L58 54 M61 55 L63 34 L79 30 L84 57 M16 36 L27 28 L36 33 M38 30 L49 20 L59 27 M61 35 L71 27 L83 32 M24 54 L24 44 M47 53 L47 38 M71 54 L71 43"/>
+    <path class="faint" d="M18 65 Q52 57 91 64"/>`,
+  friendship: `
+    <path class="wash warm" d="M37 57 Q36 43 43 40 Q49 42 49 57 M57 58 Q56 41 63 39 Q70 42 69 58Z"/>
+    <path d="M17 62 Q53 56 91 62 M40 58 L39 47 Q39 41 44 40 Q50 41 49 47 L49 58 M58 58 L57 46 Q57 40 63 39 Q70 41 69 47 L68 58 M44 39 Q43 33 47 31 Q52 34 49 39 M63 38 Q61 32 66 30 Q71 33 68 39 M49 48 Q54 45 58 47"/>
+    <path class="faint" d="M47 50 Q54 48 61 50"/>`,
+  bread: `
+    <path class="wash warm" d="M30 59 Q31 39 53 36 Q78 39 79 58Z"/>
+    <path d="M16 62 Q53 57 92 62 M29 58 Q30 40 53 36 Q77 39 80 58 M40 42 Q43 47 41 53 M51 38 Q55 45 52 51 M64 40 Q67 46 64 53 M24 30 Q29 25 25 20 M43 27 Q48 22 44 16 M64 28 Q69 23 66 18"/>
+    <path class="faint" d="M33 61 Q55 54 76 60"/>`,
+  tea: `
+    <path class="wash water" d="M35 43 L69 43 L66 59 Q52 65 38 57Z"/>
+    <path d="M17 62 Q50 57 91 62 M35 42 L38 56 Q51 63 65 57 L69 42Z M69 46 Q80 43 78 51 Q76 56 67 54 M33 41 Q52 45 71 41 M44 35 Q39 29 45 25 M56 35 Q51 29 57 23 M65 35 Q61 30 66 27"/>
+    <path class="faint" d="M39 45 Q52 48 66 44"/>`,
+  tools: `
+    <path class="wash" d="M36 59 L65 26 L73 33 L45 63Z"/>
+    <path d="M15 62 Q53 56 93 62 M34 58 L64 28 M40 63 L70 33 M63 27 L70 22 L77 29 L71 36 M34 57 L29 62 L37 65 L42 61 M44 29 L46 51 M40 30 L49 27 M41 35 L49 33"/>
+    <path class="faint" d="M36 60 L68 29 M17 65 Q52 60 90 65"/>`,
+  fish: `
+    <path class="wash water" d="M24 53 Q45 36 70 47 L83 39 L81 56 L69 50 Q45 64 24 53Z"/>
+    <path d="M15 62 Q51 57 94 62 M23 52 Q43 35 69 46 L82 38 L81 56 L69 50 Q45 64 23 52Z M35 48 Q45 55 55 45 M40 57 Q49 50 60 53"/>
+    <circle cx="63" cy="46" r="1.7"/><path class="faint" d="M18 66 Q52 61 90 66"/>`,
+  inn: `
+    <path class="wash warm" d="M31 60 L33 28 L73 27 L77 60Z"/>
+    <path d="M18 63 Q51 57 91 63 M31 59 L33 28 L73 27 L77 60 M29 30 Q52 19 77 28 M48 59 L48 43 L62 43 L63 59 M39 38 L43 38 M67 37 L71 37 M80 23 L80 36"/>
+    <path class="accent-line" d="M75 34 Q80 29 85 34 L84 44 Q80 48 76 43Z M76 37 L84 37"/>`,
+  market: `
+    <path class="wash warm" d="M15 36 Q52 27 91 35 L86 46 Q51 40 19 47Z"/>
+    <path d="M10 62 Q52 55 98 62 M18 59 L19 37 M86 58 L89 35 M15 36 Q52 26 92 35 M18 37 Q23 48 31 36 Q39 45 47 33 Q55 43 63 33 Q72 42 82 34 Q86 41 90 35 M28 48 L28 58 M52 45 L52 57 M76 46 L76 58"/>
+    <path class="faint" d="M20 65 Q55 59 91 65"/>`,
+  town: `
+    <path class="wash water" d="M7 58 Q52 50 101 58 L100 70 L7 70Z"/>
+    <path d="M7 59 Q51 51 101 59 M14 56 L17 39 L30 35 L34 55 M33 55 L36 28 L53 24 L58 53 M57 54 L61 34 L76 30 L80 55 M79 56 L83 42 L94 39 L96 58 M15 40 L25 31 L34 37 M34 30 L46 18 L59 27 M59 35 L69 26 L80 32 M82 43 L89 36 L97 41"/>
+    <path class="accent-line" d="M43 39 L49 38 M66 43 L71 42 M87 49 L91 48"/><path class="faint" d="M10 65 Q54 57 98 64"/>`,
+  pots: `
+    <path class="wash botanical" d="M28 55 L31 42 L43 42 L45 56 M48 56 L50 38 L64 38 L66 56 M69 56 L72 44 L83 44 L84 57Z"/>
+    <path d="M16 61 Q51 56 92 61 M28 43 L31 55 L43 55 L45 43 M49 39 L51 55 L64 55 L66 39 M70 45 L73 56 L83 56 L85 45 M37 42 Q34 33 38 27 M37 36 Q29 31 28 25 M38 34 Q45 28 45 23 M57 38 Q54 29 58 22 M57 31 Q49 26 50 20 M58 29 Q65 24 67 18 M78 44 Q77 36 82 31"/>
+    <path class="faint" d="M18 65 Q52 60 89 65"/>`,
+  gulls: `
+    <path class="wash water" d="M9 59 Q52 51 99 59 L98 70 L8 70Z"/>
+    <path d="M9 60 Q51 53 99 60 M25 35 Q32 27 40 35 Q48 25 57 34 M56 22 Q62 16 69 23 Q75 16 82 23 M28 58 L30 43 L46 40 L50 57 M28 44 L39 36 L50 41"/>
+    <path class="faint" d="M13 65 Q53 58 94 65 M27 37 Q33 30 40 37"/>`,
+  blossom: `
+    <path class="wash botanical" d="M19 53 Q37 25 80 24 Q70 48 49 58Z"/>
+    <path d="M14 62 Q51 55 94 62 M24 57 Q38 42 50 35 Q62 29 82 22 M47 37 Q39 30 31 28 M58 31 Q56 22 61 16 M66 28 Q75 31 83 28"/>
+    <path class="accent-line" d="M27 27 q4-6 8 0 q6-2 4 4 q2 5-4 4 q-4 5-7 0 q-6 0-3-5Z M57 16 q4-6 8 0 q6-1 4 4 q2 5-4 4 q-4 5-7 0 q-5 0-2-5Z M78 27 q4-5 7 0 q5-1 3 4 q2 4-3 3 q-4 5-7 0 q-5 0-2-4Z"/>`,
+  chorus: `
+    <path class="wash night" d="M8 58 Q53 49 100 58 L99 70 L8 70Z"/>
+    <path d="M8 60 Q53 51 100 60 M22 56 L25 39 L42 35 L46 55 M65 55 L67 34 L84 38 L87 57 M23 40 L34 31 L46 37 M65 36 L75 29 L87 37 M29 25 Q36 18 44 26 Q51 18 58 25"/>
+    <path class="accent-line" d="M20 30 l3-2 m-1 4 l3 1 M60 20 l2-3 m1 4 l3-1 M85 26 l3-2 m-1 4 l3 1"/><path class="faint" d="M12 65 Q52 57 96 65"/>`,
+  supper: `
+    <path class="wash warm" d="M26 49 Q51 42 80 49 L76 58 Q52 63 29 57Z"/>
+    <path d="M14 63 Q52 57 94 63 M26 49 Q52 42 80 49 Q76 58 29 57Z M36 57 L33 65 M69 57 L73 64 M36 47 Q35 37 40 34 Q46 35 45 45 M62 45 Q61 34 67 32 Q73 34 72 47 M40 33 Q39 27 44 26 Q49 29 46 34 M67 31 Q66 25 71 24 Q76 27 73 33"/>
+    <path class="accent-line" d="M46 51 Q52 47 59 51 M50 53 l3 2 l3-3"/>`,
+  festival: `
+    <path class="wash warm" d="M13 31 Q51 20 95 29 L94 40 Q52 31 15 42Z"/>
+    <path d="M11 62 Q52 55 98 62 M18 58 L20 39 M86 57 L89 37 M14 31 Q53 19 96 29 M22 29 L27 38 L33 26 L40 35 L47 23 L55 32 L63 22 L71 31 L80 23 L87 32 M24 58 L24 47 M79 57 L79 45"/>
+    <path class="faint" d="M16 65 Q52 58 94 65"/>`,
+  'blossom-night': `
+    <path class="wash night" d="M8 58 Q52 50 100 58 L99 70 L8 70Z"/>
+    <path d="M8 60 Q52 52 100 60 M15 32 Q51 21 94 30 M22 30 L28 38 L35 27 L43 35 L51 24 L60 32 L69 23 L78 31 L87 25 M22 57 Q39 43 52 36 Q65 28 88 21"/>
+    <path class="accent-line" d="M30 35 q3-5 7 0 q5-1 3 4 q2 4-3 3 q-3 4-6 0 q-5 0-2-4Z M62 29 q3-5 7 0 q5-1 3 4 q2 4-3 3 q-3 4-6 0 q-4 0-2-4Z M82 22 q3-4 6 0 q4-1 3 3 q1 4-3 3 q-3 4-5 0 q-4 0-2-3Z"/>`,
+  lanterns: `
+    <path class="wash night" d="M7 58 Q52 49 101 58 L100 70 L7 70Z"/>
+    <path d="M7 60 Q52 51 101 60 M13 56 L16 38 L31 34 L35 55 M34 55 L38 27 L55 23 L59 53 M58 54 L62 33 L78 29 L82 55 M81 56 L85 41 L96 38 L98 58 M14 39 L26 30 L35 36 M36 29 L48 18 L60 26 M60 34 L70 25 L82 31 M83 42 L90 35 L98 40"/>
+    <path class="accent-line" d="M22 43 q4-3 8 0 l-1 8 q-3 4-7 0Z M44 35 q5-4 9 0 l-1 10 q-4 5-8 0Z M67 40 q4-3 8 0 l-1 9 q-3 4-7 0Z M87 47 q3-3 7 0 l-1 7 q-3 3-6 0Z"/><path class="faint" d="M11 65 Q53 57 97 65"/>`,
+};
+
+function createJournalSketch(scene: JournalIllustration) {
+  const template = document.createElement('template');
+  template.innerHTML = `<svg viewBox="0 0 108 72" focusable="false" aria-hidden="true">
+    <g class="journal-sketch-lines">${JOURNAL_SKETCHES[scene]}</g>
+  </svg>`;
+  return template.content.firstElementChild!;
+}
+
 function createJournalEntry(entry: JournalEntry) {
   const article = document.createElement('article');
   article.className = 'journal-entry';
@@ -451,7 +651,7 @@ function createJournalEntry(entry: JournalEntry) {
   illustration.className = 'journal-illustration';
   illustration.dataset.scene = entry.illustration;
   illustration.setAttribute('aria-hidden', 'true');
-  illustration.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  illustration.append(createJournalSketch(entry.illustration));
   const copy = document.createElement('div');
   const title = document.createElement('h3');
   title.textContent = entry.title;
@@ -467,6 +667,8 @@ function createJournalEntry(entry: JournalEntry) {
   return article;
 }
 
+renderJournal();
+
 function setJournalOpen(open: boolean) {
   const scrim = document.querySelector('#journal-scrim')!;
   scrim.classList.toggle('show', open);
@@ -478,6 +680,7 @@ function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
   const current = businesses.all();
   city.setBusinesses(current);
   citizens.setBusinesses(current);
+  refreshAmbience();
   renderer.shadowMap.needsUpdate = true;
   if (announce && update.closed[0]) {
     showToast(`${update.closed[0].name} has quietly closed its shutters.`);
@@ -522,10 +725,51 @@ function popSound() {
   softTone(430, .13, .045);
 }
 
-document.querySelector('#center')!.addEventListener('click', () => {
+function centerView() {
   controls.target.set(0, 1.3, 0);
   camera.position.set(18, 19, 20);
   controls.update();
+}
+
+document.querySelector('#center')!.addEventListener('click', centerView);
+document.querySelector('#touch-center')!.addEventListener('click', () => {
+  centerView();
+  showToast('The harbor drifts back into view.');
+});
+
+function setTouchMode(mode: 'build' | 'remove') {
+  touchMode = mode;
+  hover.visible = false;
+  hoveredCell = null;
+  renderer.domElement.classList.toggle('remove-mode', mode === 'remove');
+  document.querySelectorAll<HTMLButtonElement>('[data-touch-mode]').forEach((button) => {
+    const active = button.dataset.touchMode === mode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  showToast(mode === 'build' ? 'Tap the water to build.' : 'Tap a building to remove one floor.');
+}
+
+document.querySelectorAll<HTMLButtonElement>('[data-touch-mode]').forEach((button) => {
+  button.addEventListener('click', () => setTouchMode(button.dataset.touchMode === 'remove' ? 'remove' : 'build'));
+});
+
+function setTouchGuideOpen(open: boolean) {
+  const guide = document.querySelector<HTMLElement>('#touch-guide')!;
+  const helpButton = document.querySelector<HTMLButtonElement>('#touch-help-toggle')!;
+  guide.classList.toggle('show', open);
+  guide.setAttribute('aria-hidden', String(!open));
+  document.querySelector('.hud')!.classList.toggle('touch-guide-open', open);
+  helpButton.setAttribute('aria-expanded', String(open));
+  if (open) window.setTimeout(() => document.querySelector<HTMLButtonElement>('#touch-guide-done')!.focus(), 50);
+  else if (guide.contains(document.activeElement)) helpButton.focus();
+}
+
+document.querySelector('#touch-help-toggle')!.addEventListener('click', () => setTouchGuideOpen(true));
+document.querySelector('#touch-guide-close')!.addEventListener('click', () => setTouchGuideOpen(false));
+document.querySelector('#touch-guide-done')!.addEventListener('click', () => setTouchGuideOpen(false));
+document.querySelector('#touch-guide')!.addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) setTouchGuideOpen(false);
 });
 
 document.querySelector('#reset')!.addEventListener('click', () => {
@@ -556,12 +800,21 @@ window.addEventListener('keydown', (event) => {
     document.querySelector('#grow-inspector')!.classList.toggle('show');
     updateGrowInspector();
   }
-  if (event.key === 'Escape') setJournalOpen(false);
+  if (event.key === 'Escape') {
+    setJournalOpen(false);
+    setTouchGuideOpen(false);
+  }
 });
 
 const ambience = new HarborAmbience(seed, camera, city.cells.values());
 ambience.setDiscoveryState(grow.discoveredIds());
+ambience.setTown(city.cells.values(), businesses.all(), citizens.residents());
 scene.add(ambience.root);
+
+function refreshAmbience() {
+  ambience.setTown(city.cells.values(), businesses.all(), citizens.residents());
+  ambience.setDiscoveryState(grow.discoveredIds());
+}
 
 const clock = new THREE.Clock();
 const daySky = new THREE.Color(0x91c7c1);

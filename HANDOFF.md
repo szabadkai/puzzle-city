@@ -6,11 +6,11 @@ This repository is complete through **Milestone 5**, the final milestone in the 
 
 1. **Townscaper toy**
    - Direct build/remove interaction on a compact island grid.
-   - Topology-driven houses, rows, corners, towers, courtyards, arches, bridges, quays, and docks.
+   - Topology-driven houses, rows, corners, towers, courtyards, plazas, canals, arches, bridges, quays, docks, and water stairs.
    - Animated sea, construction feedback, ambient boat and birds, constrained orbit camera, and deterministic saves.
 2. **Living town**
    - One persistent resident per accessible home.
-   - Topology-derived navigation graph, A* walking, daily routines, relationships, and inspectable citizen cards.
+   - Topology-derived navigation graph, A* walking across courtyards, plazas, and elevated bridges, daily routines, relationships, and inspectable citizen cards.
    - Eight-minute day/night cycle with pause, 1x, and 3x simulation speeds.
 3. **Businesses**
    - Bakery, café, workshop, fishmonger, and inn emerge from population, resident traits, occupation, and site suitability.
@@ -18,10 +18,10 @@ This repository is complete through **Milestone 5**, the final milestone in the 
    - Businesses close or are reassigned when edits invalidate their site or owner.
 4. **GROW discoveries**
    - Pure declarative condition trees evaluate cloned, read-only snapshots of topology, population, time, businesses, relationships, and prior discoveries.
-   - Fifteen stable, chained one-shot event IDs commit through narrow city, citizen, and presentation effects.
+   - Thirty stable, chained one-shot event IDs commit through narrow city, citizen, ambience, and presentation effects.
    - Discoveries add a restrained world glimmer, resident reaction, caption and sound, then persist an illustrated observation in the harbor journal.
 5. **Polish and quiet finale**
-   - Two boats follow a deterministic water route rebuilt from the occupied shoreline after every edit.
+   - A rowboat, fishing boat, merchant boat, and ferry follow separate deterministic routes rebuilt from the occupied shoreline after every edit. Docks, canals, sheltered water, occupations, businesses, and discoveries determine which vessels appear.
    - Rooftop planting, gulls, blossom, fireflies, festival ribbons, local lantern lights, and a quiet finale emerge through eight additional chained discoveries.
    - Spatially bucketed relationship checks are capped per tick, and established friends pause for shared meals, harbor news, evening walks, and other joint routines.
    - Layered ambient tones respond to daylight and the finale without starting audio before the player has interacted.
@@ -37,6 +37,8 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 - `src/businesses.ts` — business recipes, emergence thresholds, scoring, opening hours, ownership, and validity maintenance.
 - `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, and the 23-event catalog.
 - `src/harbor.ts` — shoreline-derived boat routes, boats, birds, clouds, stars, blossom particles, and evening fireflies.
+- `src/water.ts` — shared deterministic shoreline, dock, canal, sheltered-water, and route derivation.
+- `src/topology.ts` — shared multi-cell plaza recognition.
 - `src/types.ts` — saved-world and shared domain types.
 - `src/random.ts` — deterministic coordinate hashing and selection helpers.
 - `src/style.css` — HUD and presentation styling.
@@ -49,7 +51,7 @@ The town is stored in `localStorage` under `little-tides-town-v1`. The current p
 
 - the deterministic world seed and sparse cell array;
 - day and time-of-day;
-- citizens, homes, positions, traits, occupations, and relationships;
+- citizens, homes, positions and optional bridge elevation, traits, occupations, and relationships;
 - businesses, sites, owners, names, types, and opening times.
 - discovered stable event IDs and illustrated journal entries.
 

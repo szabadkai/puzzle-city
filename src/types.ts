@@ -7,12 +7,24 @@ export type Cell = {
 };
 
 export type SavedTown = {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   seed: number;
   cells: Cell[];
   timeOfDay?: number;
   day?: number;
   citizens?: CitizenSave[];
+  businesses?: BusinessSave[];
+};
+
+export type BusinessType = 'bakery' | 'cafe' | 'workshop' | 'fishmonger' | 'inn';
+
+export type BusinessSave = {
+  id: string;
+  type: BusinessType;
+  cellKey: string;
+  ownerId: string;
+  name: string;
+  openedAt: number;
 };
 
 export type CitizenSave = {

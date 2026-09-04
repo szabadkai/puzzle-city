@@ -46,6 +46,6 @@ The prototype already treats courtyard, arch, bridge, and tower morphs as the fi
 
 1. **Townscaper toy — implemented.** Direct placement/removal, constrained orbit/zoom, local topology rebuilding, houses, rows, corners, towers, quays, docks, courtyards, arches, bridges, ambient water, boat, birds, animation, and deterministic saves.
 2. **Living town — implemented.** Entrances, a topology-derived walk graph with A*, persistent named citizens, homes, routines, friendships, citizen inspection cards, simulation speed controls, and an eight-minute day/night cycle.
-3. **Businesses.** Trait-driven bakery, cafe, workshop, fishmonger, and inn transformations with destinations.
+3. **Businesses — implemented.** Trait- and occupation-driven bakery, café, workshop, fishmonger, and inn transformations, each with an owner, opening hours, visual storefront language, and citizen destinations. Businesses emerge one at a time as population grows, relocate if access is enclosed, and persist with the town.
 4. **GROW system.** A reusable condition/effect graph, 15 chained discoveries, and an illustrated observation journal.
 5. **Polish and quiet finale.** Vegetation and wildlife chains, boats using water topology, relationships, richer sound, nighttime lighting, festival, blossom, lantern finale, and developer inspection panel.

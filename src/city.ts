@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CARDINALS, type Cell, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, keyOf } from './types';
 import { hash, pick } from './random';
 
 const CELL = 2.45;
@@ -30,6 +30,7 @@ export class CityRenderer {
   readonly root = new THREE.Group();
   readonly cells = new Map<string, Cell>();
   private readonly pieces = new Map<string, THREE.Group>();
+  private readonly businesses = new Map<string, BusinessSave>();
   private readonly signMaterials = new Map<string, THREE.MeshStandardMaterial>();
   private readonly wallMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
@@ -56,6 +57,20 @@ export class CityRenderer {
   load(cells: Cell[]) {
     for (const cell of cells) this.cells.set(keyOf(cell.x, cell.z), { ...cell });
     this.rebuildAll(false);
+  }
+
+  setBusinesses(businesses: BusinessSave[]) {
+    const previous = new Map(this.businesses);
+    this.businesses.clear();
+    for (const business of businesses) this.businesses.set(business.cellKey, { ...business });
+    const affected = new Set([...previous.keys(), ...this.businesses.keys()]);
+    for (const key of affected) {
+      const before = previous.get(key);
+      const after = this.businesses.get(key);
+      if (before?.type === after?.type && before?.name === after?.name) continue;
+      const [x, z] = key.split(',').map(Number);
+      this.rebuildPiece(x, z);
+    }
   }
 
   get(x: number, z: number) { return this.cells.get(keyOf(x, z)); }
@@ -172,6 +187,17 @@ export class CityRenderer {
     }
   }
 
+  private rebuildPiece(x: number, z: number) {
+    const key = keyOf(x, z);
+    const old = this.pieces.get(key);
+    if (old) {
+      this.root.remove(old);
+      dispose(old);
+      this.pieces.delete(key);
+    }
+    if (this.get(x, z) || this.emptyFeature(x, z)) this.buildAt(x, z);
+  }
+
   private buildAt(x: number, z: number) {
     const group = new THREE.Group();
     group.position.set(x * CELL, 0, z * CELL);
@@ -277,6 +303,8 @@ export class CityRenderer {
 
     if ((count === 2 && this.isCorner(neighborHeights)) || (cell.height >= 2 && count <= 1)) this.addBalcony(group, cell, topY);
     this.addWaterEdges(group, cell, neighborHeights);
+    const business = this.businesses.get(keyOf(cell.x, cell.z));
+    if (business) this.addBusinessFacade(group, cell, business);
   }
 
   private addFacade(group: THREE.Group, cell: Cell, dir: Direction, level: number, neighborCount: number) {
@@ -331,6 +359,10 @@ export class CityRenderer {
     const signIndex = Math.floor(hash(this.seed, cell.x, cell.z, 722 + dir) * SIGN_TEXT.length);
     const text = SIGN_TEXT[signIndex];
     const color = SIGN_COLORS[signIndex % SIGN_COLORS.length];
+    this.addVerticalSign(group, dir, lateral, px, pz, text, color);
+  }
+
+  private signMaterial(text: string, color: number) {
     const materialKey = `${text}-${color}`;
     let material = this.signMaterials.get(materialKey);
     if (!material) {
@@ -344,7 +376,7 @@ export class CityRenderer {
       context.lineWidth = 5;
       context.strokeRect(8, 8, 80, 176);
       context.fillStyle = '#fff1c7';
-      context.font = 'bold 66px serif';
+      context.font = `bold ${text.length > 1 ? 43 : 66}px serif`;
       context.textAlign = 'center';
       context.textBaseline = 'middle';
       context.fillText(text, 48, 98);
@@ -353,6 +385,11 @@ export class CityRenderer {
       material = new THREE.MeshStandardMaterial({ map: texture, side: THREE.DoubleSide, roughness: .78, emissive: color, emissiveIntensity: .08 });
       this.signMaterials.set(materialKey, material);
     }
+    return material;
+  }
+
+  private addVerticalSign(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, text: string, color: number) {
+    const material = this.signMaterial(text, color);
     const [dx, dz] = CARDINALS[dir];
     const sign = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.42, .86), material), false);
     sign.position.set(px + dx * .13 + lateral.x * .73, 1.31, pz + dz * .13 + lateral.z * .73);
@@ -361,6 +398,125 @@ export class CityRenderer {
     const bracket = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .22 : .03, .03, dir % 2 ? .03 : .22), this.metal), false);
     bracket.position.set(px + dx * .08 + lateral.x * .73, 1.79, pz + dz * .08 + lateral.z * .73);
     group.add(bracket);
+  }
+
+  private addBusinessFacade(group: THREE.Group, cell: Cell, business: BusinessSave) {
+    const dir = this.doorDirection(cell);
+    const [dx, dz] = CARDINALS[dir];
+    const lateral = new THREE.Vector3(dz, 0, -dx);
+    const [px, pz] = this.edgePosition(dir, CELL * .507);
+    const colors: Record<BusinessType, number> = {
+      bakery: 0xb84b3e,
+      cafe: 0x397c73,
+      workshop: 0xc18438,
+      fishmonger: 0x3d7185,
+      inn: 0x914858,
+    };
+    const symbols: Record<BusinessType, string> = {
+      bakery: 'パン',
+      cafe: '茶',
+      workshop: '工',
+      fishmonger: '魚',
+      inn: '宿',
+    };
+    const accent = this.cachedMaterial(this.colorMaterials, colors[business.type], .88);
+    accent.side = THREE.DoubleSide;
+
+    // A small noren curtain makes an ordinary residence visibly become a shop.
+    for (let i = 0; i < 3; i++) {
+      const curtain = new THREE.Mesh(new THREE.PlaneGeometry(.22, .34 + (i % 2) * .06), accent);
+      curtain.position.set(px + dx * .075 + lateral.x * (i - 1) * .23, 1.08, pz + dz * .075 + lateral.z * (i - 1) * .23);
+      curtain.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      group.add(curtain);
+    }
+    this.addVerticalSign(group, dir, lateral.clone().multiplyScalar(-1), px, pz, symbols[business.type], colors[business.type]);
+
+    if (business.type === 'bakery') this.addBakeryDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'cafe') this.addCafeDetails(group, dx, dz, lateral, accent);
+    if (business.type === 'workshop') this.addWorkshopDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'fishmonger') this.addFishmongerDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'inn') this.addInnDetails(group, dir, dx, dz, lateral, accent);
+  }
+
+  private orientedBox(width: number, height: number, depth: number, dir: Direction, material: THREE.Material) {
+    return new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? depth : width, height, dir % 2 ? width : depth), material);
+  }
+
+  private detailPosition(mesh: THREE.Object3D, dx: number, dz: number, lateral: THREE.Vector3, side: number, outward: number, y: number) {
+    mesh.position.set(dx * outward + lateral.x * side, y, dz * outward + lateral.z * side);
+  }
+
+  private addBakeryDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    const shelf = this.orientedBox(.72, .38, .24, dir, this.wood);
+    this.detailPosition(shelf, dx, dz, lateral, .72, 1.38, .32);
+    group.add(shelf);
+    for (let i = 0; i < 3; i++) {
+      const bread = new THREE.Mesh(new THREE.CapsuleGeometry(.055, .13, 2, 6), this.cream);
+      this.detailPosition(bread, dx, dz, lateral, .5 + i * .2, 1.43, .57);
+      bread.rotation.z = Math.PI / 2;
+      bread.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      group.add(bread);
+    }
+    const basket = new THREE.Mesh(new THREE.CylinderGeometry(.16, .13, .18, 8), accent);
+    this.detailPosition(basket, dx, dz, lateral, -.68, 1.39, .2);
+    group.add(basket);
+  }
+
+  private addCafeDetails(group: THREE.Group, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (const side of [-.72, .72]) {
+      const table = new THREE.Mesh(new THREE.CylinderGeometry(.22, .25, .08, 10), accent);
+      this.detailPosition(table, dx, dz, lateral, side, 1.48, .38);
+      group.add(table);
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(.035, .05, .34, 7), this.metal);
+      this.detailPosition(stem, dx, dz, lateral, side, 1.48, .19);
+      group.add(stem);
+      const cup = new THREE.Mesh(new THREE.CylinderGeometry(.045, .04, .08, 8), this.cream);
+      this.detailPosition(cup, dx, dz, lateral, side, 1.48, .47);
+      group.add(cup);
+    }
+  }
+
+  private addWorkshopDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (let i = 0; i < 2; i++) {
+      const crate = this.orientedBox(.34 + i * .08, .32, .31, dir, i ? accent : this.wood);
+      this.detailPosition(crate, dx, dz, lateral, .62, 1.38, .18 + i * .3);
+      group.add(crate);
+    }
+    const wheel = new THREE.Mesh(new THREE.TorusGeometry(.21, .045, 6, 12), this.metal);
+    this.detailPosition(wheel, dx, dz, lateral, -.66, 1.3, .62);
+    wheel.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+    group.add(wheel);
+  }
+
+  private addFishmongerDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    const counter = this.orientedBox(.92, .34, .3, dir, accent);
+    this.detailPosition(counter, dx, dz, lateral, .56, 1.4, .25);
+    group.add(counter);
+    for (let i = 0; i < 2; i++) {
+      const fish = new THREE.Mesh(new THREE.SphereGeometry(.11, 8, 6), this.metal);
+      fish.scale.set(1.7, .55, .55);
+      this.detailPosition(fish, dx, dz, lateral, .35 + i * .35, 1.43, .48);
+      fish.rotation.y = dir % 2 ? 0 : Math.PI / 2;
+      group.add(fish);
+    }
+    const tub = new THREE.Mesh(new THREE.CylinderGeometry(.18, .2, .22, 9), this.stone);
+    this.detailPosition(tub, dx, dz, lateral, -.7, 1.38, .18);
+    group.add(tub);
+  }
+
+  private addInnDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (const side of [-.58, .58]) {
+      const lantern = new THREE.Mesh(new THREE.SphereGeometry(.12, 10, 8), this.warmLight);
+      lantern.scale.y = 1.35;
+      this.detailPosition(lantern, dx, dz, lateral, side, 1.34, 1.16);
+      group.add(lantern);
+      const tassel = new THREE.Mesh(new THREE.CylinderGeometry(.018, .025, .18, 6), accent);
+      this.detailPosition(tassel, dx, dz, lateral, side, 1.34, .98);
+      group.add(tassel);
+    }
+    const bench = this.orientedBox(.82, .13, .26, dir, this.wood);
+    this.detailPosition(bench, dx, dz, lateral, .65, 1.4, .25);
+    group.add(bench);
   }
 
   private addAirConditioner(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, y: number) {

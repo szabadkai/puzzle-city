@@ -6,6 +6,8 @@ Click the water to raise a foundation, click existing structures to build upward
 
 Every accessible home attracts a named resident. Citizens follow the town's quays and courtyards using A* routes, keep daily routines, form friendships, and can be clicked to reveal their small lives. A full day passes in about eight minutes, with pause, normal, and fast simulation controls.
 
+As the population grows, residents may quietly turn their ground floor into a bakery, café, workshop, fishmonger, or inn. Storefronts emerge from resident traits and occupations; their opening hours then shape where neighbors walk and gather.
+
 ## Controls
 
 - Left click: build

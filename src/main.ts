@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { CityRenderer } from './city';
 import { CitizenSystem } from './citizens';
+import { BusinessSystem, type BusinessUpdate } from './businesses';
 import type { SavedTown } from './types';
 import './style.css';
 
@@ -157,6 +158,10 @@ scene.add(city.root);
 if (saved) city.load(saved.cells);
 const citizens = new CitizenSystem(seed, city.cells, saved?.citizens ?? []);
 scene.add(citizens.root);
+const businesses = new BusinessSystem(seed, saved?.businesses ?? []);
+businesses.maintain(citizens.residents(), city.cells);
+city.setBusinesses(businesses.all());
+citizens.setBusinesses(businesses.all());
 
 const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xffd894, transparent: true, opacity: .56, depthWrite: false });
 const hover = new THREE.Mesh(new RoundedBoxGeometry(CityRenderer.cellSize() * .9, .16, CityRenderer.cellSize() * .9, 4, .12), hoverMaterial);
@@ -264,6 +269,9 @@ function build(x: number, z: number) {
   }
   const after = city.topologyLabel(x, z);
   citizens.rebuild(city.cells);
+  applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), false);
+  performanceWarmup = 0;
+  performanceCooldown = 0;
   renderer.shadowMap.needsUpdate = true;
   popSound();
   persistSoon();
@@ -288,6 +296,9 @@ function build(x: number, z: number) {
 function demolish(x: number, z: number) {
   if (!city.remove(x, z)) return;
   citizens.rebuild(city.cells);
+  applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), true);
+  performanceWarmup = 0;
+  performanceCooldown = 0;
   renderer.shadowMap.needsUpdate = true;
   hideCitizenCard();
   softTone(190, .07);
@@ -301,12 +312,13 @@ function persistSoon() {
 
 function saveTown() {
   const data: SavedTown = {
-    version: 2,
+    version: 3,
     seed,
     cells: city.serialize(),
     timeOfDay,
     day,
     citizens: citizens.serialize(),
+    businesses: businesses.serialize(),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
@@ -314,7 +326,7 @@ function saveTown() {
 function loadTown(): SavedTown | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedTown | null;
-    return parsed?.version === 1 || parsed?.version === 2 ? parsed : null;
+    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 ? parsed : null;
   } catch {
     return null;
   }
@@ -330,6 +342,36 @@ function showToast(message: string) {
 
 function setNote(message: string) {
   document.querySelector<HTMLSpanElement>('#note span')!.textContent = message;
+}
+
+function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
+  if (!update.changed) return;
+  const current = businesses.all();
+  city.setBusinesses(current);
+  citizens.setBusinesses(current);
+  renderer.shadowMap.needsUpdate = true;
+  if (announce && update.opened[0]) {
+    const business = update.opened[0];
+    const owner = citizens.card(business.ownerId);
+    showToast(`${owner?.name ?? 'A neighbor'} has opened ${business.name}.`);
+    const notes = {
+      bakery: 'Before sunrise, the new baker leaves a little tray of warm buns beneath the awning.',
+      cafe: 'A few cups have appeared outside. People now linger here longer than they mean to.',
+      workshop: 'The tap of small tools carries across the water through the afternoon.',
+      fishmonger: 'The morning catch no longer travels far. Neighbors gather while the scales still shine.',
+      inn: 'A lantern stays lit for the last ferry. There is always one more story inside.',
+    };
+    setNote(notes[business.type]);
+    const [x, z] = business.cellKey.split(',').map(Number);
+    const focus = city.worldPosition(x, z).setY(1);
+    controls.target.lerp(focus, .16);
+    softTone(470, .18);
+    softTone(650, .22, .1);
+  } else if (announce && update.closed[0]) {
+    showToast(`${update.closed[0].name} has quietly closed its shutters.`);
+    setNote(`The sign at ${update.closed[0].name} has come down. Perhaps another door will open elsewhere.`);
+  }
+  persistSoon();
 }
 
 function getAudio() {
@@ -484,6 +526,7 @@ let frameTimeEma = 16.7;
 let performanceWarmup = 0;
 let performanceCooldown = 0;
 let performanceUpdate = 0;
+let businessCheckElapsed = 0;
 let nightMode = false;
 let shadowsActive = true;
 
@@ -509,6 +552,7 @@ function animate() {
   performanceWarmup += rawDelta;
   performanceCooldown += rawDelta;
   performanceUpdate += rawDelta;
+  businessCheckElapsed += delta;
   const deltaHours = delta * simulationSpeed * .05;
   timeOfDay += deltaHours;
   if (timeOfDay >= 24) {
@@ -542,6 +586,11 @@ function animate() {
   city.update(time);
   city.setDaylight(daylight);
   citizens.update(delta * simulationSpeed, timeOfDay, absoluteHours, time);
+  if (businessCheckElapsed > .5) {
+    const businessUpdate = businesses.update(citizens.residents(), city.cells, absoluteHours);
+    applyBusinessUpdate(businessUpdate, true);
+    businessCheckElapsed = 0;
+  }
   ambience.update(time, daylight);
   clockUpdate += delta;
   autosaveElapsed += delta;
@@ -561,14 +610,14 @@ function animate() {
     shadowsActive = false;
     renderer.shadowMap.enabled = false;
     performanceCooldown = 0;
-  } else if (performanceWarmup > 20 && performanceCooldown > 15 && frameTimeEma < 14.5 && renderPixelRatio < maximumPixelRatio) {
+  } else if (performanceWarmup > 20 && performanceCooldown > 15 && frameTimeEma < 17.5 && renderPixelRatio < maximumPixelRatio) {
     renderPixelRatio = Math.min(maximumPixelRatio, renderPixelRatio + .1);
     renderer.setPixelRatio(renderPixelRatio);
     performanceCooldown = 0;
   }
   if (performanceUpdate > .75) {
     const info = renderer.info.render;
-    document.querySelector('#perf-panel')!.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'}`;
+    document.querySelector('#perf-panel')!.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'}`;
     performanceUpdate = 0;
   }
   controls.update();

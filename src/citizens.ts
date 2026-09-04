@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { CARDINALS, type Cell, type CitizenSave, keyOf } from './types';
+import { businessLabel, businessOccupation, isBusinessOpen } from './businesses';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenSave, keyOf } from './types';
 import { hash, pick } from './random';
 
 const CELL = 2.45;
@@ -201,6 +202,7 @@ export class CitizenSystem {
   private nextCitizen = 0;
   private meetingTime = new Map<string, number>();
   private relationshipAccumulator = 0;
+  private businesses: BusinessSave[] = [];
   private readonly walkDirection = new THREE.Vector3();
   private readonly skinMaterial = new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 });
   private readonly darkMaterial = new THREE.MeshStandardMaterial({ color: 0x3f3432, roughness: 1 });
@@ -233,6 +235,14 @@ export class CitizenSystem {
       citizen.targetKey = null;
     }
     this.reconcileHomes();
+  }
+
+  setBusinesses(businesses: BusinessSave[]) {
+    this.businesses = businesses.map((business) => ({ ...business }));
+    for (const business of businesses) {
+      const owner = this.citizens.find((citizen) => citizen.id === business.ownerId);
+      if (owner) owner.occupation = businessOccupation(business.type);
+    }
   }
 
   private validHomes() {
@@ -357,23 +367,47 @@ export class CitizenSystem {
     const home = this.graph.entrance(citizen.homeKey);
     let target = home;
     const choice = hash(this.seed, Math.floor(absoluteHours * 4), this.citizens.indexOf(citizen), 1001);
+    const businessVisit = this.chooseBusinessVisit(citizen, hour, choice);
     if (hour < 6 || hour >= 22) {
       citizen.activity = 'sleeping at home';
+    } else if (businessVisit?.owned) {
+      citizen.activity = this.ownerActivity(businessVisit.business.type);
+      target = businessVisit.target;
     } else if (hour < 9) {
-      citizen.activity = citizen.occupation === 'Fisher' ? 'checking the morning tide' : 'taking an early walk';
-      target = this.graph.randomNode(choice, (node) => Math.hypot(node.position.x, node.position.z) > 2);
+      if (businessVisit) {
+        citizen.activity = this.visitorActivity(businessVisit.business.type);
+        target = businessVisit.target;
+      } else {
+        citizen.activity = citizen.occupation === 'Fisher' ? 'checking the morning tide' : 'taking an early walk';
+        target = this.graph.randomNode(choice, (node) => Math.hypot(node.position.x, node.position.z) > 2);
+      }
     } else if (hour < 12) {
-      citizen.activity = `working as a ${citizen.occupation.toLowerCase()}`;
-      target = this.graph.randomNode(choice);
+      if (businessVisit && choice > .35) {
+        citizen.activity = this.visitorActivity(businessVisit.business.type);
+        target = businessVisit.target;
+      } else {
+        citizen.activity = `working as a ${citizen.occupation.toLowerCase()}`;
+        target = this.graph.randomNode(choice);
+      }
     } else if (hour < 14) {
-      citizen.activity = 'looking for lunch';
-      target = this.graph.randomNode(choice);
+      citizen.activity = businessVisit ? this.visitorActivity(businessVisit.business.type) : 'looking for lunch';
+      target = businessVisit?.target ?? this.graph.randomNode(choice);
     } else if (hour < 18) {
-      citizen.activity = citizen.traits.includes('quiet') ? 'watching the harbor' : 'visiting a neighbor';
-      target = this.graph.randomNode(choice);
+      if (businessVisit && choice > .55) {
+        citizen.activity = this.visitorActivity(businessVisit.business.type);
+        target = businessVisit.target;
+      } else {
+        citizen.activity = citizen.traits.includes('quiet') ? 'watching the harbor' : 'visiting a neighbor';
+        target = this.graph.randomNode(choice);
+      }
     } else if (hour < 21) {
-      citizen.activity = citizen.traits.includes('sociable') ? 'taking an evening stroll' : 'heading home slowly';
-      target = this.graph.randomNode(choice);
+      if (businessVisit) {
+        citizen.activity = this.visitorActivity(businessVisit.business.type);
+        target = businessVisit.target;
+      } else {
+        citizen.activity = citizen.traits.includes('sociable') ? 'taking an evening stroll' : 'heading home slowly';
+        target = this.graph.randomNode(choice);
+      }
     } else {
       citizen.activity = 'walking home beneath the lanterns';
     }
@@ -383,6 +417,44 @@ export class CitizenSystem {
     citizen.targetKey = target.key;
     citizen.path = this.graph.path(from.key, target.key);
     citizen.nextDecisionAt = absoluteHours + .35 + choice * .65;
+  }
+
+  private chooseBusinessVisit(citizen: Citizen, hour: number, choice: number) {
+    const open = this.businesses.filter((business) => isBusinessOpen(business.type, hour));
+    const owned = open.find((business) => business.ownerId === citizen.id);
+    const preferredTypes: BusinessType[] = hour < 9
+      ? ['bakery', 'fishmonger']
+      : hour < 15
+        ? ['cafe', 'bakery', 'fishmonger', 'workshop']
+        : hour < 19
+          ? ['workshop', 'cafe', 'inn']
+          : ['cafe', 'inn'];
+    const options = owned ? [owned] : open.filter((business) => preferredTypes.includes(business.type));
+    const business = options[Math.floor(choice * options.length) % options.length];
+    if (!business) return null;
+    const target = this.graph.entrance(business.cellKey);
+    if (!target) return null;
+    return { business, target, owned: business.ownerId === citizen.id };
+  }
+
+  private ownerActivity(type: BusinessType) {
+    return {
+      bakery: 'setting warm bread in the window',
+      cafe: 'brewing tea for the morning tables',
+      workshop: 'working with the door propped open',
+      fishmonger: 'arranging the morning catch',
+      inn: 'welcoming travelers from the quay',
+    }[type];
+  }
+
+  private visitorActivity(type: BusinessType) {
+    return {
+      bakery: 'buying a warm bun',
+      cafe: 'lingering over a cup of tea',
+      workshop: 'watching the artisan work',
+      fishmonger: 'choosing fish for supper',
+      inn: 'listening to stories at the inn',
+    }[type] ?? `visiting the ${businessLabel(type)}`;
   }
 
   private walk(citizen: Citizen, deltaSeconds: number, realTime: number) {
@@ -461,6 +533,8 @@ export class CitizenSystem {
   }
 
   population() { return this.citizens.length; }
+
+  residents() { return this.serialize(); }
 
   serialize(): CitizenSave[] {
     return this.citizens.map((citizen) => ({

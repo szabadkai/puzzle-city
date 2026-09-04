@@ -32,6 +32,8 @@ Large form is entirely topology-driven. Decorative variation uses a coordinate h
 
 `main.ts` owns the render loop, input, camera, water, ambience, audio hooks, and persistence. `CityRenderer` owns the sparse world model and derives Three.js scene groups from it. Future citizens should live in a separate fixed-step simulation and consume a navigation graph generated from foundations, entrances, courtyards, bridges, and stairs.
 
+Static meshes are consolidated by material within each cell, while animated details remain separate. Materials and citizen geometry are shared; tiny details do not enter the shadow pass; shadow maps update periodically rather than once per frame. A frame-time governor gradually lowers pixel ratio on slower devices and, only as a final fallback, disables dynamic shadows. Press `P` to inspect FPS, draw calls, triangles, and current render scale.
+
 The current save is versioned and contains the grid plus RNG seed. Writes are debounced into `localStorage` after every edit.
 
 ## Discovery/event system

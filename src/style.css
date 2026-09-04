@@ -25,7 +25,6 @@ canvas.dragging { cursor: grabbing; }
   inset: 0;
   pointer-events: none;
   opacity: .035;
-  mix-blend-mode: soft-light;
   background-image: radial-gradient(circle at 20% 30%, #fff 0 1px, transparent 1.5px), radial-gradient(circle at 70% 60%, #3b2d22 0 .7px, transparent 1.2px);
   background-size: 7px 9px, 11px 13px;
 }
@@ -166,6 +165,22 @@ button:active { transform: translateY(1px); }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+.perf-panel {
+  position: absolute;
+  left: 28px;
+  top: 128px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: rgba(20,31,31,.76);
+  color: #dbe9d0;
+  font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .1px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .15s;
+}
+.perf-panel.show { opacity: 1; visibility: visible; }
+
 .recipe-note {
   position: absolute;
   right: 24px;
@@ -187,6 +202,7 @@ button:active { transform: translateY(1px); }
   .brand { top: 18px; left: 18px; }
   .brand h1 { font-size: 23px; }
   .time-widget { top: 72px; left: 18px; }
+  .perf-panel { top: 112px; left: 18px; }
   .citizen-card { left: 16px; bottom: 62px; width: 220px; }
   .recipe-note { display: none; }
   .hint { bottom: 16px; gap: 10px; font-size: 10px; }

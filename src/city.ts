@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARDINALS, type Cell, keyOf } from './types';
 import { hash, pick } from './random';
 
@@ -19,8 +20,8 @@ function dispose(root: THREE.Object3D) {
   });
 }
 
-function shadow(mesh: THREE.Mesh) {
-  mesh.castShadow = true;
+function shadow(mesh: THREE.Mesh, casts = true) {
+  mesh.castShadow = casts;
   mesh.receiveShadow = true;
   return mesh;
 }
@@ -30,6 +31,9 @@ export class CityRenderer {
   readonly cells = new Map<string, Cell>();
   private readonly pieces = new Map<string, THREE.Group>();
   private readonly signMaterials = new Map<string, THREE.MeshStandardMaterial>();
+  private readonly wallMaterials = new Map<number, THREE.MeshStandardMaterial>();
+  private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
+  private readonly colorMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly seed: number;
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
   private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, roughness: 1 });
@@ -111,13 +115,12 @@ export class CityRenderer {
       } else {
         group.scale.y = 1;
       }
-      const tree = group.getObjectByName('swaying-tree');
+      const tree = group.userData.tree as THREE.Object3D | undefined;
       if (tree) tree.rotation.z = Math.sin(time * 1.35 + group.position.x) * .025;
-      const flag = group.getObjectByName('flag');
+      const flag = group.userData.flag as THREE.Object3D | undefined;
       if (flag) flag.rotation.y = Math.sin(time * 3 + group.position.z) * .15;
-      group.traverse((object) => {
-        if (object.name.startsWith('laundry-')) object.rotation.z = Math.sin(time * 2.2 + object.id) * .045;
-      });
+      const laundry = group.userData.laundry as THREE.Object3D[] | undefined;
+      if (laundry) for (const cloth of laundry) cloth.rotation.z = Math.sin(time * 2.2 + cloth.id) * .045;
     }
   }
 
@@ -155,7 +158,7 @@ export class CityRenderer {
   }
 
   private rebuildAround(x: number, z: number) {
-    for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
       const px = x + dx;
       const pz = z + dz;
       const key = keyOf(px, pz);
@@ -175,8 +178,41 @@ export class CityRenderer {
     const cell = this.get(x, z);
     if (cell) this.buildCell(group, cell);
     else this.buildFeature(group, x, z);
+    this.consolidateStaticMeshes(group);
     this.root.add(group);
     this.pieces.set(keyOf(x, z), group);
+  }
+
+  private consolidateStaticMeshes(group: THREE.Group) {
+    const buckets = new Map<string, THREE.Mesh[]>();
+    for (const child of [...group.children]) {
+      if (!(child instanceof THREE.Mesh) || child.name === 'flag' || child.name.startsWith('laundry-')) continue;
+      if (Array.isArray(child.material)) continue;
+      const key = `${child.material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
+      const bucket = buckets.get(key) ?? [];
+      bucket.push(child);
+      buckets.set(key, bucket);
+    }
+    for (const meshes of buckets.values()) {
+      if (meshes.length < 2) continue;
+      const geometries = meshes.map((mesh) => {
+        mesh.updateMatrix();
+        const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+        geometry.applyMatrix4(mesh.matrix);
+        return geometry;
+      });
+      const mergedGeometry = mergeGeometries(geometries, false);
+      for (const geometry of geometries) geometry.dispose();
+      if (!mergedGeometry) continue;
+      const merged = new THREE.Mesh(mergedGeometry, meshes[0].material);
+      merged.castShadow = meshes[0].castShadow;
+      merged.receiveShadow = meshes[0].receiveShadow;
+      for (const mesh of meshes) {
+        group.remove(mesh);
+        mesh.geometry.dispose();
+      }
+      group.add(merged);
+    }
   }
 
   private neighborHeight(cell: Cell, dir: Direction) {
@@ -188,8 +224,9 @@ export class CityRenderer {
     const neighborHeights = CARDINALS.map((_, i) => this.neighborHeight(cell, i as Direction));
     const count = neighborHeights.filter((height) => height > 0).length;
     const wallColor = WALL_COLORS[cell.color % WALL_COLORS.length];
-    const walls = new THREE.MeshStandardMaterial({ color: wallColor, roughness: .92 });
-    const roof = new THREE.MeshStandardMaterial({ color: pick(ROOF_COLORS, hash(this.seed, cell.x, cell.z, 13)), roughness: .82 });
+    const walls = this.cachedMaterial(this.wallMaterials, wallColor, .92);
+    const roofColor = pick(ROOF_COLORS, hash(this.seed, cell.x, cell.z, 13));
+    const roof = this.cachedMaterial(this.roofMaterials, roofColor, .82);
 
     const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .97, .34, CELL * .97, 3, .12), this.stone));
     foundation.position.y = BASE_Y;
@@ -249,7 +286,7 @@ export class CityRenderer {
     const lateral = new THREE.Vector3(CARDINALS[dir][1], 0, -CARDINALS[dir][0]);
     const [px, pz] = this.edgePosition(dir, CELL * .507);
     if (isDoor) {
-      const door = shadow(new THREE.Mesh(new RoundedBoxGeometry(.46, .82, .08, 3, .07), this.dark));
+      const door = shadow(new THREE.Mesh(new RoundedBoxGeometry(.46, .82, .08, 3, .07), this.dark), false);
       door.position.set(px, .34 + .43, pz);
       door.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       group.add(door);
@@ -262,11 +299,11 @@ export class CityRenderer {
     for (let i = 0; i < windowCount; i++) {
       if (isDoor && i === 0) continue;
       const offset = windowCount === 1 ? 0 : (i - .5) * .72;
-      const windowMesh = shadow(new THREE.Mesh(new RoundedBoxGeometry(.39, .48, .055, 2, .035), this.window));
+      const windowMesh = shadow(new THREE.Mesh(new RoundedBoxGeometry(.39, .48, .055, 2, .035), this.window), false);
       windowMesh.position.set(px + lateral.x * offset, y, pz + lateral.z * offset);
       windowMesh.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       group.add(windowMesh);
-      const sill = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .09 : .5, .06, dir % 2 ? .5 : .09), this.cream));
+      const sill = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .09 : .5, .06, dir % 2 ? .5 : .09), this.cream), false);
       sill.position.set(px + lateral.x * offset, y - .29, pz + lateral.z * offset);
       group.add(sill);
     }
@@ -279,9 +316,10 @@ export class CityRenderer {
   private addAwning(group: THREE.Group, cell: Cell, dir: Direction, lateral: THREE.Vector3, px: number, pz: number) {
     const [dx, dz] = CARDINALS[dir];
     const colors = [0xb5463e, 0x3f7770, 0xd08b3e];
-    const awningMaterial = new THREE.MeshStandardMaterial({ color: pick(colors, hash(this.seed, cell.x, cell.z, 690 + dir)), roughness: .9 });
+    const awningColor = pick(colors, hash(this.seed, cell.x, cell.z, 690 + dir));
+    const awningMaterial = this.cachedMaterial(this.colorMaterials, awningColor, .9);
     for (let i = 0; i < 5; i++) {
-      const strip = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .42 : .24, .08, dir % 2 ? .24 : .42), i % 2 ? this.cream : awningMaterial));
+      const strip = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .42 : .24, .08, dir % 2 ? .24 : .42), i % 2 ? this.cream : awningMaterial), false);
       const offset = (i - 2) * .21;
       strip.position.set(px + dx * .21 + lateral.x * offset, 1.25, pz + dz * .21 + lateral.z * offset);
       strip.rotation.set(lateral.z * -.13, 0, lateral.x * .13);
@@ -316,18 +354,18 @@ export class CityRenderer {
       this.signMaterials.set(materialKey, material);
     }
     const [dx, dz] = CARDINALS[dir];
-    const sign = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.42, .86), material));
+    const sign = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.42, .86), material), false);
     sign.position.set(px + dx * .13 + lateral.x * .73, 1.31, pz + dz * .13 + lateral.z * .73);
     sign.rotation.y = dir % 2 ? Math.PI / 2 : 0;
     group.add(sign);
-    const bracket = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .22 : .03, .03, dir % 2 ? .03 : .22), this.metal));
+    const bracket = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .22 : .03, .03, dir % 2 ? .03 : .22), this.metal), false);
     bracket.position.set(px + dx * .08 + lateral.x * .73, 1.79, pz + dz * .08 + lateral.z * .73);
     group.add(bracket);
   }
 
   private addAirConditioner(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, y: number) {
     const [dx, dz] = CARDINALS[dir];
-    const unit = shadow(new THREE.Mesh(new RoundedBoxGeometry(dir % 2 ? .18 : .5, .32, dir % 2 ? .5 : .18, 2, .03), this.cream));
+    const unit = shadow(new THREE.Mesh(new RoundedBoxGeometry(dir % 2 ? .18 : .5, .32, dir % 2 ? .5 : .18, 2, .03), this.cream), false);
     unit.position.set(px + dx * .12 + lateral.x * .52, y, pz + dz * .12 + lateral.z * .52);
     group.add(unit);
     const fan = new THREE.Mesh(new THREE.TorusGeometry(.09, .018, 5, 10), this.metal);
@@ -338,7 +376,7 @@ export class CityRenderer {
 
   private addPipe(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number) {
     const [dx, dz] = CARDINALS[dir];
-    const pipe = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.027, .027, 1.18, 6), this.metal));
+    const pipe = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.027, .027, 1.18, 6), this.metal), false);
     pipe.position.set(px + dx * .08 + lateral.x * .94, .92, pz + dz * .08 + lateral.z * .94);
     group.add(pipe);
   }
@@ -356,6 +394,15 @@ export class CityRenderer {
     return [dx * distance, dz * distance];
   }
 
+  private cachedMaterial(cache: Map<number, THREE.MeshStandardMaterial>, color: number, roughness: number) {
+    let material = cache.get(color);
+    if (!material) {
+      material = new THREE.MeshStandardMaterial({ color, roughness });
+      cache.set(color, material);
+    }
+    return material;
+  }
+
   private addWaterEdges(group: THREE.Group, cell: Cell, heights: number[]) {
     heights.forEach((height, index) => {
       if (height > 0) return;
@@ -370,7 +417,7 @@ export class CityRenderer {
         dock.position.set(dx * (CELL * .78), -.03, dz * (CELL * .78));
         group.add(dock);
         for (const side of [-1, 1]) {
-          const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.055, .07, .55, 7), this.wood));
+          const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.055, .07, .55, 7), this.wood), false);
           post.position.set(dock.position.x + (dir % 2 === 0 ? side * .28 : 0), .06, dock.position.z + (dir % 2 ? side * .28 : 0));
           group.add(post);
         }
@@ -388,22 +435,25 @@ export class CityRenderer {
     const deck = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .5 : 1.3, .1, dir % 2 ? 1.3 : .5), this.wood));
     deck.position.set(dx * 1.24, topY - .7, dz * 1.24);
     group.add(deck);
-    const rail = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .06 : 1.26, .28, dir % 2 ? 1.26 : .06), this.metal));
+    const rail = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .06 : 1.26, .28, dir % 2 ? 1.26 : .06), this.metal), false);
     rail.position.set(dx * 1.47, topY - .52, dz * 1.47);
     group.add(rail);
     const lateral = new THREE.Vector3(dz, 0, -dx);
-    const line = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.012, .012, 1.04, 5), this.dark));
+    const line = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.012, .012, 1.04, 5), this.dark), false);
     line.position.set(dx * 1.53, topY - .32, dz * 1.53);
     line.rotation.z = Math.PI / 2;
     line.rotation.y = dir % 2 ? Math.PI / 2 : 0;
     group.add(line);
     const laundryColors = [0xe9cf9d, 0xb7514a, 0x547f86];
     for (let i = 0; i < 3; i++) {
-      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(.27, .31 + i * .03), new THREE.MeshStandardMaterial({ color: laundryColors[i], side: THREE.DoubleSide, roughness: 1 }));
+      const clothMaterial = this.cachedMaterial(this.colorMaterials, laundryColors[i], 1);
+      clothMaterial.side = THREE.DoubleSide;
+      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(.27, .31 + i * .03), clothMaterial);
       cloth.position.set(dx * 1.55 + lateral.x * (i - 1) * .34, topY - .5, dz * 1.55 + lateral.z * (i - 1) * .34);
       cloth.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       cloth.name = `laundry-${i}`;
       group.add(cloth);
+      (group.userData.laundry ??= []).push(cloth);
     }
   }
 
@@ -452,6 +502,7 @@ export class CityRenderer {
     flag.name = 'flag';
     flag.position.set(.28, y + .72, 0);
     group.add(flag);
+    group.userData.flag = flag;
   }
 
   private addRoofGarden(group: THREE.Group, y: number, cell: Cell) {
@@ -501,6 +552,7 @@ export class CityRenderer {
       canopy.add(crown);
     }
     group.add(trunk, canopy);
+    group.userData.tree = canopy;
     for (const side of [-1, 1]) {
       const bench = shadow(new THREE.Mesh(new THREE.BoxGeometry(.68, .12, .22), this.wood));
       bench.position.set(side * .8, .34, .18);

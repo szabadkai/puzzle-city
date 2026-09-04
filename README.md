@@ -24,3 +24,5 @@ npm run dev
 Create a production build with `npm run build`.
 
 The `main` branch is automatically deployed to GitHub Pages by GitHub Actions.
+
+Press `P` to toggle the lightweight performance overlay while testing a larger town.

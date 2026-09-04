@@ -19,6 +19,8 @@ type NavNode = {
 
 type Citizen = CitizenSave & {
   model: THREE.Group;
+  leftLeg: THREE.Object3D;
+  rightLeg: THREE.Object3D;
   path: THREE.Vector3[];
   targetKey: string | null;
   nextDecisionAt: number;
@@ -198,6 +200,17 @@ export class CitizenSystem {
   private cells: Map<string, Cell>;
   private nextCitizen = 0;
   private meetingTime = new Map<string, number>();
+  private relationshipAccumulator = 0;
+  private readonly walkDirection = new THREE.Vector3();
+  private readonly skinMaterial = new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 });
+  private readonly darkMaterial = new THREE.MeshStandardMaterial({ color: 0x3f3432, roughness: 1 });
+  private readonly hatMaterial = new THREE.MeshStandardMaterial({ color: 0xc79d58, roughness: 1 });
+  private readonly clothesMaterials = CLOTHES.map((color) => new THREE.MeshStandardMaterial({ color, roughness: .95 }));
+  private readonly bodyGeometry = new THREE.CapsuleGeometry(.105, .19, 3, 7);
+  private readonly headGeometry = new THREE.SphereGeometry(.105, 9, 7);
+  private readonly hairGeometry = new THREE.SphereGeometry(.109, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
+  private readonly legGeometry = new THREE.CylinderGeometry(.025, .03, .2, 6);
+  private readonly hatGeometry = new THREE.ConeGeometry(.18, .08, 12);
 
   constructor(seed: number, cells: Map<string, Cell>, saved: CitizenSave[]) {
     this.seed = seed;
@@ -279,6 +292,8 @@ export class CitizenSystem {
       traits: [...data.traits],
       relationships: [...data.relationships],
       model,
+      leftLeg: model.userData.leftLeg as THREE.Object3D,
+      rightLeg: model.userData.rightLeg as THREE.Object3D,
       path: [],
       targetKey: null,
       nextDecisionAt: 0,
@@ -289,42 +304,35 @@ export class CitizenSystem {
 
   private removeCitizen(citizen: Citizen) {
     this.root.remove(citizen.model);
-    citizen.model.traverse((object) => {
-      if (object instanceof THREE.Mesh) object.geometry.dispose();
-    });
     this.citizens.splice(this.citizens.indexOf(citizen), 1);
   }
 
   private createModel(data: CitizenSave) {
     const group = new THREE.Group();
     group.userData.citizenId = data.id;
-    const skin = new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 });
-    const clothes = new THREE.MeshStandardMaterial({ color: CLOTHES[data.color % CLOTHES.length], roughness: .95 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x3f3432, roughness: 1 });
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(.105, .19, 3, 7), clothes);
+    const clothes = this.clothesMaterials[data.color % this.clothesMaterials.length];
+    const body = new THREE.Mesh(this.bodyGeometry, clothes);
     body.position.y = .34;
-    body.castShadow = true;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(.105, 9, 7), skin);
+    const head = new THREE.Mesh(this.headGeometry, this.skinMaterial);
     head.position.y = .62;
-    head.castShadow = true;
-    const hair = new THREE.Mesh(new THREE.SphereGeometry(.109, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48), dark);
+    const hair = new THREE.Mesh(this.hairGeometry, this.darkMaterial);
     hair.position.y = .64;
-    hair.castShadow = true;
-    const legGeometry = new THREE.CylinderGeometry(.025, .03, .2, 6);
+    const legs: THREE.Mesh[] = [];
     for (const side of [-1, 1]) {
-      const leg = new THREE.Mesh(legGeometry, dark);
+      const leg = new THREE.Mesh(this.legGeometry, this.darkMaterial);
       leg.position.set(side * .055, .13, 0);
       leg.name = side < 0 ? 'leg-left' : 'leg-right';
-      leg.castShadow = true;
+      legs.push(leg);
       group.add(leg);
     }
     if (data.occupation === 'Fisher' || data.occupation === 'Gardener') {
-      const hat = new THREE.Mesh(new THREE.ConeGeometry(.18, .08, 12), new THREE.MeshStandardMaterial({ color: 0xc79d58, roughness: 1 }));
+      const hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
       hat.position.y = .72;
-      hat.castShadow = true;
       group.add(hat);
     }
     group.add(body, head, hair);
+    group.userData.leftLeg = legs[0];
+    group.userData.rightLeg = legs[1];
     group.traverse((object) => { object.userData.citizenId = data.id; });
     return group;
   }
@@ -338,7 +346,11 @@ export class CitizenSystem {
       if (!citizen.path.length && absoluteHours >= citizen.nextDecisionAt) this.chooseRoutine(citizen, timeOfDay, absoluteHours);
       this.walk(citizen, deltaSeconds, realTime);
     }
-    this.updateRelationships(deltaSeconds);
+    this.relationshipAccumulator += deltaSeconds;
+    if (this.relationshipAccumulator >= 1) {
+      this.updateRelationships(this.relationshipAccumulator);
+      this.relationshipAccumulator = 0;
+    }
   }
 
   private chooseRoutine(citizen: Citizen, hour: number, absoluteHours: number) {
@@ -375,14 +387,14 @@ export class CitizenSystem {
 
   private walk(citizen: Citizen, deltaSeconds: number, realTime: number) {
     const target = citizen.path[0];
-    const left = citizen.model.getObjectByName('leg-left');
-    const right = citizen.model.getObjectByName('leg-right');
+    const left = citizen.leftLeg;
+    const right = citizen.rightLeg;
     if (!target) {
       citizen.model.position.y = WALK_Y + Math.sin(realTime * 1.4 + citizen.stepPhase) * .006;
       if (left && right) left.rotation.x = right.rotation.x = 0;
       return;
     }
-    const direction = target.clone().sub(citizen.model.position);
+    const direction = this.walkDirection.copy(target).sub(citizen.model.position);
     direction.y = 0;
     const distance = direction.length();
     const step = Math.min(distance, deltaSeconds * .58);

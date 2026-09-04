@@ -24,6 +24,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button id="reset" aria-label="Start a new town">New tide</button>
     </div>
     <div class="toast" id="toast"></div>
+    <div class="perf-panel" id="perf-panel">Performance</div>
     <aside class="citizen-card" id="citizen-card" aria-live="polite">
       <button class="card-close" id="card-close" aria-label="Close citizen card">×</button>
       <span class="card-kicker">Town resident</span>
@@ -60,9 +61,13 @@ camera.position.set(18, 19, 20);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const maximumPixelRatio = Math.min(devicePixelRatio, 1.5);
+let renderPixelRatio = maximumPixelRatio;
+renderer.setPixelRatio(renderPixelRatio);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false;
+renderer.shadowMap.needsUpdate = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.08;
@@ -87,7 +92,7 @@ scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffc984, 4.7);
 sun.position.set(-14, 23, 12);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.camera.left = -25;
 sun.shadow.camera.right = 25;
 sun.shadow.camera.top = 25;
@@ -259,6 +264,7 @@ function build(x: number, z: number) {
   }
   const after = city.topologyLabel(x, z);
   citizens.rebuild(city.cells);
+  renderer.shadowMap.needsUpdate = true;
   popSound();
   persistSoon();
   document.querySelector('#hint')?.classList.add('hidden');
@@ -282,6 +288,7 @@ function build(x: number, z: number) {
 function demolish(x: number, z: number) {
   if (!city.remove(x, z)) return;
   citizens.rebuild(city.cells);
+  renderer.shadowMap.needsUpdate = true;
   hideCitizenCard();
   softTone(190, .07);
   persistSoon();
@@ -370,6 +377,10 @@ document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) =>
     showToast(simulationSpeed === 0 ? 'The town holds its breath.' : simulationSpeed === 3 ? 'The tide of time quickens.' : 'The town settles into its rhythm.');
     persistSoon();
   });
+});
+
+window.addEventListener('keydown', (event) => {
+  if (event.key.toLowerCase() === 'p') document.querySelector('#perf-panel')!.classList.toggle('show');
 });
 
 const ambience = createAmbience();
@@ -468,6 +479,13 @@ const dawnSky = new THREE.Color(0xc47f72);
 const currentSky = new THREE.Color();
 let clockUpdate = 0;
 let autosaveElapsed = 0;
+let shadowElapsed = 0;
+let frameTimeEma = 16.7;
+let performanceWarmup = 0;
+let performanceCooldown = 0;
+let performanceUpdate = 0;
+let nightMode = false;
+let shadowsActive = true;
 
 function daylightAt(hour: number) {
   const solar = Math.sin((hour - 6) / 12 * Math.PI);
@@ -483,8 +501,14 @@ function updateTimeDisplay() {
 
 function animate() {
   requestAnimationFrame(animate);
-  const delta = Math.min(clock.getDelta(), .1);
+  const rawDelta = clock.getDelta();
+  if (document.hidden) return;
+  const delta = Math.min(rawDelta, .1);
   const time = clock.elapsedTime;
+  frameTimeEma += (rawDelta * 1000 - frameTimeEma) * .035;
+  performanceWarmup += rawDelta;
+  performanceCooldown += rawDelta;
+  performanceUpdate += rawDelta;
   const deltaHours = delta * simulationSpeed * .05;
   timeOfDay += deltaHours;
   if (timeOfDay >= 24) {
@@ -494,7 +518,11 @@ function animate() {
   }
   const absoluteHours = day * 24 + timeOfDay;
   const daylight = daylightAt(timeOfDay);
-  document.body.classList.toggle('night', daylight < .24);
+  const nextNightMode = daylight < .24;
+  if (nextNightMode !== nightMode) {
+    nightMode = nextNightMode;
+    document.body.classList.toggle('night', nightMode);
+  }
   const twilight = Math.max(0, 1 - Math.abs(timeOfDay - 18.6) / 2.4, 1 - Math.abs(timeOfDay - 5.7) / 2.1);
   currentSky.copy(nightSky).lerp(daySky, daylight).lerp(dawnSky, twilight * .28);
   scene.background = currentSky;
@@ -503,6 +531,11 @@ function animate() {
   sun.intensity = .12 + daylight * 4.58;
   const sunAngle = (timeOfDay - 6) / 24 * Math.PI * 2;
   sun.position.set(Math.cos(sunAngle) * 18, 5 + daylight * 20, Math.sin(sunAngle) * 16);
+  shadowElapsed += rawDelta;
+  if (shadowsActive && shadowElapsed > 1.4) {
+    renderer.shadowMap.needsUpdate = true;
+    shadowElapsed = 0;
+  }
   renderer.toneMappingExposure = .72 + daylight * .36;
   waterUniforms.uTime.value = time;
   waterUniforms.uDay.value = daylight;
@@ -520,6 +553,24 @@ function animate() {
     saveTown();
     autosaveElapsed = 0;
   }
+  if (performanceWarmup > 3 && performanceCooldown > 3 && frameTimeEma > 22 && renderPixelRatio > 1) {
+    renderPixelRatio = Math.max(1, renderPixelRatio - (frameTimeEma > 30 ? .3 : .2));
+    renderer.setPixelRatio(renderPixelRatio);
+    performanceCooldown = 0;
+  } else if (performanceWarmup > 8 && performanceCooldown > 4 && frameTimeEma > 26 && renderPixelRatio <= 1 && shadowsActive) {
+    shadowsActive = false;
+    renderer.shadowMap.enabled = false;
+    performanceCooldown = 0;
+  } else if (performanceWarmup > 20 && performanceCooldown > 15 && frameTimeEma < 14.5 && renderPixelRatio < maximumPixelRatio) {
+    renderPixelRatio = Math.min(maximumPixelRatio, renderPixelRatio + .1);
+    renderer.setPixelRatio(renderPixelRatio);
+    performanceCooldown = 0;
+  }
+  if (performanceUpdate > .75) {
+    const info = renderer.info.render;
+    document.querySelector('#perf-panel')!.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'}`;
+    performanceUpdate = 0;
+  }
   controls.update();
   renderer.render(scene, camera);
 }
@@ -530,5 +581,5 @@ window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(renderPixelRatio);
 });

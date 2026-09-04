@@ -34,18 +34,18 @@ Large form is entirely topology-driven. Decorative variation uses a coordinate h
 
 Static meshes are consolidated by material within each cell, while animated details remain separate. Materials and citizen geometry are shared; tiny details do not enter the shadow pass; shadow maps update periodically rather than once per frame. A frame-time governor gradually lowers pixel ratio on slower devices and, only as a final fallback, disables dynamic shadows. Press `P` to inspect FPS, draw calls, triangles, and current render scale.
 
-The current save is versioned and contains the grid plus RNG seed. Writes are debounced into `localStorage` after every edit.
+The current version-4 save contains the grid, RNG seed, simulation state, discovered event IDs, and journal entries. Versions 1–3 remain loadable, and writes are debounced into `localStorage` after every edit or discovery.
 
 ## Discovery/event system
 
-The intended event layer evaluates declarative conditions against a read-only world snapshot and commits effects through system APIs. Conditions may query topology, population, time, businesses, prior discoveries, and adjacency. Events are idempotent by ID, optionally repeatable, and record a short witnessed note in the journal. Effects can add details, change citizen behavior, transform a cell, or enqueue a presentation beat.
+The event layer evaluates declarative condition trees against a cloned, frozen world snapshot and commits effects through narrow city, citizen, and presentation APIs. Conditions query topology, population, time, businesses, relationships, and prior discoveries. Events explicitly declare whether they repeat; the current 15 are one-shot and idempotent by stable ID. Each committed event records a witnessed note in the illustrated harbor journal.
 
-The prototype already treats courtyard, arch, bridge, and tower morphs as the first topology discoveries. Their feedback is deliberately diegetic: a construction animation, a soft sound, a camera-independent caption, and a field note.
+Courtyard, arch, bridge, and tower morphs anchor the architectural discovery chain. Population, friendship, opening-hour, and business branches eventually converge on a quiet whole-town observation. Feedback remains diegetic: a brief glimmer in the world, a soft sound, a camera-independent caption, a resident reaction, and a field note.
 
 ## Planned milestones
 
 1. **Townscaper toy — implemented.** Direct placement/removal, constrained orbit/zoom, local topology rebuilding, houses, rows, corners, towers, quays, docks, courtyards, arches, bridges, ambient water, boat, birds, animation, and deterministic saves.
 2. **Living town — implemented.** Entrances, a topology-derived walk graph with A*, persistent named citizens, homes, routines, friendships, citizen inspection cards, simulation speed controls, and an eight-minute day/night cycle.
 3. **Businesses — implemented.** Trait- and occupation-driven bakery, café, workshop, fishmonger, and inn transformations, each with an owner, opening hours, visual storefront language, and citizen destinations. Businesses emerge one at a time as population grows, relocate if access is enclosed, and persist with the town.
-4. **GROW system.** A reusable condition/effect graph, 15 chained discoveries, and an illustrated observation journal.
+4. **GROW system — implemented.** A reusable read-only snapshot and condition/effect graph, 15 chained discoveries with stable IDs, additive save migration, diegetic presentation beats, and an illustrated observation journal.
 5. **Polish and quiet finale.** Vegetation and wildlife chains, boats using water topology, relationships, richer sound, nighttime lighting, festival, blossom, lantern finale, and developer inspection panel.

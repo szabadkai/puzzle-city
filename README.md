@@ -8,6 +8,8 @@ Every accessible home attracts a named resident. Citizens follow the town's quay
 
 As the population grows, residents may quietly turn their ground floor into a bakery, café, workshop, fishmonger, or inn. Storefronts emerge from resident traits and occupations; their opening hours then shape where neighbors walk and gather.
 
+The town also keeps an observation journal. Fifteen quiet discoveries connect its architecture, residents, friendships, time of day, and businesses. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
+
 ## Controls
 
 - Left click: build
@@ -15,6 +17,8 @@ As the population grows, residents may quietly turn their ground floor into a ba
 - Click and drag: orbit
 - Middle drag: pan
 - Mouse wheel: zoom
+- J: open or close the observation journal
+- P: toggle the performance overlay
 
 ## Development
 

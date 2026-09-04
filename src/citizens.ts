@@ -202,6 +202,7 @@ export class CitizenSystem {
   private nextCitizen = 0;
   private meetingTime = new Map<string, number>();
   private relationshipAccumulator = 0;
+  private currentHours = 0;
   private businesses: BusinessSave[] = [];
   private readonly walkDirection = new THREE.Vector3();
   private readonly skinMaterial = new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 });
@@ -348,6 +349,7 @@ export class CitizenSystem {
   }
 
   update(deltaSeconds: number, timeOfDay: number, absoluteHours: number, realTime: number) {
+    this.currentHours = absoluteHours;
     for (const citizen of this.citizens) {
       if (citizen.model.scale.x < .99) {
         const scale = Math.min(1, citizen.model.scale.x + deltaSeconds * 1.8);
@@ -512,6 +514,14 @@ export class CitizenSystem {
       current = current.parent;
     }
     return null;
+  }
+
+  noticeDiscovery(activity: string) {
+    for (const citizen of this.citizens.slice(0, 3)) {
+      citizen.activity = activity;
+      citizen.path = [];
+      citizen.nextDecisionAt = this.currentHours + .12;
+    }
   }
 
   card(id: string): CitizenCard | null {

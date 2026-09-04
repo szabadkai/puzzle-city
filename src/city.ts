@@ -36,6 +36,7 @@ export class CityRenderer {
   private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly colorMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly seed: number;
+  private discoveryGlow: { mesh: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>; startedAt: number } | null = null;
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
   private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, roughness: 1 });
   private readonly stoneDark = new THREE.MeshStandardMaterial({ color: 0x786f63, roughness: 1 });
@@ -79,6 +80,22 @@ export class CityRenderer {
     return new THREE.Vector3(x * CELL, 0, z * CELL);
   }
 
+  celebrateAt(x: number, z: number) {
+    if (this.discoveryGlow) {
+      this.root.remove(this.discoveryGlow.mesh);
+      this.discoveryGlow.mesh.geometry.dispose();
+      this.discoveryGlow.mesh.material.dispose();
+    }
+    const cell = this.get(x, z);
+    const material = new THREE.MeshBasicMaterial({ color: 0xffd477, transparent: true, opacity: .8, depthWrite: false });
+    const mesh = new THREE.Mesh(new THREE.TorusGeometry(.62, .035, 8, 40), material);
+    mesh.rotation.x = Math.PI / 2;
+    mesh.position.set(x * CELL, cell ? .5 + cell.height * FLOOR : .42, z * CELL);
+    mesh.renderOrder = 4;
+    this.root.add(mesh);
+    this.discoveryGlow = { mesh, startedAt: performance.now() };
+  }
+
   isBuildable(x: number, z: number) {
     if (Math.hypot(x, z) > 8.8) return false;
     if (this.cells.size === 0) return true;
@@ -120,6 +137,19 @@ export class CityRenderer {
   serialize() { return [...this.cells.values()].map((cell) => ({ ...cell, placedAt: 0 })); }
 
   update(time: number) {
+    if (this.discoveryGlow) {
+      const age = (performance.now() - this.discoveryGlow.startedAt) / 1000;
+      const scale = 1 + age * 1.35;
+      this.discoveryGlow.mesh.scale.setScalar(scale);
+      this.discoveryGlow.mesh.position.y += .0025;
+      this.discoveryGlow.mesh.material.opacity = Math.max(0, .8 * (1 - age / 2.2));
+      if (age >= 2.2) {
+        this.root.remove(this.discoveryGlow.mesh);
+        this.discoveryGlow.mesh.geometry.dispose();
+        this.discoveryGlow.mesh.material.dispose();
+        this.discoveryGlow = null;
+      }
+    }
     for (const [key, group] of this.pieces) {
       const cell = this.cells.get(key);
       if (cell && cell.placedAt > 0) {

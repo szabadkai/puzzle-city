@@ -4,7 +4,8 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { CityRenderer } from './city';
 import { CitizenSystem } from './citizens';
 import { BusinessSystem, type BusinessUpdate } from './businesses';
-import type { SavedTown } from './types';
+import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
+import type { JournalEntry, SavedTown } from './types';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
@@ -21,6 +22,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
     </div>
     <div class="top-actions">
+      <button id="journal-open" aria-label="Open observation journal">Journal <span id="journal-count">0</span></button>
       <button id="center" aria-label="Center camera">Center view</button>
       <button id="reset" aria-label="Start a new town">New tide</button>
     </div>
@@ -43,6 +45,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <span><i class="mouse"></i> click to build</span>
       <span>right-click to undo</span>
       <span>drag to orbit · scroll to zoom</span>
+    </div>
+    <div class="journal-scrim" id="journal-scrim" aria-hidden="true">
+      <aside class="journal" role="dialog" aria-modal="true" aria-labelledby="journal-title">
+        <header>
+          <div><span class="journal-kicker">Observations from the water</span><h2 id="journal-title">Harbor Journal</h2></div>
+          <button id="journal-close" aria-label="Close observation journal">×</button>
+        </header>
+        <p class="journal-intro">No tasks to finish—only small things the town has shown you.</p>
+        <div class="journal-list" id="journal-list"></div>
+      </aside>
     </div>
   </div>
 `;
@@ -162,6 +174,10 @@ const businesses = new BusinessSystem(seed, saved?.businesses ?? []);
 businesses.maintain(citizens.residents(), city.cells);
 city.setBusinesses(businesses.all());
 citizens.setBusinesses(businesses.all());
+const grow = new GrowSystem(DISCOVERY_EVENTS, saved?.discoveries ?? [], saved?.journal ?? [], commitDiscoveryEffect);
+renderJournal();
+const lastJournalEntry = grow.entries().at(-1);
+if (lastJournalEntry) setNote(lastJournalEntry.note);
 
 const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xffd894, transparent: true, opacity: .56, depthWrite: false });
 const hover = new THREE.Mesh(new RoundedBoxGeometry(CityRenderer.cellSize() * .9, .16, CityRenderer.cellSize() * .9, 4, .12), hoverMaterial);
@@ -277,20 +293,7 @@ function build(x: number, z: number) {
   persistSoon();
   document.querySelector('#hint')?.classList.add('hidden');
   if (before !== after || after === 'tower') showToast(`The stones settle into a ${after}.`);
-  const neighbors = [[0,-1],[1,0],[0,1],[-1,0]];
-  for (const [dx, dz] of neighbors) {
-    const feature = city.topologyLabel(x + dx, z + dz);
-    if (feature === 'courtyard garden') {
-      showToast('A sheltered garden has taken root.');
-      setNote('Where walls make shelter, green things seem to follow.');
-      break;
-    }
-    if (feature === 'sea arch' || feature === 'high bridge') {
-      showToast(feature === 'sea arch' ? 'An arch spans the tide.' : 'A high bridge joins the rooftops.');
-      setNote('Tall neighbors sometimes reach across a narrow ribbon of sea.');
-      break;
-    }
-  }
+  evaluateDiscoveries();
 }
 
 function demolish(x: number, z: number) {
@@ -303,6 +306,7 @@ function demolish(x: number, z: number) {
   hideCitizenCard();
   softTone(190, .07);
   persistSoon();
+  evaluateDiscoveries();
 }
 
 function persistSoon() {
@@ -312,13 +316,15 @@ function persistSoon() {
 
 function saveTown() {
   const data: SavedTown = {
-    version: 3,
+    version: 4,
     seed,
     cells: city.serialize(),
     timeOfDay,
     day,
     citizens: citizens.serialize(),
     businesses: businesses.serialize(),
+    discoveries: grow.discoveredIds(),
+    journal: grow.entries(),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
@@ -326,7 +332,7 @@ function saveTown() {
 function loadTown(): SavedTown | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedTown | null;
-    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 ? parsed : null;
+    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 ? parsed : null;
   } catch {
     return null;
   }
@@ -344,34 +350,105 @@ function setNote(message: string) {
   document.querySelector<HTMLSpanElement>('#note span')!.textContent = message;
 }
 
+function currentSnapshot() {
+  return createWorldSnapshot({
+    cells: city.cells.values(),
+    citizens: citizens.residents(),
+    businesses: businesses.serialize(),
+    day,
+    timeOfDay,
+    priorDiscoveries: grow.discoveredIds(),
+  });
+}
+
+function evaluateDiscoveries() {
+  const triggered = grow.evaluate(currentSnapshot());
+  if (!triggered.length) return;
+  renderJournal();
+  persistSoon();
+}
+
+function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDiscovery) {
+  const focus = resolveFocus(discovery.event.focus, discovery.snapshot);
+  if (effect.kind === 'city') {
+    if (focus) city.celebrateAt(focus.x, focus.z);
+    return;
+  }
+  if (effect.kind === 'citizens') {
+    citizens.noticeDiscovery(effect.activity);
+    return;
+  }
+  showToast(effect.caption);
+  setNote(discovery.entry.note);
+  if (focus) controls.target.lerp(city.worldPosition(focus.x, focus.z).setY(1), .14);
+  const tones = {
+    stone: [310, 430],
+    green: [390, 590],
+    water: [360, 520],
+    warm: [470, 680],
+    people: [420, 620],
+  } as const;
+  const [low, high] = tones[effect.tone];
+  softTone(low, .17);
+  softTone(high, .22, .09);
+}
+
+function renderJournal() {
+  const list = document.querySelector<HTMLDivElement>('#journal-list')!;
+  const entries = grow.entries().reverse();
+  document.querySelector('#journal-count')!.textContent = String(entries.length);
+  list.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'journal-empty';
+    empty.textContent = 'The pages are waiting for the town’s first small surprise.';
+    list.append(empty);
+    return;
+  }
+  for (const entry of entries) list.append(createJournalEntry(entry));
+}
+
+function createJournalEntry(entry: JournalEntry) {
+  const article = document.createElement('article');
+  article.className = 'journal-entry';
+  const illustration = document.createElement('div');
+  illustration.className = 'journal-illustration';
+  illustration.dataset.scene = entry.illustration;
+  illustration.setAttribute('aria-hidden', 'true');
+  illustration.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  const copy = document.createElement('div');
+  const title = document.createElement('h3');
+  title.textContent = entry.title;
+  const time = document.createElement('span');
+  time.className = 'journal-time';
+  const hours = Math.floor(entry.timeOfDay);
+  const minutes = Math.floor((entry.timeOfDay - hours) * 60);
+  time.textContent = `Day ${entry.day} · ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  const note = document.createElement('p');
+  note.textContent = entry.note;
+  copy.append(time, title, note);
+  article.append(illustration, copy);
+  return article;
+}
+
+function setJournalOpen(open: boolean) {
+  const scrim = document.querySelector('#journal-scrim')!;
+  scrim.classList.toggle('show', open);
+  scrim.setAttribute('aria-hidden', String(!open));
+}
+
 function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
   if (!update.changed) return;
   const current = businesses.all();
   city.setBusinesses(current);
   citizens.setBusinesses(current);
   renderer.shadowMap.needsUpdate = true;
-  if (announce && update.opened[0]) {
-    const business = update.opened[0];
-    const owner = citizens.card(business.ownerId);
-    showToast(`${owner?.name ?? 'A neighbor'} has opened ${business.name}.`);
-    const notes = {
-      bakery: 'Before sunrise, the new baker leaves a little tray of warm buns beneath the awning.',
-      cafe: 'A few cups have appeared outside. People now linger here longer than they mean to.',
-      workshop: 'The tap of small tools carries across the water through the afternoon.',
-      fishmonger: 'The morning catch no longer travels far. Neighbors gather while the scales still shine.',
-      inn: 'A lantern stays lit for the last ferry. There is always one more story inside.',
-    };
-    setNote(notes[business.type]);
-    const [x, z] = business.cellKey.split(',').map(Number);
-    const focus = city.worldPosition(x, z).setY(1);
-    controls.target.lerp(focus, .16);
-    softTone(470, .18);
-    softTone(650, .22, .1);
-  } else if (announce && update.closed[0]) {
+  if (announce && update.closed[0]) {
     showToast(`${update.closed[0].name} has quietly closed its shutters.`);
     setNote(`The sign at ${update.closed[0].name} has come down. Perhaps another door will open elsewhere.`);
   }
   persistSoon();
+  if (update.opened.length) evaluateDiscoveries();
 }
 
 function getAudio() {
@@ -412,6 +489,11 @@ document.querySelector('#reset')!.addEventListener('click', () => {
 });
 
 document.querySelector('#card-close')!.addEventListener('click', hideCitizenCard);
+document.querySelector('#journal-open')!.addEventListener('click', () => setJournalOpen(true));
+document.querySelector('#journal-close')!.addEventListener('click', () => setJournalOpen(false));
+document.querySelector('#journal-scrim')!.addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) setJournalOpen(false);
+});
 document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) => {
   button.addEventListener('click', () => {
     simulationSpeed = Number(button.dataset.speed);
@@ -423,6 +505,8 @@ document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) =>
 
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'p') document.querySelector('#perf-panel')!.classList.toggle('show');
+  if (event.key.toLowerCase() === 'j') setJournalOpen(!document.querySelector('#journal-scrim')!.classList.contains('show'));
+  if (event.key === 'Escape') setJournalOpen(false);
 });
 
 const ambience = createAmbience();
@@ -527,6 +611,7 @@ let performanceWarmup = 0;
 let performanceCooldown = 0;
 let performanceUpdate = 0;
 let businessCheckElapsed = 0;
+let discoveryCheckElapsed = 0;
 let nightMode = false;
 let shadowsActive = true;
 
@@ -553,6 +638,7 @@ function animate() {
   performanceCooldown += rawDelta;
   performanceUpdate += rawDelta;
   businessCheckElapsed += delta;
+  discoveryCheckElapsed += delta;
   const deltaHours = delta * simulationSpeed * .05;
   timeOfDay += deltaHours;
   if (timeOfDay >= 24) {
@@ -590,6 +676,10 @@ function animate() {
     const businessUpdate = businesses.update(citizens.residents(), city.cells, absoluteHours);
     applyBusinessUpdate(businessUpdate, true);
     businessCheckElapsed = 0;
+  }
+  if (discoveryCheckElapsed > .5) {
+    evaluateDiscoveries();
+    discoveryCheckElapsed = 0;
   }
   ambience.update(time, daylight);
   clockUpdate += delta;

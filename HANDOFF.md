@@ -1,6 +1,6 @@
 # Little Tides — project handoff
 
-This repository is complete through **Milestone 3** and is ready to continue with Milestone 4. The playable build is deployed at <https://szabadkai.github.io/puzzle-city/>.
+This repository is complete through **Milestone 4** and is ready to continue with Milestone 5. The playable build is deployed at <https://szabadkai.github.io/puzzle-city/>.
 
 ## Completed milestones
 
@@ -16,6 +16,10 @@ This repository is complete through **Milestone 3** and is ready to continue wit
    - Bakery, café, workshop, fishmonger, and inn emerge from population, resident traits, occupation, and site suitability.
    - Persistent owners, names, opening hours, procedural storefronts, owner routines, and visitor destinations.
    - Businesses close or are reassigned when edits invalidate their site or owner.
+4. **GROW discoveries**
+   - Pure declarative condition trees evaluate cloned, read-only snapshots of topology, population, time, businesses, relationships, and prior discoveries.
+   - Fifteen stable, chained one-shot event IDs commit through narrow city, citizen, and presentation effects.
+   - Discoveries add a restrained world glimmer, resident reaction, caption and sound, then persist an illustrated observation in the harbor journal.
 
 The visual direction is a warm, fictional old East Asian harbor: layered tiled eaves, narrow signs, awnings, laundry balconies, pipes, rooftop tanks, and evening window light. It draws on old Tokyo and Hong Kong atmosphere without reproducing a specific property or place.
 
@@ -25,6 +29,7 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 - `src/city.ts` — sparse cell model, procedural architecture/storefront generation, local topology rebuilds, and static geometry batching.
 - `src/citizens.ts` — navigation graph, A* routing, resident lifecycle, routines, relationships, business visits, and citizen rendering.
 - `src/businesses.ts` — business recipes, emergence thresholds, scoring, opening hours, ownership, and validity maintenance.
+- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, and the 15-event catalog.
 - `src/types.ts` — saved-world and shared domain types.
 - `src/random.ts` — deterministic coordinate hashing and selection helpers.
 - `src/style.css` — HUD and presentation styling.
@@ -33,14 +38,15 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 
 ## Persistence and compatibility
 
-The town is stored in `localStorage` under `little-tides-town-v1`. The current payload is save version 3 and includes:
+The town is stored in `localStorage` under `little-tides-town-v1`. The current payload is save version 4 and includes:
 
 - the deterministic world seed and sparse cell array;
 - day and time-of-day;
 - citizens, homes, positions, traits, occupations, and relationships;
 - businesses, sites, owners, names, types, and opening times.
+- discovered stable event IDs and illustrated journal entries.
 
-`SavedTown` accepts versions 1, 2, and 3, and all fields added after version 1 are optional. Preserve that additive migration behavior when extending the schema. The in-game **New tide** action clears the existing local save.
+`SavedTown` accepts versions 1, 2, 3, and 4, and all fields added after version 1 are optional. Existing towns discover any currently satisfied observations gradually after loading. Preserve that additive migration behavior when extending the schema. The in-game **New tide** action clears the existing local save.
 
 ## Performance baseline
 
@@ -79,16 +85,15 @@ gh run list --repo szabadkai/puzzle-city --workflow deploy-pages.yml --limit 3
 
 Repository: <https://github.com/szabadkai/puzzle-city>
 
-## Next: Milestone 4 — GROW system
+## Next: Milestone 5 — polish and quiet finale
 
-Build a reusable discovery engine around declarative, stable event IDs:
+Extend the discovery graph into living seasonal detail without turning it into a checklist:
 
-1. Produce a read-only world snapshot containing topology, population, time, businesses, relationships, and prior discoveries.
-2. Evaluate condition trees without mutating simulation state.
-3. Commit effects through narrow city, citizen, and presentation APIs.
-4. Make one-shot events idempotent and explicitly mark repeatable events.
-5. Persist discovered event IDs and journal entries in a backward-compatible save version.
-6. Add 15 chained discoveries and an illustrated observation journal.
+1. Add vegetation and wildlife chains whose effects remain deterministic and inexpensive.
+2. Route boats around occupied water topology instead of following a fixed ellipse.
+3. Enrich relationships and shared citizen activities while keeping the fixed-step work bounded.
+4. Layer restrained harbor ambience and nighttime lighting cues.
+5. Build festival, blossom, and lantern discoveries toward a quiet visual finale.
+6. Add a developer inspection panel for snapshots, event eligibility, and committed effects.
 
-Keep discovery feedback diegetic: a small world change, restrained sound/caption feedback, and a short notebook entry. Avoid turning the game into a checklist or management dashboard. Start with existing topology discoveries (courtyard, arch, bridge, and tower) as fixtures for the new framework before adding new chains.
-
+Preserve the GROW boundary: pure snapshot evaluation in `grow.ts`, state changes only through narrow system APIs, and additive save migrations. Re-test the dense-town draw-call baseline as persistent vegetation, wildlife, and festival details are introduced.

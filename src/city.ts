@@ -31,6 +31,9 @@ export class CityRenderer {
   readonly cells = new Map<string, Cell>();
   private readonly pieces = new Map<string, THREE.Group>();
   private readonly businesses = new Map<string, BusinessSave>();
+  private readonly discoveries = new Set<string>();
+  private readonly nightLightRoot = new THREE.Group();
+  private readonly nightLights: THREE.PointLight[] = [];
   private readonly signMaterials = new Map<string, THREE.MeshStandardMaterial>();
   private readonly wallMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
@@ -47,10 +50,13 @@ export class CityRenderer {
   private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
   private readonly warmLight = new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 });
+  private readonly blossom = new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 });
 
   constructor(seed: number) {
     this.seed = seed;
     this.root.name = 'town';
+    this.nightLightRoot.name = 'night-lights';
+    this.root.add(this.nightLightRoot);
   }
 
   static cellSize() { return CELL; }
@@ -72,6 +78,16 @@ export class CityRenderer {
       const [x, z] = key.split(',').map(Number);
       this.rebuildPiece(x, z);
     }
+    this.syncNightLights();
+  }
+
+  setDiscoveryState(discoveries: readonly string[]) {
+    const next = new Set(discoveries);
+    if (next.size === this.discoveries.size && [...next].every((id) => this.discoveries.has(id))) return;
+    this.discoveries.clear();
+    for (const id of next) this.discoveries.add(id);
+    this.rebuildAll(false);
+    this.syncNightLights();
   }
 
   get(x: number, z: number) { return this.cells.get(keyOf(x, z)); }
@@ -173,6 +189,7 @@ export class CityRenderer {
     const night = 1 - daylight;
     this.window.emissiveIntensity = .06 + night * 2.15;
     this.warmLight.emissiveIntensity = .4 + night * 3.8;
+    for (const light of this.nightLights) light.intensity = Math.max(0, night * 1.8 - .32);
   }
 
   topologyLabel(x: number, z: number) {
@@ -332,6 +349,9 @@ export class CityRenderer {
     }
 
     if ((count === 2 && this.isCorner(neighborHeights)) || (cell.height >= 2 && count <= 1)) this.addBalcony(group, cell, topY);
+    if (this.discoveries.has('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
+    if (this.discoveries.has('festival-ribbons') && hash(this.seed, cell.x, cell.z, 1920) > .55) this.addFestivalRibbon(group, cell, topY);
+    if (this.discoveries.has('lantern-finale') && count > 0 && hash(this.seed, cell.x, cell.z, 1930) > .46) this.addFinaleLanterns(group, cell, topY);
     this.addWaterEdges(group, cell, neighborHeights);
     const business = this.businesses.get(keyOf(cell.x, cell.z));
     if (business) this.addBusinessFacade(group, cell, business);
@@ -702,6 +722,66 @@ export class CityRenderer {
     }
   }
 
+  private addHerbPots(group: THREE.Group, y: number, cell: Cell) {
+    for (let index = 0; index < 3; index++) {
+      const angle = hash(this.seed, cell.x, cell.z, 1940 + index) * Math.PI * 2;
+      const radius = .25 + index * .17;
+      const pot = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.1, .13, .16, 7), this.wood), false);
+      pot.position.set(Math.cos(angle) * radius, y + .18, Math.sin(angle) * radius);
+      const herb = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.13, 0), this.green), false);
+      herb.position.set(pot.position.x, y + .34, pot.position.z);
+      group.add(pot, herb);
+    }
+  }
+
+  private addFestivalRibbon(group: THREE.Group, cell: Cell, y: number) {
+    const dir = this.doorDirection(cell);
+    const [dx, dz] = CARDINALS[dir];
+    const lateral = new THREE.Vector3(dz, 0, -dx);
+    const colors = [0xb94d45, 0xe2b750, 0x4e8580];
+    for (let index = 0; index < 5; index++) {
+      const material = this.cachedMaterial(this.colorMaterials, colors[index % colors.length], 1);
+      const ribbon = new THREE.Mesh(new THREE.ConeGeometry(.11, .3, 3), material);
+      const offset = (index - 2) * .38;
+      ribbon.position.set(dx * 1.29 + lateral.x * offset, y - .5 + Math.sin(index) * .06, dz * 1.29 + lateral.z * offset);
+      ribbon.rotation.z = Math.PI;
+      group.add(ribbon);
+    }
+  }
+
+  private addFinaleLanterns(group: THREE.Group, cell: Cell, y: number) {
+    const dir = this.doorDirection(cell);
+    const [dx, dz] = CARDINALS[dir];
+    const lateral = new THREE.Vector3(dz, 0, -dx);
+    for (const side of [-.62, .62]) {
+      const lantern = new THREE.Mesh(new THREE.SphereGeometry(.105, 9, 7), this.warmLight);
+      lantern.scale.y = 1.35;
+      lantern.position.set(dx * 1.3 + lateral.x * side, y - .45, dz * 1.3 + lateral.z * side);
+      group.add(lantern);
+    }
+  }
+
+  private syncNightLights() {
+    this.nightLightRoot.clear();
+    this.nightLights.length = 0;
+    const lightCells = [...this.businesses.values()].slice(0, 5).map((business) => business.cellKey);
+    if (this.discoveries.has('lantern-finale')) {
+      for (const cell of this.cells.values()) {
+        if (lightCells.length >= 9) break;
+        if (hash(this.seed, cell.x, cell.z, 1950) > .72) lightCells.push(keyOf(cell.x, cell.z));
+      }
+    }
+    for (const cellKey of new Set(lightCells)) {
+      const [x, z] = cellKey.split(',').map(Number);
+      const cell = this.get(x, z);
+      if (!cell) continue;
+      const light = new THREE.PointLight(0xffaa58, 0, 5.4, 2);
+      light.position.set(x * CELL, Math.min(2.4, .9 + cell.height * .65), z * CELL);
+      this.nightLightRoot.add(light);
+      this.nightLights.push(light);
+    }
+  }
+
   private emptyFeature(x: number, z: number): string | null {
     const h = CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz)?.height ?? 0);
     const count = h.filter((value) => value > 0).length;
@@ -736,6 +816,11 @@ export class CityRenderer {
       const angle = i * Math.PI * .4 + hash(this.seed, x, z, 410) * 2;
       crown.position.set(Math.cos(angle) * .34, (i % 2) * .28, Math.sin(angle) * .34);
       canopy.add(crown);
+      if (this.discoveries.has('blossom-tide')) {
+        const blooms = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.19 + (i % 2) * .035, 1), this.blossom), false);
+        blooms.position.copy(crown.position).add(new THREE.Vector3(i % 2 ? .18 : -.12, .16, i % 3 ? .1 : -.14));
+        canopy.add(blooms);
+      }
     }
     group.add(trunk, canopy);
     group.userData.tree = canopy;

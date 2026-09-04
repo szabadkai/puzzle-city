@@ -8,7 +8,9 @@ Every accessible home attracts a named resident. Citizens follow the town's quay
 
 As the population grows, residents may quietly turn their ground floor into a bakery, café, workshop, fishmonger, or inn. Storefronts emerge from resident traits and occupations; their opening hours then shape where neighbors walk and gather.
 
-The town also keeps an observation journal. Fifteen quiet discoveries connect its architecture, residents, friendships, time of day, and businesses. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
+The town also keeps an observation journal. Twenty-three quiet discoveries connect its architecture, residents, friendships, time of day, businesses, gardens, wildlife, and a lantern-lit finale. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
+
+Boats trace the changing shoreline, friends pause for shared meals and conversations, courtyard cuttings spread to rooftop pots, and the harbor gradually gathers gulls, blossom, festival ribbons, fireflies, and lantern light.
 
 ## Controls
 
@@ -19,6 +21,7 @@ The town also keeps an observation journal. Fifteen quiet discoveries connect it
 - Mouse wheel: zoom
 - J: open or close the observation journal
 - P: toggle the performance overlay
+- G: toggle the GROW developer inspector
 
 ## Development
 

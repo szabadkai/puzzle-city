@@ -34,8 +34,9 @@ export type DiscoveryFocus =
   | { kind: 'town' };
 
 export type DiscoveryEffect =
-  | { kind: 'city'; action: 'glimmer' }
+  | { kind: 'city'; action: 'glimmer' | 'decorate' }
   | { kind: 'citizens'; action: 'notice'; activity: string }
+  | { kind: 'ambience'; action: 'refresh' }
   | { kind: 'presentation'; action: 'reveal'; caption: string; tone: 'stone' | 'green' | 'water' | 'warm' | 'people' };
 
 export type DiscoveryEvent = Readonly<{
@@ -172,6 +173,16 @@ export class GrowSystem {
   discoveredIds() { return [...this.discovered]; }
 
   entries() { return this.journal.map((entry) => ({ ...entry })); }
+
+  inspect(snapshot: WorldSnapshot) {
+    return this.events.map((event) => ({
+      id: event.id,
+      title: event.title,
+      repeatable: event.repeatable,
+      discovered: this.discovered.has(event.id),
+      eligible: evaluateCondition(event.condition, snapshot),
+    }));
+  }
 }
 
 const all = (...conditions: DiscoveryCondition[]): DiscoveryCondition => ({ kind: 'all', conditions });
@@ -179,6 +190,12 @@ const discovered = (eventId: string): DiscoveryCondition => ({ kind: 'discovered
 const reveal = (caption: string, tone: Extract<DiscoveryEffect, { kind: 'presentation' }>['tone']): DiscoveryEffect => ({ kind: 'presentation', action: 'reveal', caption, tone });
 const standardEffects = (caption: string, tone: Extract<DiscoveryEffect, { kind: 'presentation' }>['tone'], activity: string): readonly DiscoveryEffect[] => [
   { kind: 'city', action: 'glimmer' },
+  { kind: 'citizens', action: 'notice', activity },
+  reveal(caption, tone),
+];
+const natureEffects = (caption: string, tone: Extract<DiscoveryEffect, { kind: 'presentation' }>['tone'], activity: string): readonly DiscoveryEffect[] => [
+  { kind: 'city', action: 'decorate' },
+  { kind: 'ambience', action: 'refresh' },
   { kind: 'citizens', action: 'notice', activity },
   reveal(caption, tone),
 ];
@@ -273,6 +290,54 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     note: 'Stone, garden, bridge, work, and friendship now hold one another together. The town has a memory of its own.',
     condition: all(discovered('sheltered-courtyard'), discovered('high-bridge'), discovered('lookout-tower'), discovered('familiar-faces'), discovered('harbor-market'), { kind: 'population', atLeast: 7 }), focus: { kind: 'town' },
     effects: standardEffects('For a moment, the whole town seems to remember.', 'warm', 'remembering how the town began'),
+  },
+  {
+    id: 'rooftop-gardens', repeatable: false, title: 'Gardens Above the Quay', illustration: 'pots',
+    note: 'Cuttings from the sheltered garden climbed the stairs and found sun on the crowded roofs.',
+    condition: all(discovered('sheltered-courtyard'), { kind: 'cells', atLeast: 9 }), focus: { kind: 'topology', feature: 'courtyard' },
+    effects: natureEffects('Little gardens are climbing onto the roofs.', 'green', 'carrying seedlings up the stairs'),
+  },
+  {
+    id: 'gulls-return', repeatable: false, title: 'The Gulls Return', illustration: 'gulls',
+    note: 'The lookout gave the circling gulls a landmark. Their pale wings came home to the harbor.',
+    condition: all(discovered('lookout-tower'), { kind: 'population', atLeast: 5 }), focus: { kind: 'topology', feature: 'tower' },
+    effects: natureEffects('Gulls circle the lookout tower.', 'water', 'watching the gulls return'),
+  },
+  {
+    id: 'blossom-tide', repeatable: false, title: 'A Tide of Blossom', illustration: 'blossom',
+    note: 'The oldest courtyard tree flowered, and the wind carried its color from roof to roof.',
+    condition: all(discovered('rooftop-gardens'), { kind: 'day', atLeast: 2 }), focus: { kind: 'topology', feature: 'courtyard' },
+    effects: natureEffects('Blossom drifts through the sheltered streets.', 'green', 'following petals through the town'),
+  },
+  {
+    id: 'evening-chorus', repeatable: false, title: 'The Evening Chorus', illustration: 'chorus',
+    note: 'Gulls settled, insects kindled above the gardens, and every small night sound found its place.',
+    condition: all(discovered('gulls-return'), discovered('familiar-faces'), { kind: 'time', after: 17.5, before: 22 }), focus: { kind: 'town' },
+    effects: natureEffects('The harbor gathers its evening chorus.', 'water', 'listening to the evening chorus'),
+  },
+  {
+    id: 'shared-supper', repeatable: false, title: 'A Shared Supper', illustration: 'supper',
+    note: 'Friends pulled their chairs together. For once, no doorway marked where one household ended.',
+    condition: all(discovered('familiar-faces'), { kind: 'relationships', atLeast: 3 }, { kind: 'any', conditions: [{ kind: 'business', businessType: 'cafe', atLeast: 1 }, { kind: 'business', businessType: 'inn', atLeast: 1 }] }, { kind: 'time', after: 18, before: 22.5 }), focus: { kind: 'town' },
+    effects: natureEffects('Friends have drawn their tables together.', 'people', 'sharing supper with old friends'),
+  },
+  {
+    id: 'festival-ribbons', repeatable: false, title: 'Ribbons Across the Street', illustration: 'festival',
+    note: 'Nobody announced a festival. Bright scraps simply crossed the street until celebration became inevitable.',
+    condition: all(discovered('town-remembers'), { kind: 'relationships', atLeast: 3 }), focus: { kind: 'town' },
+    effects: natureEffects('Festival ribbons appear between the eaves.', 'warm', 'hanging bright ribbons over the quay'),
+  },
+  {
+    id: 'blossom-evening', repeatable: false, title: 'Blossom Evening', illustration: 'blossom-night',
+    note: 'Petals caught in the festival ribbons while the first lamps warmed the blue hour.',
+    condition: all(discovered('festival-ribbons'), discovered('blossom-tide'), { kind: 'time', after: 18.5, before: 22.5 }), focus: { kind: 'topology', feature: 'courtyard' },
+    effects: natureEffects('Petals catch in the ribbons at blue hour.', 'warm', 'walking beneath blossom and ribbons'),
+  },
+  {
+    id: 'lantern-finale', repeatable: false, title: 'All the Lanterns', illustration: 'lanterns',
+    note: 'Every window answered another. Seen from the water, the town was a constellation that had chosen to stay.',
+    condition: all(discovered('blossom-evening'), discovered('shared-supper'), discovered('evening-chorus'), { kind: 'time', after: 19, before: 23 }), focus: { kind: 'town' },
+    effects: natureEffects('One by one, every lantern answers the next.', 'warm', 'watching all the lanterns come alive'),
   },
 ] as const;
 

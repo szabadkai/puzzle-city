@@ -5,6 +5,7 @@ import { CityRenderer } from './city';
 import { CitizenSystem } from './citizens';
 import { BusinessSystem, type BusinessUpdate } from './businesses';
 import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
+import { HarborAmbience } from './harbor';
 import type { JournalEntry, SavedTown } from './types';
 import './style.css';
 
@@ -28,6 +29,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     <div class="toast" id="toast"></div>
     <div class="perf-panel" id="perf-panel">Performance</div>
+    <aside class="grow-inspector" id="grow-inspector" aria-label="GROW developer inspector"></aside>
     <aside class="citizen-card" id="citizen-card" aria-live="polite">
       <button class="card-close" id="card-close" aria-label="Close citizen card">×</button>
       <span class="card-kicker">Town resident</span>
@@ -64,6 +66,7 @@ const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
 let timeOfDay = saved?.timeOfDay ?? 7.5;
 let day = saved?.day ?? 1;
 let simulationSpeed = 1;
+const committedEffects: string[] = [];
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x91c7c1);
@@ -178,6 +181,7 @@ const grow = new GrowSystem(DISCOVERY_EVENTS, saved?.discoveries ?? [], saved?.j
 renderJournal();
 const lastJournalEntry = grow.entries().at(-1);
 if (lastJournalEntry) setNote(lastJournalEntry.note);
+city.setDiscoveryState(grow.discoveredIds());
 
 const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xffd894, transparent: true, opacity: .56, depthWrite: false });
 const hover = new THREE.Mesh(new RoundedBoxGeometry(CityRenderer.cellSize() * .9, .16, CityRenderer.cellSize() * .9, 4, .12), hoverMaterial);
@@ -285,6 +289,7 @@ function build(x: number, z: number) {
   }
   const after = city.topologyLabel(x, z);
   citizens.rebuild(city.cells);
+  ambience.setTown(city.cells.values());
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), false);
   performanceWarmup = 0;
   performanceCooldown = 0;
@@ -299,6 +304,7 @@ function build(x: number, z: number) {
 function demolish(x: number, z: number) {
   if (!city.remove(x, z)) return;
   citizens.rebuild(city.cells);
+  ambience.setTown(city.cells.values());
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), true);
   performanceWarmup = 0;
   performanceCooldown = 0;
@@ -369,13 +375,20 @@ function evaluateDiscoveries() {
 }
 
 function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDiscovery) {
+  committedEffects.unshift(`${discovery.event.id} · ${effect.kind}.${effect.action}`);
+  committedEffects.length = Math.min(committedEffects.length, 12);
   const focus = resolveFocus(discovery.event.focus, discovery.snapshot);
   if (effect.kind === 'city') {
     if (focus) city.celebrateAt(focus.x, focus.z);
+    if (effect.action === 'decorate') city.setDiscoveryState(grow.discoveredIds());
     return;
   }
   if (effect.kind === 'citizens') {
     citizens.noticeDiscovery(effect.activity);
+    return;
+  }
+  if (effect.kind === 'ambience') {
+    ambience.setDiscoveryState(grow.discoveredIds());
     return;
   }
   showToast(effect.caption);
@@ -391,6 +404,29 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
   const [low, high] = tones[effect.tone];
   softTone(low, .17);
   softTone(high, .22, .09);
+}
+
+function updateGrowInspector() {
+  const panel = document.querySelector<HTMLElement>('#grow-inspector')!;
+  if (!panel.classList.contains('show')) return;
+  const snapshot = currentSnapshot();
+  const events = grow.inspect(snapshot);
+  const eligible = events.filter((event) => event.eligible && !event.discovered);
+  const complete = events.filter((event) => event.discovered).length;
+  panel.replaceChildren();
+  const heading = document.createElement('strong');
+  heading.textContent = 'GROW inspector';
+  const summary = document.createElement('p');
+  summary.textContent = `${snapshot.cells.length} cells · ${snapshot.population} residents · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${complete}/${events.length} discoveries`;
+  const eligibleTitle = document.createElement('span');
+  eligibleTitle.textContent = 'Eligible next';
+  const eligibleList = document.createElement('p');
+  eligibleList.textContent = eligible.length ? eligible.map((event) => event.id).join('\n') : 'none';
+  const effectsTitle = document.createElement('span');
+  effectsTitle.textContent = 'Recent committed effects';
+  const effects = document.createElement('p');
+  effects.textContent = committedEffects.length ? committedEffects.join('\n') : 'none this session';
+  panel.append(heading, summary, eligibleTitle, eligibleList, effectsTitle, effects);
 }
 
 function renderJournal() {
@@ -456,19 +492,29 @@ function getAudio() {
   return audioContext;
 }
 
-function softTone(frequency: number, duration: number, delay = 0) {
+function softTone(frequency: number, duration: number, delay = 0, volume = .055, wave: OscillatorType = 'sine') {
   const context = getAudio();
   const oscillator = context.createOscillator();
   const gain = context.createGain();
-  oscillator.type = 'sine';
+  oscillator.type = wave;
   oscillator.frequency.setValueAtTime(frequency, context.currentTime + delay);
   oscillator.frequency.exponentialRampToValueAtTime(frequency * 1.18, context.currentTime + delay + duration);
   gain.gain.setValueAtTime(.0001, context.currentTime + delay);
-  gain.gain.exponentialRampToValueAtTime(.055, context.currentTime + delay + .012);
+  gain.gain.exponentialRampToValueAtTime(volume, context.currentTime + delay + .012);
   gain.gain.exponentialRampToValueAtTime(.0001, context.currentTime + delay + duration);
   oscillator.connect(gain).connect(context.destination);
   oscillator.start(context.currentTime + delay);
   oscillator.stop(context.currentTime + delay + duration + .02);
+}
+
+function playHarborAmbience(daylight: number) {
+  if (!audioContext || audioContext.state !== 'running') return;
+  softTone(105 + daylight * 38, .7, 0, .009, 'sine');
+  if (daylight < .32) softTone(620, .45, .24, .008, 'triangle');
+  if (grow.discoveredIds().includes('lantern-finale')) {
+    softTone(760, .38, .5, .01, 'sine');
+    softTone(910, .42, .78, .008, 'sine');
+  }
 }
 
 function popSound() {
@@ -506,97 +552,16 @@ document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) =>
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'p') document.querySelector('#perf-panel')!.classList.toggle('show');
   if (event.key.toLowerCase() === 'j') setJournalOpen(!document.querySelector('#journal-scrim')!.classList.contains('show'));
+  if (event.key.toLowerCase() === 'g') {
+    document.querySelector('#grow-inspector')!.classList.toggle('show');
+    updateGrowInspector();
+  }
   if (event.key === 'Escape') setJournalOpen(false);
 });
 
-const ambience = createAmbience();
+const ambience = new HarborAmbience(seed, camera, city.cells.values());
+ambience.setDiscoveryState(grow.discoveredIds());
 scene.add(ambience.root);
-
-function createAmbience() {
-  const root = new THREE.Group();
-  const sailMaterial = new THREE.MeshStandardMaterial({ color: 0xb9493e, side: THREE.DoubleSide, roughness: .9 });
-  const hullMaterial = new THREE.MeshStandardMaterial({ color: 0x593e34, roughness: .95 });
-  const boat = new THREE.Group();
-  const hull = new THREE.Mesh(new THREE.CapsuleGeometry(.25, .78, 4, 8), hullMaterial);
-  hull.rotation.z = Math.PI / 2;
-  hull.scale.y = .55;
-  hull.castShadow = true;
-  boat.add(hull);
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(.018, .022, .9, 6), hullMaterial);
-  mast.position.y = .48;
-  boat.add(mast);
-  const sail = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(.02, .83, 0), new THREE.Vector3(.02, .12, 0), new THREE.Vector3(.52, .18, 0),
-  ]), sailMaterial);
-  boat.add(sail);
-  const canopy = new THREE.Mesh(new THREE.BoxGeometry(.45, .05, .34), new THREE.MeshStandardMaterial({ color: 0xd7b260, roughness: 1 }));
-  canopy.position.set(-.22, .28, 0);
-  boat.add(canopy);
-  root.add(boat);
-
-  const birds = new THREE.Group();
-  const birdMaterial = new THREE.MeshBasicMaterial({ color: 0x47676b, side: THREE.DoubleSide });
-  for (let i = 0; i < 7; i++) {
-    const bird = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-.18, 0, 0), new THREE.Vector3(0, -.06, 0), new THREE.Vector3(.18, 0, 0),
-    ]), birdMaterial);
-    bird.position.set(i * .6, Math.sin(i) * .34, Math.cos(i * 2) * .5);
-    birds.add(bird);
-  }
-  root.add(birds);
-
-  const cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
-  const clouds = new THREE.Group();
-  for (let c = 0; c < 5; c++) {
-    const cloud = new THREE.Group();
-    for (let puff = 0; puff < 4; puff++) {
-      const shape = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1 + (puff % 2) * .45, 1), cloudMaterial);
-      shape.scale.set(1.65, .55, .7);
-      shape.position.set(puff * 1.25, Math.sin(puff) * .32, 0);
-      cloud.add(shape);
-    }
-    cloud.position.set(-24 + c * 11, 10 + (c % 2) * 2.5, -20 - c * 2);
-    clouds.add(cloud);
-  }
-  root.add(clouds);
-
-  const sunDisc = new THREE.Mesh(
-    new THREE.CircleGeometry(2.2, 32),
-    new THREE.MeshBasicMaterial({ color: 0xffc36f, transparent: true, opacity: .65, depthWrite: false }),
-  );
-  sunDisc.position.set(-17, 14, -28);
-  sunDisc.lookAt(camera.position);
-  root.add(sunDisc);
-
-  const starPositions: number[] = [];
-  for (let i = 0; i < 170; i++) {
-    const angle = i * 2.39996;
-    const radius = 28 + (i % 17) * 1.15;
-    starPositions.push(Math.cos(angle) * radius, 12 + (i % 13) * 1.35, Math.sin(angle) * radius);
-  }
-  const starGeometry = new THREE.BufferGeometry();
-  starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
-  const starMaterial = new THREE.PointsMaterial({ color: 0xffe4a3, size: .13, transparent: true, opacity: 0, depthWrite: false });
-  const stars = new THREE.Points(starGeometry, starMaterial);
-  root.add(stars);
-  return {
-    root,
-    update(time: number, daylight: number) {
-      const angle = time * .045;
-      boat.position.set(Math.cos(angle) * 16, -.12 + Math.sin(time * 1.4) * .07, Math.sin(angle) * 12);
-      boat.rotation.y = -angle + Math.PI / 2;
-      boat.rotation.z = Math.sin(time * 1.1) * .035;
-      const birdAngle = time * .085;
-      birds.position.set(Math.cos(birdAngle) * 9, 7.5 + Math.sin(time * .35), Math.sin(birdAngle) * 9);
-      birds.rotation.y = -birdAngle;
-      birds.children.forEach((bird, i) => { bird.rotation.z = Math.sin(time * 5 + i) * .22; });
-      clouds.position.x = Math.sin(time * .018) * 2.5;
-      cloudMaterial.opacity = .12 + daylight * .32;
-      starMaterial.opacity = Math.pow(1 - daylight, 2) * (.62 + Math.sin(time * .7) * .08);
-      (sunDisc.material as THREE.MeshBasicMaterial).opacity = daylight * .68;
-    },
-  };
-}
 
 const clock = new THREE.Clock();
 const daySky = new THREE.Color(0x91c7c1);
@@ -612,6 +577,8 @@ let performanceCooldown = 0;
 let performanceUpdate = 0;
 let businessCheckElapsed = 0;
 let discoveryCheckElapsed = 0;
+let ambientSoundElapsed = 0;
+let inspectorElapsed = 0;
 let nightMode = false;
 let shadowsActive = true;
 
@@ -639,6 +606,8 @@ function animate() {
   performanceUpdate += rawDelta;
   businessCheckElapsed += delta;
   discoveryCheckElapsed += delta;
+  ambientSoundElapsed += rawDelta;
+  inspectorElapsed += rawDelta;
   const deltaHours = delta * simulationSpeed * .05;
   timeOfDay += deltaHours;
   if (timeOfDay >= 24) {
@@ -680,6 +649,14 @@ function animate() {
   if (discoveryCheckElapsed > .5) {
     evaluateDiscoveries();
     discoveryCheckElapsed = 0;
+  }
+  if (ambientSoundElapsed > 11) {
+    playHarborAmbience(daylight);
+    ambientSoundElapsed = 0;
+  }
+  if (inspectorElapsed > .75) {
+    updateGrowInspector();
+    inspectorElapsed = 0;
   }
   ambience.update(time, daylight);
   clockUpdate += delta;

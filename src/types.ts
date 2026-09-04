@@ -22,7 +22,8 @@ export type JournalIllustration =
   | 'foundation' | 'garden' | 'arch' | 'bridge' | 'tower'
   | 'neighbors' | 'street' | 'friendship'
   | 'bread' | 'tea' | 'tools' | 'fish' | 'inn'
-  | 'market' | 'town';
+  | 'market' | 'town' | 'pots' | 'gulls' | 'blossom'
+  | 'chorus' | 'supper' | 'festival' | 'blossom-night' | 'lanterns';
 
 export type JournalEntry = {
   id: string;

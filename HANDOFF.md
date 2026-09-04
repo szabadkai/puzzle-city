@@ -1,6 +1,6 @@
 # Little Tides — project handoff
 
-This repository is complete through **Milestone 4** and is ready to continue with Milestone 5. The playable build is deployed at <https://szabadkai.github.io/puzzle-city/>.
+This repository is complete through **Milestone 5**, the final milestone in the current roadmap. The playable build is deployed at <https://szabadkai.github.io/puzzle-city/>.
 
 ## Completed milestones
 
@@ -20,6 +20,12 @@ This repository is complete through **Milestone 4** and is ready to continue wit
    - Pure declarative condition trees evaluate cloned, read-only snapshots of topology, population, time, businesses, relationships, and prior discoveries.
    - Fifteen stable, chained one-shot event IDs commit through narrow city, citizen, and presentation effects.
    - Discoveries add a restrained world glimmer, resident reaction, caption and sound, then persist an illustrated observation in the harbor journal.
+5. **Polish and quiet finale**
+   - Two boats follow a deterministic water route rebuilt from the occupied shoreline after every edit.
+   - Rooftop planting, gulls, blossom, fireflies, festival ribbons, local lantern lights, and a quiet finale emerge through eight additional chained discoveries.
+   - Spatially bucketed relationship checks are capped per tick, and established friends pause for shared meals, harbor news, evening walks, and other joint routines.
+   - Layered ambient tones respond to daylight and the finale without starting audio before the player has interacted.
+   - Press `G` for a developer panel showing snapshot totals, event eligibility, and recently committed effects.
 
 The visual direction is a warm, fictional old East Asian harbor: layered tiled eaves, narrow signs, awnings, laundry balconies, pipes, rooftop tanks, and evening window light. It draws on old Tokyo and Hong Kong atmosphere without reproducing a specific property or place.
 
@@ -29,7 +35,8 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 - `src/city.ts` — sparse cell model, procedural architecture/storefront generation, local topology rebuilds, and static geometry batching.
 - `src/citizens.ts` — navigation graph, A* routing, resident lifecycle, routines, relationships, business visits, and citizen rendering.
 - `src/businesses.ts` — business recipes, emergence thresholds, scoring, opening hours, ownership, and validity maintenance.
-- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, and the 15-event catalog.
+- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, and the 23-event catalog.
+- `src/harbor.ts` — shoreline-derived boat routes, boats, birds, clouds, stars, blossom particles, and evening fireflies.
 - `src/types.ts` — saved-world and shared domain types.
 - `src/random.ts` — deterministic coordinate hashing and selection helpers.
 - `src/style.css` — HUD and presentation styling.
@@ -58,7 +65,8 @@ The latest manual browser checks held 60 FPS in the tested desktop environment:
 
 - two-home town: about 57–58 draw calls;
 - 11-resident town: about 255 draw calls;
-- 13-resident town with all five businesses: about 328–336 draw calls and 99–102k triangles.
+- Milestone 4, 13-resident town with all five businesses: about 328–336 draw calls and 99–102k triangles.
+- Milestone 5, the same town at night with rooftop gardens and blossom active: about 341 draw calls and 102k triangles.
 
 Treat these as comparison baselines, not cross-device guarantees. Re-test a dense town after adding any animated or per-cell feature.
 
@@ -85,15 +93,8 @@ gh run list --repo szabadkai/puzzle-city --workflow deploy-pages.yml --limit 3
 
 Repository: <https://github.com/szabadkai/puzzle-city>
 
-## Next: Milestone 5 — polish and quiet finale
+## Current state and future extensions
 
-Extend the discovery graph into living seasonal detail without turning it into a checklist:
+The five-milestone prototype roadmap is complete. Further work should be treated as a new scope rather than another assumed milestone. Good extension seams include touch-specific interaction polish, multiple save slots or export/import, accessibility settings for motion and sound, more boat silhouettes, and authored discovery packs registered against the existing GROW engine.
 
-1. Add vegetation and wildlife chains whose effects remain deterministic and inexpensive.
-2. Route boats around occupied water topology instead of following a fixed ellipse.
-3. Enrich relationships and shared citizen activities while keeping the fixed-step work bounded.
-4. Layer restrained harbor ambience and nighttime lighting cues.
-5. Build festival, blossom, and lantern discoveries toward a quiet visual finale.
-6. Add a developer inspection panel for snapshots, event eligibility, and committed effects.
-
-Preserve the GROW boundary: pure snapshot evaluation in `grow.ts`, state changes only through narrow system APIs, and additive save migrations. Re-test the dense-town draw-call baseline as persistent vegetation, wildlife, and festival details are introduced.
+Preserve the GROW boundary: pure snapshot evaluation in `grow.ts`, state changes only through narrow system APIs, and additive save migrations. Keep wildlife and seasonal animation batched, and use the `P` and `G` panels together when evaluating dense-town changes.

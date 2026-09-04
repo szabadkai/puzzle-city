@@ -182,6 +182,30 @@ button:active { transform: translateY(1px); }
 }
 .perf-panel.show { opacity: 1; visibility: visible; }
 
+.grow-inspector {
+  position: absolute;
+  left: 28px;
+  top: 158px;
+  width: 292px;
+  max-height: calc(100vh - 190px);
+  padding: 12px 13px;
+  overflow: auto;
+  border: 1px solid rgba(208,232,217,.18);
+  border-radius: 8px;
+  background: rgba(19,31,31,.88);
+  color: #d8e8d8;
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: auto;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity .15s, transform .15s;
+}
+.grow-inspector.show { opacity: 1; visibility: visible; transform: translateY(0); }
+.grow-inspector strong { color: #ffd994; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; }
+.grow-inspector span { display: block; margin-top: 10px; color: #e5aa72; text-transform: uppercase; letter-spacing: .6px; }
+.grow-inspector p { margin: 4px 0 0; white-space: pre-line; color: rgba(224,238,221,.78); }
+
 .recipe-note {
   position: absolute;
   right: 24px;
@@ -313,6 +337,18 @@ button:active { transform: translateY(1px); }
 .journal-illustration[data-scene="inn"] i:nth-child(3) { left: 50px; bottom: 18px; width: 12px; height: 18px; border-radius: 50%; background: #f0b94f; box-shadow: 0 0 10px #f2b84c; }
 .journal-illustration[data-scene="town"] { --accent: #b65247; --ink: #446e68; background: linear-gradient(#c9ab94 0 59%, #416f76 60% 100%); }
 .journal-illustration[data-scene="town"] i:nth-child(3) { left: 15px; top: 11px; width: 3px; height: 3px; border-radius: 50%; background: #ffe5a0; box-shadow: 22px 5px 0 #ffe5a0, 48px -2px 0 #ffe5a0, 69px 7px 0 #ffe5a0; }
+.journal-illustration[data-scene="pots"] i:nth-child(3) { left: 33px; bottom: 47px; width: 8px; height: 8px; border-radius: 50%; background: #668354; box-shadow: 14px -3px 0 #668354, 29px 2px 0 #668354; }
+.journal-illustration[data-scene="gulls"] i:nth-child(3) { left: 27px; top: 16px; width: 15px; height: 7px; border-top: 2px solid #f5eed9; border-radius: 50%; box-shadow: 31px 7px 0 -1px #f5eed9; }
+.journal-illustration[data-scene="blossom"] { --accent: #c8797f; --ink: #668354; }
+.journal-illustration[data-scene="blossom"] i:nth-child(3) { left: 20px; top: 16px; width: 5px; height: 5px; border-radius: 50%; background: #f3b3b7; box-shadow: 17px 8px 0 #f3b3b7, 39px -3px 0 #f3b3b7, 66px 9px 0 #f3b3b7; }
+.journal-illustration[data-scene="chorus"] { background: linear-gradient(#6f737c 0 59%, #456f73 60% 100%); }
+.journal-illustration[data-scene="chorus"] i:nth-child(3) { left: 23px; top: 15px; width: 4px; height: 4px; border-radius: 50%; background: #ffe27b; box-shadow: 20px 11px 0 #ffe27b, 43px -2px 0 #ffe27b, 64px 15px 0 #ffe27b; }
+.journal-illustration[data-scene="supper"] i:nth-child(3) { left: 34px; bottom: 20px; width: 39px; height: 6px; border-radius: 50%; background: #7d543e; box-shadow: 6px 7px 0 -1px #d9a071, 25px 7px 0 -1px #d9a071; }
+.journal-illustration[data-scene="festival"] i:nth-child(3) { left: 13px; top: 21px; width: 78px; height: 3px; background: #e7c46a; transform: rotate(-5deg); box-shadow: 18px 5px 0 #b84d45, 42px 4px 0 #4e8580; }
+.journal-illustration[data-scene="blossom-night"] { --accent: #a95c64; --ink: #3f625e; background: linear-gradient(#77727b 0 59%, #456f73 60% 100%); }
+.journal-illustration[data-scene="blossom-night"] i:nth-child(3) { left: 21px; top: 14px; width: 4px; height: 4px; border-radius: 50%; background: #f3b3b7; box-shadow: 18px 9px 0 #f3b3b7, 38px -2px 0 #ffe27b, 61px 8px 0 #f3b3b7; }
+.journal-illustration[data-scene="lanterns"] { --accent: #8f4b49; --ink: #365651; background: linear-gradient(#555968 0 59%, #345f67 60% 100%); }
+.journal-illustration[data-scene="lanterns"] i:nth-child(3) { left: 29px; top: 25px; width: 9px; height: 12px; border-radius: 50%; background: #ffc75c; box-shadow: 21px -7px 5px #ffc75c, 43px 2px 3px #ffc75c; }
 
 @media (max-width: 700px) {
   .hud { padding: 16px; }
@@ -320,6 +356,7 @@ button:active { transform: translateY(1px); }
   .brand h1 { font-size: 23px; }
   .time-widget { top: 72px; left: 18px; }
   .perf-panel { top: 112px; left: 18px; }
+  .grow-inspector { top: 142px; left: 18px; width: calc(100vw - 36px); max-height: 45vh; }
   .citizen-card { left: 16px; bottom: 62px; width: 220px; }
   .recipe-note { display: none; }
   .hint { bottom: 16px; gap: 10px; font-size: 10px; }

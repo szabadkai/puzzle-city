@@ -201,6 +201,7 @@ export class CitizenSystem {
   private cells: Map<string, Cell>;
   private nextCitizen = 0;
   private meetingTime = new Map<string, number>();
+  private nextSharedMoment = new Map<string, number>();
   private relationshipAccumulator = 0;
   private currentHours = 0;
   private businesses: BusinessSave[] = [];
@@ -360,7 +361,7 @@ export class CitizenSystem {
     }
     this.relationshipAccumulator += deltaSeconds;
     if (this.relationshipAccumulator >= 1) {
-      this.updateRelationships(this.relationshipAccumulator);
+      this.updateRelationships(this.relationshipAccumulator, timeOfDay, absoluteHours);
       this.relationshipAccumulator = 0;
     }
   }
@@ -490,19 +491,45 @@ export class CitizenSystem {
     }
   }
 
-  private updateRelationships(deltaSeconds: number) {
-    for (let a = 0; a < this.citizens.length; a++) for (let b = a + 1; b < this.citizens.length; b++) {
-      const first = this.citizens[a];
-      const second = this.citizens[b];
-      if (first.model.position.distanceToSquared(second.model.position) > .16) continue;
-      const key = `${first.id}|${second.id}`;
-      const time = (this.meetingTime.get(key) ?? 0) + deltaSeconds;
-      this.meetingTime.set(key, time);
-      if (time > 12 && !first.relationships.includes(second.id)) {
-        first.relationships.push(second.id);
-        second.relationships.push(first.id);
-        first.activity = `chatting with ${second.name}`;
-        second.activity = `chatting with ${first.name}`;
+  private updateRelationships(deltaSeconds: number, hour: number, absoluteHours: number) {
+    const bucketSize = .8;
+    const buckets = new Map<string, Citizen[]>();
+    for (const citizen of this.citizens) {
+      const bx = Math.floor(citizen.model.position.x / bucketSize);
+      const bz = Math.floor(citizen.model.position.z / bucketSize);
+      const key = `${bx},${bz}`;
+      const bucket = buckets.get(key) ?? [];
+      bucket.push(citizen);
+      buckets.set(key, bucket);
+    }
+    let comparisons = 0;
+    for (const first of this.citizens) {
+      const bx = Math.floor(first.model.position.x / bucketSize);
+      const bz = Math.floor(first.model.position.z / bucketSize);
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+        for (const second of buckets.get(`${bx + dx},${bz + dz}`) ?? []) {
+          if (first.id >= second.id || comparisons++ >= 480) continue;
+          if (first.model.position.distanceToSquared(second.model.position) > .16) continue;
+          const key = `${first.id}|${second.id}`;
+          const meeting = (this.meetingTime.get(key) ?? 0) + deltaSeconds;
+          this.meetingTime.set(key, meeting);
+          if (meeting > 12 && !first.relationships.includes(second.id)) {
+            first.relationships.push(second.id);
+            second.relationships.push(first.id);
+            first.activity = `chatting with ${second.name}`;
+            second.activity = `chatting with ${first.name}`;
+            this.nextSharedMoment.set(key, absoluteHours + .5);
+          } else if (first.relationships.includes(second.id) && absoluteHours >= (this.nextSharedMoment.get(key) ?? 0)) {
+            const activity = hour < 10 ? 'sharing breakfast with' : hour < 17 ? 'trading harbor news with' : hour < 21 ? 'sharing the evening with' : 'walking home beside';
+            first.activity = `${activity} ${second.name}`;
+            second.activity = `${activity} ${first.name}`;
+            first.path = [];
+            second.path = [];
+            first.nextDecisionAt = absoluteHours + .14;
+            second.nextDecisionAt = absoluteHours + .14;
+            this.nextSharedMoment.set(key, absoluteHours + 1.25);
+          }
+        }
       }
     }
   }

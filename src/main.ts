@@ -9,6 +9,7 @@ import { HarborAmbience } from './harbor';
 import { weatherAt, type TownMemorySnapshot } from './memory';
 import type { CatMemoryInspection } from './fauna';
 import type { JournalEntry, JournalIllustration, SavedTown } from './types';
+import { FLOOR_HEIGHT } from './spatial';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
@@ -439,7 +440,7 @@ function updateHover(clientX: number, clientY: number) {
   const color = allowed ? (touchMode === 'remove' ? 0xc65f57 : 0xffd894) : 0x82918c;
   hover.visible = true;
   hover.scale.y = cell ? 1 : .12;
-  hover.position.set(x * size, cell ? .34 + cell.height * 1.42 + previewHeight / 2 : .12, z * size);
+  hover.position.set(x * size, cell ? .34 + cell.height * FLOOR_HEIGHT + previewHeight / 2 : .12, z * size);
   hoverMaterial.color.setHex(color);
   hoverOutlineMaterial.color.setHex(color);
 }

@@ -39,7 +39,7 @@ export function isArcadeCenter(cell: Cell, cells: CellMap) {
   return arcadeFeature(cell, cells) !== null;
 }
 
-/** A 1-2-3 run gains stairs; raising the whole sequence adds planting, then lanterns. */
+/** Detects a 1-2-3 run; rendering also requires a usable lower landing. */
 export function steppedTerrace(cell: Cell, cells: CellMap): Readonly<{ direction: GridDirection; feature: TerraceFeature }> | null {
   const heights = cardinalHeights(cell.x, cell.z, cells);
   for (const [first, opposite] of [[0, 2], [1, 3]] as const) {
@@ -59,7 +59,7 @@ export function steppedTerrace(cell: Cell, cells: CellMap): Readonly<{ direction
 }
 
 export function steppedTerraceDirection(cell: Cell, cells: CellMap): GridDirection | null {
-  return steppedTerrace(cell, cells)?.direction ?? null;
+  return walkableSteppedTerrace(cell, cells)?.direction ?? null;
 }
 
 /** Equal-height 2x2 blocks of two storeys or more share one rooftop court. */
@@ -88,8 +88,27 @@ export function isWalkableRoof(cell: Cell, cells: CellMap) {
   const diagonalCount = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
     .filter(([dx, dz]) => cells.has(keyOf(cell.x + dx, cell.z + dz))).length;
   if (cell.height >= 3 && neighborCount <= 1) return false;
-  if (roofCourtAnchor(cell, cells) || steppedTerrace(cell, cells) || arcadeFeature(cell, cells) === 'roof promenade') return true;
-  return neighborCount > 2 || diagonalCount >= 3;
+  if (roofCourtAnchor(cell, cells) || arcadeFeature(cell, cells) === 'roof promenade') return true;
+  if (neighborCount > 2 || diagonalCount >= 3) return true;
+  return walkableSteppedTerrace(cell, cells) !== null;
+}
+
+/** A stair only exists when it can finish on a genuine lower roof deck. */
+export function walkableSteppedTerrace(cell: Cell, cells: CellMap) {
+  const terrace = steppedTerrace(cell, cells);
+  if (!terrace) return null;
+  const [dx, dz] = CARDINALS[terrace.direction];
+  const lower = cells.get(keyOf(cell.x + dx, cell.z + dz));
+  if (!lower || lower.height !== cell.height - 1) return null;
+  const lowerHeights = cardinalHeights(lower.x, lower.z, cells);
+  const lowerNeighborCount = lowerHeights.filter((height) => height > 0).length;
+  const lowerDiagonalCount = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
+    .filter(([offsetX, offsetZ]) => cells.has(keyOf(lower.x + offsetX, lower.z + offsetZ))).length;
+  const lowerHasDeck = roofCourtAnchor(lower, cells)
+    || arcadeFeature(lower, cells) === 'roof promenade'
+    || lowerNeighborCount > 2
+    || lowerDiagonalCount >= 3;
+  return lowerHasDeck ? terrace : null;
 }
 
 /** Picks one exposed wall for a roof access hatch, matching the deterministic architecture. */

@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import { CARDINALS, type Cell, keyOf } from './types';
 import { hash } from './random';
 import { findPlazaAnchors } from './topology';
+import { CELL_SIZE } from './spatial';
 
-export const WORLD_CELL_SIZE = 2.45;
+export const WORLD_CELL_SIZE = CELL_SIZE;
 
 export type WaterPoint = Readonly<{ x: number; z: number }>;
 

@@ -4,15 +4,19 @@ import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type Citize
 import { hash, pick } from './random';
 import { findPlazaAnchors } from './topology';
 import {
-  arcadeFeature, isRoofAccessCell, isWalkableRoof, roofAccessDirection, roofCourtFeature, steppedTerrace,
+  arcadeFeature, isRoofAccessCell, isWalkableRoof, roofAccessDirection, roofCourtFeature, walkableSteppedTerrace,
 } from './architecture';
+import {
+  CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_WALK_Y, QUAY_PATH_OFFSET,
+  TERRACE_STEP_COUNT, terraceStepOutward, terraceStepWalkY, roofWalkY,
+} from './spatial';
 
-const CELL = 2.45;
-const FLOOR = 1.42;
+const CELL = CELL_SIZE;
+const FLOOR = FLOOR_HEIGHT;
 const EDGE = CELL / 2;
-const WALK_OUT = EDGE + .24;
-const WALK_Y = .27;
-const BRIDGE_Y = 1.42 * 2.28 + .34;
+const WALK_OUT = QUAY_PATH_OFFSET;
+const WALK_Y = GROUND_WALK_Y;
+const BRIDGE_Y = HIGH_CROSSING_WALK_Y;
 const NAMES = ['Mei', 'Ren', 'Aiko', 'Hana', 'Jun', 'Mina', 'Sora', 'Tomo', 'Yuna', 'Bo', 'Kiko', 'Nori', 'Aya', 'Kenji', 'Momo', 'Lin', 'Haru', 'Emi'];
 const TRAITS = ['sociable', 'quiet', 'ambitious', 'curious', 'artistic', 'industrious', 'dreamy', 'patient', 'adventurous'];
 const OCCUPATIONS = ['Baker', 'Fisher', 'Gardener', 'Teacher', 'Bookbinder', 'Caretaker', 'Cartographer', 'Cook'];
@@ -188,13 +192,13 @@ export class NavGraph {
     const roofNodes = new Map<string, { center: string; edges: string[]; y: number }>();
     for (const cell of this.cells.values()) {
       if (!isWalkableRoof(cell, this.cells)) continue;
-      const y = .38 + cell.height * FLOOR + .18;
+      const y = roofWalkY(cell.height);
       const center = this.addNode(cell.x * CELL, cell.z * CELL, y);
       const edges = CARDINALS.map(([dx, dz]) => this.addNode(cell.x * CELL + dx * .68, cell.z * CELL + dz * .68, y));
       edges.forEach((edge) => this.connect(center, edge));
       roofNodes.set(keyOf(cell.x, cell.z), { center, edges, y });
       const feature = roofCourtFeature(cell, this.cells)
-        ?? steppedTerrace(cell, this.cells)?.feature
+        ?? walkableSteppedTerrace(cell, this.cells)?.feature
         ?? arcadeFeature(cell, this.cells)
         ?? 'rooftop deck';
       this.rooftops.set(center, feature);
@@ -210,16 +214,17 @@ export class NavGraph {
         if (neighborRoof && neighbor?.height === cell.height) this.connect(roof.edges[direction], neighborRoof.edges[(direction + 2) % 4]);
       });
 
-      const terrace = steppedTerrace(cell, this.cells);
+      const terrace = walkableSteppedTerrace(cell, this.cells);
       if (terrace) {
         const [dx, dz] = CARDINALS[terrace.direction];
         const lower = this.cells.get(keyOf(cell.x + dx, cell.z + dz));
         const lowerRoof = lower && roofNodes.get(keyOf(lower.x, lower.z));
         if (lowerRoof && lower?.height === cell.height - 1) {
           let previous = roof.center;
-          for (let index = 0; index < 6; index++) {
-            const outward = .48 + index * .25;
-            const step = this.addNode(cell.x * CELL + dx * outward, cell.z * CELL + dz * outward, roof.y - index * .21);
+          const topY = .38 + cell.height * FLOOR;
+          for (let index = 0; index < TERRACE_STEP_COUNT; index++) {
+            const outward = terraceStepOutward(index);
+            const step = this.addNode(cell.x * CELL + dx * outward, cell.z * CELL + dz * outward, terraceStepWalkY(topY, index));
             this.connect(previous, step);
             previous = step;
           }
@@ -403,11 +408,11 @@ export class CitizenSystem {
   private readonly darkMaterial = new THREE.MeshStandardMaterial({ color: 0x3f3432, roughness: 1 });
   private readonly hatMaterial = new THREE.MeshStandardMaterial({ color: 0xc79d58, roughness: 1 });
   private readonly clothesMaterials = CLOTHES.map((color) => new THREE.MeshStandardMaterial({ color, roughness: .95 }));
-  private readonly bodyGeometry = new THREE.CapsuleGeometry(.105, .19, 3, 7);
-  private readonly headGeometry = new THREE.SphereGeometry(.105, 9, 7);
-  private readonly hairGeometry = new THREE.SphereGeometry(.109, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
-  private readonly legGeometry = new THREE.CylinderGeometry(.025, .03, .2, 6);
-  private readonly hatGeometry = new THREE.ConeGeometry(.18, .08, 12);
+  private readonly bodyGeometry = new THREE.CapsuleGeometry(.09, .16, 3, 7);
+  private readonly headGeometry = new THREE.SphereGeometry(.09, 9, 7);
+  private readonly hairGeometry = new THREE.SphereGeometry(.094, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
+  private readonly legGeometry = new THREE.CylinderGeometry(.022, .027, .17, 6);
+  private readonly hatGeometry = new THREE.ConeGeometry(.145, .065, 12);
   private readonly bodyInstances: THREE.InstancedMesh[];
   private readonly headInstances: THREE.InstancedMesh;
   private readonly hairInstances: THREE.InstancedMesh;
@@ -584,6 +589,10 @@ export class CitizenSystem {
     };
     const model = this.createModel(normalized);
     model.position.set(data.position[0], data.elevation ?? WALK_Y, data.position[1]);
+    // Routes are not persisted. Snap restored residents back to the rebuilt
+    // graph so saves made with older surface heights do not leave them afloat.
+    const restoredNode = this.graph.closest(model.position);
+    if (restoredNode) model.position.copy(restoredNode.position);
     if (movingIn) model.scale.setScalar(.01);
     this.root.add(model);
     this.citizens.push({
@@ -616,17 +625,17 @@ export class CitizenSystem {
     const clothes = this.clothesMaterials[data.color % this.clothesMaterials.length];
     const body = new THREE.Mesh(this.bodyGeometry, clothes);
     body.name = 'citizen-body';
-    body.position.y = .34;
+    body.position.y = .285;
     const head = new THREE.Mesh(this.headGeometry, this.skinMaterial);
     head.name = 'citizen-head';
-    head.position.y = .62;
+    head.position.y = .5;
     const hair = new THREE.Mesh(this.hairGeometry, this.darkMaterial);
     hair.name = 'citizen-hair';
-    hair.position.y = .64;
+    hair.position.y = .515;
     const legs: THREE.Mesh[] = [];
     for (const side of [-1, 1]) {
       const leg = new THREE.Mesh(this.legGeometry, this.darkMaterial);
-      leg.position.set(side * .055, .13, 0);
+      leg.position.set(side * .047, .085, 0);
       leg.name = side < 0 ? 'leg-left' : 'leg-right';
       legs.push(leg);
       group.add(leg);
@@ -635,7 +644,7 @@ export class CitizenSystem {
     if (data.occupation === 'Fisher' || data.occupation === 'Gardener') {
       hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
       hat.name = 'occupation-hat';
-      hat.position.y = .72;
+      hat.position.y = .61;
       group.add(hat);
     }
     group.add(body, head, hair);
@@ -1009,7 +1018,7 @@ export class CitizenSystem {
     if ((occupation === 'Fisher' || occupation === 'Gardener') && !citizen.model.getObjectByName('occupation-hat')) {
       const hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
       hat.name = 'occupation-hat';
-      hat.position.y = .72;
+      hat.position.y = .61;
       hat.userData.citizenId = citizen.id;
       hat.visible = false;
       citizen.model.add(hat);

@@ -27,8 +27,15 @@ const server = await createServer({ server: { middlewareMode: true }, appType: '
 
 try {
   const { CityRenderer } = await server.ssrLoadModule('/src/city.ts');
-  const { CitizenSystem } = await server.ssrLoadModule('/src/citizens.ts');
+  const { CitizenSystem, NavGraph } = await server.ssrLoadModule('/src/citizens.ts');
   const { HarborAmbience } = await server.ssrLoadModule('/src/harbor.ts');
+  const { hash } = await server.ssrLoadModule('/src/random.ts');
+  const { hasWaterStairs } = await server.ssrLoadModule('/src/water.ts');
+  const { walkableSteppedTerrace } = await server.ssrLoadModule('/src/architecture.ts');
+  const {
+    CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_WALK_Y, QUAY_PATH_OFFSET,
+    TERRACE_STEP_COUNT, terraceStepOutward, terraceStepWalkY,
+  } = await server.ssrLoadModule('/src/spatial.ts');
 
   const seed = 42;
   const cells = [];
@@ -141,6 +148,83 @@ try {
     .flatMap((group) => group.userData.architecturalTrees ?? [])
     .filter((tree) => tree.habitat === 'plaza');
   if (plazaTrees.length !== 2) throw new Error(`Harbor plaza produced ${plazaTrees.length} trees instead of 2.`);
+
+  const singleCell = { x: 0, z: 0, height: 1, color: 0, placedAt: 0 };
+  const singleGraph = new NavGraph(new Map([['0,0', singleCell]]), seed);
+  const groundNodes = [...singleGraph.nodes.values()].filter((node) => Math.abs(node.position.y - GROUND_WALK_Y) < .001);
+  const furthestGroundCoordinate = Math.max(...groundNodes.flatMap((node) => [Math.abs(node.position.x), Math.abs(node.position.z)]));
+  if (Math.abs(furthestGroundCoordinate - QUAY_PATH_OFFSET) > .001) {
+    throw new Error(`Ground route is ${furthestGroundCoordinate} from the cell centre instead of ${QUAY_PATH_OFFSET}.`);
+  }
+
+  let stairSeed = 0;
+  let stairDirection = 0;
+  while (stairSeed < 10_000) {
+    stairDirection = Math.floor(hash(stairSeed, 0, 0, 27) * 4);
+    if (hasWaterStairs(singleCell, stairDirection, stairSeed)) break;
+    stairSeed += 1;
+  }
+  const stairCity = new CityRenderer(stairSeed);
+  stairCity.load([singleCell], 0);
+  const residentialPiece = stairCity.root.children.find((child) => child.userData.cellX === 0 && child.userData.cellZ === 0);
+  if (residentialPiece?.userData.waterStairDirection !== stairDirection) {
+    throw new Error('Residential water stairs are not aligned with the entrance façade.');
+  }
+  stairCity.setBusinesses([{
+    id: 'test-shop', type: 'cafe', cellKey: '0,0', ownerId: 'test-owner',
+    name: 'Test Shop', openedAt: 0, employeeIds: [], visitCount: 0,
+  }]);
+  const businessPiece = stairCity.root.children.find((child) => child.userData.cellX === 0 && child.userData.cellZ === 0);
+  if (businessPiece?.userData.waterStairDirection !== undefined) {
+    throw new Error('Water stairs overlap a business entrance.');
+  }
+
+  const crossingCells = [
+    { x: 0, z: -1, height: 3, color: 0, placedAt: 0 },
+    { x: 0, z: 1, height: 3, color: 0, placedAt: 0 },
+  ];
+  const crossingGraph = new NavGraph(new Map(crossingCells.map((cell) => [`${cell.x},${cell.z}`, cell])), seed);
+  const bridgeNodes = [...crossingGraph.nodes.values()].filter((node) => Math.abs(node.position.y - HIGH_CROSSING_WALK_Y) < .001);
+  const bridgeEnds = bridgeNodes.filter((node) => Math.abs(node.position.z) > .001).map((node) => Math.abs(node.position.z));
+  const expectedBridgeEnd = CELL_SIZE - QUAY_PATH_OFFSET;
+  if (bridgeEnds.length !== 2 || bridgeEnds.some((position) => Math.abs(position - expectedBridgeEnd) > .001)) {
+    throw new Error('Bridge navigation no longer meets its rendered access ladders.');
+  }
+
+  const terraceCells = [
+    { x: 0, z: 0, height: 2, color: 0, placedAt: 0 },
+    { x: 0, z: -1, height: 1, color: 0, placedAt: 0 },
+    { x: 0, z: 1, height: 3, color: 0, placedAt: 0 },
+    { x: -1, z: -1, height: 1, color: 0, placedAt: 0 },
+    { x: 1, z: -1, height: 1, color: 0, placedAt: 0 },
+    { x: 0, z: -2, height: 1, color: 0, placedAt: 0 },
+  ];
+  const bareTerraceCells = terraceCells.slice(0, 3);
+  const bareTerraceMap = new Map(bareTerraceCells.map((cell) => [`${cell.x},${cell.z}`, cell]));
+  if (walkableSteppedTerrace(bareTerraceCells[0], bareTerraceMap) !== null) {
+    throw new Error('A terrace stair was created without a usable lower roof landing.');
+  }
+  const bareTerraceCity = new CityRenderer(seed);
+  bareTerraceCity.load(bareTerraceCells, 0);
+  if (bareTerraceCity.root.children.some((child) => child.userData.terraceDirection !== undefined)) {
+    throw new Error('The renderer added a façade stair without a usable lower roof landing.');
+  }
+  const terraceGraph = new NavGraph(new Map(terraceCells.map((cell) => [`${cell.x},${cell.z}`, cell])), seed);
+  const terraceCity = new CityRenderer(seed);
+  terraceCity.load(terraceCells, 0);
+  if (!terraceCity.root.children.some((child) => child.userData.terraceDirection !== undefined)) {
+    throw new Error('A valid roof-to-roof terrace stair was not rendered.');
+  }
+  const terraceTopY = .38 + terraceCells[0].height * FLOOR_HEIGHT;
+  for (let index = 0; index < TERRACE_STEP_COUNT; index++) {
+    const expectedZ = -terraceStepOutward(index);
+    const expectedY = terraceStepWalkY(terraceTopY, index);
+    const aligned = [...terraceGraph.nodes.values()].some((node) =>
+      Math.abs(node.position.x) < .001
+      && Math.abs(node.position.z - expectedZ) < .001
+      && Math.abs(node.position.y - expectedY) < .001);
+    if (!aligned) throw new Error(`Terrace tread ${index + 1} is missing its aligned navigation node.`);
+  }
 
   console.log(`Render-structure check passed: ${drawGroups} draw groups`, byRoot);
 } finally {

@@ -5,6 +5,7 @@ import { findPlazaAnchors } from './topology';
 import { CARDINALS, type BusinessSave, type Cell, keyOf } from './types';
 import { analyzeWaterTopology, createShorelineRoute, WORLD_CELL_SIZE } from './water';
 import { ageInHours, catColonyAt, describeAge, KITTEN_GROWTH_HOURS, KITTEN_INTERVAL_HOURS } from './memory';
+import { FLOOR_HEIGHT } from './spatial';
 
 export type WildlifeKind = 'gulls' | 'fish' | 'crabs' | 'cats' | 'butterflies';
 export type WildlifeAction = 'reveal' | 'gather' | 'scatter';
@@ -158,7 +159,7 @@ export class FaunaSystem {
       .map((point) => new THREE.Vector3(point.x * CELL, -.275, point.z * CELL));
     this.towerAnchors = this.cells
       .filter((cell) => cell.height >= 3 && CARDINALS.filter(([dx, dz]) => occupied.has(keyOf(cell.x + dx, cell.z + dz))).length <= 1)
-      .map((cell) => new THREE.Vector3(cell.x * CELL, cell.height * 1.42 + 1.25, cell.z * CELL));
+      .map((cell) => new THREE.Vector3(cell.x * CELL, cell.height * FLOOR_HEIGHT + 1.25, cell.z * CELL));
     const courtyardAnchors: THREE.Vector3[] = [];
     for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
       if (occupied.has(keyOf(x, z))) continue;

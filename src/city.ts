@@ -7,15 +7,20 @@ import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memo
 import { plazaAnchorAt } from './topology';
 import { hasDock, hasWaterStairs } from './water';
 import {
+  CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_SPAN_Y, HIGH_CROSSING_WALK_Y,
+  QUAY_PATH_OFFSET, TERRACE_STEP_COUNT,
+  TERRACE_STEP_HEIGHT, terraceStepOutward, terraceStepWalkY,
+} from './spatial';
+import {
   arcadeFeature, courtyardFeature, emptyCrossingFeature, isRoofAccessCell, isWalkableRoof,
-  roofAccessDirection, roofCourtAnchor, roofCourtFeature, steppedTerrace,
+  roofAccessDirection, roofCourtAnchor, roofCourtFeature, walkableSteppedTerrace,
   vegetationPlotFeature,
   type CourtyardFeature, type EmptyArchitectureFeature, type RoofCourtFeature, type TerraceFeature,
   type VegetationPlotFeature,
 } from './architecture';
 
-const CELL = 2.45;
-const FLOOR = 1.42;
+const CELL = CELL_SIZE;
+const FLOOR = FLOOR_HEIGHT;
 const BASE_Y = 0.05;
 const WALL_COLORS = [0xd88966, 0xd9b967, 0xbc6c5c, 0x73a69a, 0x7390a1, 0xb9828d, 0xd8c99f, 0x9f9a7e];
 const ROOF_COLORS = [0x733e38, 0xa6533c, 0x315f5b, 0x3f5260, 0x5b4748, 0x354747];
@@ -73,6 +78,38 @@ function createSmokeTexture() {
   context.fillStyle = gradient;
   context.fillRect(0, 0, size, size);
   return new THREE.CanvasTexture(canvas);
+}
+
+function createSurfaceTexture(kind: 'plaster' | 'roof' | 'stone') {
+  const size = 128;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const index = (y * size + x) * 4;
+    const rawGrain = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+    const grain = rawGrain - Math.floor(rawGrain);
+    const softMottle = (Math.sin(x * .19 + y * .07) + Math.cos(y * .23 - x * .05)) * .5;
+    const plaster = 239 + Math.round(softMottle * 4 + grain * 9) - (grain > .975 ? 13 : 0);
+
+    const roofMortar = y % 18 <= 1 || (x + (Math.floor(y / 18) % 2) * 11) % 28 <= 1;
+    const roof = roofMortar ? 220 : 241 + Math.round(softMottle * 3 + grain * 9);
+
+    const stoneRow = Math.floor(y / 24);
+    const stoneX = (x + (stoneRow % 2) * 16) % 32;
+    const stoneMortar = y % 24 <= 1 || stoneX <= 1;
+    const stone = stoneMortar ? 211 + Math.round(grain * 5) : 237 + Math.round(softMottle * 4 + grain * 10);
+    const value = kind === 'roof' ? roof : kind === 'stone' ? stone : plaster;
+    data[index] = data[index + 1] = data[index + 2] = value;
+    data[index + 3] = 255;
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  const repeat = kind === 'roof' ? 1.8 : kind === 'stone' ? 1.15 : 1.35;
+  texture.repeat.set(repeat, repeat);
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
 }
 
 function createSignAtlas() {
@@ -135,8 +172,11 @@ export class CityRenderer {
   private readonly wallMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly colorMaterials = new Map<number, THREE.MeshStandardMaterial>();
-  private readonly wallVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92 });
-  private readonly roofVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .82 });
+  private readonly plasterTexture = createSurfaceTexture('plaster');
+  private readonly roofTexture = createSurfaceTexture('roof');
+  private readonly stoneTexture = createSurfaceTexture('stone');
+  private readonly wallVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.plasterTexture, bumpMap: this.plasterTexture, bumpScale: .028, roughness: .92, roughnessMap: this.plasterTexture });
+  private readonly roofVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.roofTexture, bumpMap: this.roofTexture, bumpScale: .035, roughness: .82, roughnessMap: this.roofTexture });
   private readonly accentVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92, side: THREE.DoubleSide });
   private readonly seed: number;
   private rainIntensity = 0;
@@ -144,8 +184,8 @@ export class CityRenderer {
   private readonly wetTint = new THREE.Color(0x355c5b);
   private discoveryGlow: { mesh: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>; startedAt: number } | null = null;
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
-  private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, roughness: 1 });
-  private readonly stoneDark = new THREE.MeshStandardMaterial({ color: 0x786f63, roughness: 1 });
+  private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .045, roughness: 1, roughnessMap: this.stoneTexture });
+  private readonly stoneDark = new THREE.MeshStandardMaterial({ color: 0x786f63, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
   private readonly window = new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 });
   private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
   private readonly green = new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 });
@@ -510,7 +550,7 @@ export class CityRenderer {
     const neighbors = CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz));
     const count = neighbors.filter(Boolean).length;
     const court = roofCourtFeature(cell, this.cells);
-    const terrace = steppedTerrace(cell, this.cells);
+    const terrace = walkableSteppedTerrace(cell, this.cells);
     const arcade = arcadeFeature(cell, this.cells);
     if (court) return court;
     if (terrace) return terrace.feature;
@@ -748,7 +788,12 @@ export class CityRenderer {
     const roof = this.cachedMaterial(this.roofMaterials, roofColor, .82);
     const courtAnchor = roofCourtAnchor(cell, this.cells);
     const courtFeature = roofCourtFeature(cell, this.cells);
-    const terrace = steppedTerrace(cell, this.cells);
+    const terrace = walkableSteppedTerrace(cell, this.cells);
+    const receivesTerrace = CARDINALS.some(([dx, dz], direction) => {
+      const higher = this.get(cell.x + dx, cell.z + dz);
+      return higher?.height === cell.height + 1
+        && walkableSteppedTerrace(higher, this.cells)?.direction === (direction + 2) % 4;
+    });
     const arcade = arcadeFeature(cell, this.cells);
     group.userData.foundedAt = cell.foundedAt ?? 0;
     group.userData.renovatedAt = cell.renovatedAt ?? cell.foundedAt ?? 0;
@@ -799,13 +844,14 @@ export class CityRenderer {
       group.add(roofDeck);
       for (let dir = 0; dir < 4; dir++) {
         if (neighborHeights[dir] >= cell.height) continue;
+        if (terrace?.direction === dir) continue;
         const parapet = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .12 : CELL * .9, .28, dir % 2 ? CELL * .9 : .12), this.cream));
         const [px, pz] = this.edgePosition(dir as Direction, CELL * .42);
         parapet.position.set(px, topY + .22, pz);
         group.add(parapet);
       }
-      if (count === 4 || (count >= 2 && diagonalCount >= 3)) this.addRoofGarden(group, topY + .2, cell);
-      else if (cell.height >= 2 && hash(this.seed, cell.x, cell.z, 146) > .5) this.addWaterTank(group, topY + .18);
+      if (!receivesTerrace && (count === 4 || (count >= 2 && diagonalCount >= 3))) this.addRoofGarden(group, topY + .2, cell);
+      else if (!receivesTerrace && cell.height >= 2 && hash(this.seed, cell.x, cell.z, 146) > .5) this.addWaterTank(group, topY + .18);
     }
 
     if (courtAnchor && courtFeature && courtAnchor.x === cell.x && courtAnchor.z === cell.z) this.addRoofCourt(group, topY, courtFeature);
@@ -816,7 +862,7 @@ export class CityRenderer {
       if (accessDirection !== null) this.addRoofAccess(group, topY, accessDirection);
     }
     if ((count === 2 && this.isCorner(neighborHeights)) || (cell.height >= 2 && count <= 1)) this.addBalcony(group, cell, topY);
-    if (this.discoveries.has('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
+    if (!receivesTerrace && this.discoveries.has('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
     if (this.discoveries.has('festival-ribbons') && hash(this.seed, cell.x, cell.z, 1920) > .55) this.addFestivalRibbon(group, cell, topY);
     if (this.discoveries.has('lantern-finale') && count > 0 && hash(this.seed, cell.x, cell.z, 1930) > .46) this.addFinaleLanterns(group, cell, topY);
     this.addPatina(group, cell, neighborHeights, count);
@@ -1226,7 +1272,15 @@ export class CityRenderer {
   private cachedMaterial(cache: Map<number, THREE.MeshStandardMaterial>, color: number, roughness: number) {
     let material = cache.get(color);
     if (!material) {
-      material = new THREE.MeshStandardMaterial({ color, roughness });
+      const texture = cache === this.wallMaterials ? this.plasterTexture : cache === this.roofMaterials ? this.roofTexture : null;
+      material = new THREE.MeshStandardMaterial({
+        color,
+        roughness,
+        map: texture,
+        roughnessMap: texture,
+        bumpMap: texture,
+        bumpScale: cache === this.wallMaterials ? .028 : cache === this.roofMaterials ? .035 : 0,
+      });
       material.userData.vertexBatchColor = color;
       material.userData.vertexBatchMaterial = cache === this.wallMaterials
         ? this.wallVertexMaterial
@@ -1239,6 +1293,8 @@ export class CityRenderer {
   }
 
   private addWaterEdges(group: THREE.Group, cell: Cell, heights: number[]) {
+    const entranceDirection = this.doorDirection(cell);
+    const hasBusinessEntrance = this.businesses.has(keyOf(cell.x, cell.z));
     heights.forEach((height, index) => {
       if (height > 0) return;
       const dir = index as Direction;
@@ -1258,15 +1314,20 @@ export class CityRenderer {
           post.position.set(dock.position.x + (dir % 2 === 0 ? side * .28 : 0), .06, dock.position.z + (dir % 2 ? side * .28 : 0));
           group.add(post);
         }
-      } else if (hasWaterStairs(cell, dir, this.seed)) {
-        for (let step = 0; step < 3; step++) {
+      } else if (!hasBusinessEntrance && dir === entranceDirection && hasWaterStairs(cell, dir, this.seed)) {
+        // Water stairs belong to the entrance façade. Generating them on any
+        // exposed edge made them terminate below windows or cut through shop
+        // displays, which read as badly attached building stairs.
+        const stepCount = 4;
+        for (let step = 0; step < stepCount; step++) {
           const stair = shadow(new THREE.Mesh(
-            new THREE.BoxGeometry(dir % 2 ? .62 : .32, .1, dir % 2 ? .32 : .62),
+            new THREE.BoxGeometry(dir % 2 ? .4 : .68, .1, dir % 2 ? .68 : .4),
             this.stone,
           ));
-          stair.position.set(dx * (CELL * .59 + step * .25), -.02 - step * .09, dz * (CELL * .59 + step * .25));
+          stair.position.set(dx * (CELL * .59 + step * .29), .02 - step * .1, dz * (CELL * .59 + step * .29));
           group.add(stair);
         }
+        group.userData.waterStairDirection = dir;
       }
     });
   }
@@ -1387,24 +1448,26 @@ export class CityRenderer {
   private addSteppedTerrace(group: THREE.Group, dir: Direction, y: number, feature: TerraceFeature) {
     const [dx, dz] = CARDINALS[dir];
     const lateral = new THREE.Vector3(dz, 0, -dx);
-    for (let index = 0; index < 6; index++) {
-      const step = this.orientedBox(.82, .12, .34, dir, this.stone);
-      const outward = .48 + index * .25;
-      step.position.set(dx * outward, y - index * .21, dz * outward);
+    for (let index = 0; index < TERRACE_STEP_COUNT; index++) {
+      const step = this.orientedBox(.82, TERRACE_STEP_HEIGHT, .34, dir, this.stone);
+      const outward = terraceStepOutward(index);
+      step.position.set(dx * outward, terraceStepWalkY(y, index) - TERRACE_STEP_HEIGHT / 2, dz * outward);
       group.add(step);
     }
+    const topLandingY = terraceStepWalkY(y, 0);
+    const topLandingOutward = terraceStepOutward(0) - .12;
     for (const side of [-.58, .58]) {
       const pot = new THREE.Mesh(new THREE.CylinderGeometry(.1, .14, .2, 7), this.wood);
-      pot.position.set(dx * .45 + lateral.x * side, y + .27, dz * .45 + lateral.z * side);
+      pot.position.set(dx * topLandingOutward + lateral.x * side, topLandingY + .1, dz * topLandingOutward + lateral.z * side);
       const plant = new THREE.Mesh(new THREE.IcosahedronGeometry(.14, 0), this.green);
-      plant.position.set(pot.position.x, y + .46, pot.position.z);
+      plant.position.set(pot.position.x, topLandingY + .29, pot.position.z);
       group.add(pot, plant);
     }
     if (feature !== 'stepped terrace') {
-      for (let index = 1; index < 6; index += 2) {
-        const outward = .48 + index * .25;
+      for (let index = 1; index < TERRACE_STEP_COUNT; index += 2) {
+        const outward = terraceStepOutward(index);
         const planter = new THREE.Mesh(new THREE.CylinderGeometry(.08, .11, .16, 7), this.wood);
-        planter.position.set(dx * outward + lateral.x * .34, y - index * .21 + .14, dz * outward + lateral.z * .34);
+        planter.position.set(dx * outward + lateral.x * .34, terraceStepWalkY(y, index) + .08, dz * outward + lateral.z * .34);
         const flower = new THREE.Mesh(new THREE.IcosahedronGeometry(.12, 0), index % 4 ? this.green : this.blossom);
         flower.position.copy(planter.position).setY(planter.position.y + .17);
         group.add(planter, flower);
@@ -1413,13 +1476,14 @@ export class CityRenderer {
     if (feature === 'lantern stair') {
       for (const side of [-.5, .5]) {
         const pole = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, .72, 6), this.metal), false);
-        pole.position.set(dx * .72 + lateral.x * side, y + .42, dz * .72 + lateral.z * side);
+        pole.position.set(dx * topLandingOutward + lateral.x * side, topLandingY + .36, dz * topLandingOutward + lateral.z * side);
         const lantern = new THREE.Mesh(new THREE.SphereGeometry(.1, 8, 6), this.warmLight);
         lantern.scale.y = 1.35;
-        lantern.position.copy(pole.position).setY(y + .78);
+        lantern.position.copy(pole.position).setY(topLandingY + .72);
         group.add(pole, lantern);
       }
     }
+    group.userData.terraceDirection = dir;
   }
 
   private addArcadeRow(group: THREE.Group, heights: number[], y: number, promenade: boolean) {
@@ -1806,7 +1870,7 @@ export class CityRenderer {
     const high = feature !== 'sea arch';
     const covered = feature === 'covered skybridge' || feature === 'lantern gate';
     const grand = feature === 'lantern gate';
-    const y = high ? FLOOR * 2.28 : FLOOR * 1.42;
+    const y = high ? HIGH_CROSSING_SPAN_Y : FLOOR * 1.42;
     const walls = this.cachedMaterial(this.wallMaterials, pick(WALL_COLORS, hash(this.seed, x, z, 500)), .9);
     const span = shadow(new THREE.Mesh(new RoundedBoxGeometry(northSouth ? 1.25 : CELL * 1.08, .58, northSouth ? CELL * 1.08 : 1.25, 4, .16), walls));
     span.position.y = y;
@@ -1825,24 +1889,25 @@ export class CityRenderer {
         rail.position.set(northSouth ? side * .55 : 0, y + .52, northSouth ? 0 : side * .55);
         group.add(rail);
       }
-      const deckY = y + .34;
-      const ladderHeight = deckY - .27;
+      const ladderHeight = HIGH_CROSSING_WALK_Y - GROUND_WALK_Y;
+      const ladderCenterY = (HIGH_CROSSING_WALK_Y + GROUND_WALK_Y) / 2;
+      const rungCount = Math.ceil(ladderHeight / .26);
       for (const end of [-1, 1]) {
         for (const side of [-1, 1]) {
           const upright = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, ladderHeight, 6), this.metal), false);
           upright.position.set(
-            northSouth ? side * .18 : end * (CELL - (CELL / 2 + .24)),
-            .27 + ladderHeight / 2,
-            northSouth ? end * (CELL - (CELL / 2 + .24)) : side * .18,
+            northSouth ? side * .18 : end * (CELL - QUAY_PATH_OFFSET),
+            ladderCenterY,
+            northSouth ? end * (CELL - QUAY_PATH_OFFSET) : side * .18,
           );
           group.add(upright);
         }
-        for (let rung = 0; rung < 8; rung++) {
+        for (let rung = 0; rung < rungCount; rung++) {
           const step = shadow(new THREE.Mesh(new THREE.BoxGeometry(northSouth ? .42 : .045, .035, northSouth ? .045 : .42), this.wood), false);
           step.position.set(
-            northSouth ? 0 : end * (CELL - (CELL / 2 + .24)),
-            .48 + rung * (ladderHeight - .35) / 7,
-            northSouth ? end * (CELL - (CELL / 2 + .24)) : 0,
+            northSouth ? 0 : end * (CELL - QUAY_PATH_OFFSET),
+            THREE.MathUtils.lerp(GROUND_WALK_Y + .12, HIGH_CROSSING_WALK_Y - .08, rung / (rungCount - 1)),
+            northSouth ? end * (CELL - QUAY_PATH_OFFSET) : 0,
           );
           group.add(step);
         }

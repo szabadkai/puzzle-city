@@ -167,7 +167,7 @@ export class CityRenderer {
     depthWrite: false,
   });
   private readonly smokePoints = new THREE.Points(this.smokeGeometry, this.smokeMaterial);
-  private smokeAnchors: Array<{ x: number; y: number; z: number; phase: number; index: number }> = [];
+  private smokeAnchors: Array<{ x: number; y: number; z: number; phase: number; index: number; use: BusinessType | 'home' }> = [];
   private readonly signAtlas = createSignAtlas();
   private readonly wallMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
@@ -284,6 +284,7 @@ export class CityRenderer {
     mesh.rotation.x = Math.PI / 2;
     mesh.position.set(x * CELL, cell ? .5 + cell.height * FLOOR : .42, z * CELL);
     mesh.renderOrder = 4;
+    mesh.userData.nonPrintable = true;
     this.root.add(mesh);
     this.discoveryGlow = { mesh, startedAt: performance.now() };
   }
@@ -416,8 +417,16 @@ export class CityRenderer {
       }
     }
     const smokePositions = this.smokeGeometry.getAttribute('position') as THREE.BufferAttribute;
+    const hour = ((absoluteHours % 24) + 24) % 24;
+    let activeSmoke = 0;
     for (let index = 0; index < this.smokeAnchors.length; index++) {
       const anchor = this.smokeAnchors[index];
+      const active = this.smokeActiveAt(anchor.use, hour);
+      if (!active) {
+        smokePositions.setXYZ(index, 0, -100, 0);
+        continue;
+      }
+      activeSmoke += 1;
       const phase = (time * .14 + anchor.phase) % 1;
       smokePositions.setXYZ(
         index,
@@ -426,6 +435,7 @@ export class CityRenderer {
         anchor.z + Math.cos(time * .43 + anchor.index) * .08 * phase,
       );
     }
+    this.smokePoints.visible = activeSmoke > 0;
     if (this.smokeAnchors.length) smokePositions.needsUpdate = true;
     if (staticBatchChanged) this.rebuildGlobalStaticBatch();
   }
@@ -754,9 +764,10 @@ export class CityRenderer {
 
   private syncSmokeSources() {
     this.smokeAnchors = [];
-    for (const group of this.pieces.values()) {
+    for (const [key, group] of this.pieces) {
       const smoke = group.getObjectByName('smoke-source');
       if (!smoke) continue;
+      const use = this.businesses.get(key)?.type ?? 'home';
       for (let index = 0; index < 3; index++) {
         this.smokeAnchors.push({
           x: group.position.x + smoke.position.x,
@@ -764,11 +775,20 @@ export class CityRenderer {
           z: group.position.z + smoke.position.z,
           phase: (index * .31 + hash(this.seed, group.position.x, group.position.z, index + 730)) % 1,
           index,
+          use,
         });
       }
     }
     this.smokeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(this.smokeAnchors.length * 3, 3));
     this.smokePoints.visible = this.smokeAnchors.length > 0;
+  }
+
+  private smokeActiveAt(use: BusinessType | 'home', hour: number) {
+    if (use === 'bakery') return hour >= 4.5 && hour < 10.5;
+    if (use === 'restaurant') return (hour >= 10.5 && hour < 14) || (hour >= 16.5 && hour < 22);
+    if (use === 'pottery' || use === 'workshop' || use === 'smokehouse') return hour >= 8 && hour < 18.5;
+    if (use === 'cafe' || use === 'tea-house') return hour >= 7.5 && hour < 20.5;
+    return (hour >= 6 && hour < 8.5) || (hour >= 17.5 && hour < 21.5);
   }
 
   private neighborHeight(cell: Cell, dir: Direction) {
@@ -865,9 +885,12 @@ export class CityRenderer {
     if (!receivesTerrace && this.discoveries.has('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
     if (this.discoveries.has('festival-ribbons') && hash(this.seed, cell.x, cell.z, 1920) > .55) this.addFestivalRibbon(group, cell, topY);
     if (this.discoveries.has('lantern-finale') && count > 0 && hash(this.seed, cell.x, cell.z, 1930) > .46) this.addFinaleLanterns(group, cell, topY);
+    const business = this.businesses.get(keyOf(cell.x, cell.z));
+    // Working ovens should be readable from across town. Their chimneys are
+    // guaranteed even when this roof would not normally roll one.
+    if ((business?.type === 'bakery' || business?.type === 'smokehouse') && !group.getObjectByName('smoke-source')) this.addChimney(group, topY + .2, -.55, .34);
     this.addPatina(group, cell, neighborHeights, count);
     this.addWaterEdges(group, cell, neighborHeights);
-    const business = this.businesses.get(keyOf(cell.x, cell.z));
     if (business) {
       this.addBusinessFacade(group, cell, business);
       if ((business.visitCount ?? 0) >= 12) this.addWornThreshold(group, cell, Math.min(4, Math.floor((business.visitCount ?? 0) / 12)));
@@ -1062,6 +1085,10 @@ export class CityRenderer {
       'tea-house': 0x768653,
       inn: 0x914858,
       pottery: 0xb36f4d,
+      mill: 0xb99a58,
+      smokehouse: 0x8d493d,
+      weaver: 0x6575a0,
+      shipyard: 0x3d686c,
     };
     const symbols: Record<BusinessType, string> = {
       bakery: 'パン',
@@ -1074,6 +1101,10 @@ export class CityRenderer {
       'tea-house': '茶屋',
       inn: '宿',
       pottery: '陶',
+      mill: '粉',
+      smokehouse: '燻',
+      weaver: '織',
+      shipyard: '船',
     };
     const accent = this.cachedMaterial(this.colorMaterials, colors[business.type], .88);
     accent.side = THREE.DoubleSide;
@@ -1097,6 +1128,10 @@ export class CityRenderer {
     if (business.type === 'tea-house') this.addTeaHouseDetails(group, dx, dz, lateral, accent);
     if (business.type === 'inn') this.addInnDetails(group, dir, dx, dz, lateral, accent);
     if (business.type === 'pottery') this.addPotteryDetails(group, dx, dz, lateral, accent);
+    if (business.type === 'mill') this.addMillDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'smokehouse') this.addSmokehouseDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'weaver') this.addWeaverDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'shipyard') this.addShipyardDetails(group, dir, dx, dz, lateral, accent);
   }
 
   private orientedBox(width: number, height: number, depth: number, dir: Direction, material: THREE.Material) {
@@ -1236,6 +1271,54 @@ export class CityRenderer {
     const wheel = new THREE.Mesh(new THREE.CylinderGeometry(.25, .25, .07, 12), this.wood);
     this.detailPosition(wheel, dx, dz, lateral, .64, 1.46, .18);
     group.add(wheel);
+  }
+
+  private addMillDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    const millstone = new THREE.Mesh(new THREE.TorusGeometry(.28, .075, 7, 14), this.stone);
+    this.detailPosition(millstone, dx, dz, lateral, .58, 1.39, .43);
+    millstone.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+    group.add(millstone);
+    for (const side of [-.66, -.36]) {
+      const sack = new THREE.Mesh(new THREE.CapsuleGeometry(.11, .2, 3, 7), side < -.5 ? this.cream : accent);
+      this.detailPosition(sack, dx, dz, lateral, side, 1.4, .22);
+      group.add(sack);
+    }
+  }
+
+  private addSmokehouseDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (const side of [-.58, 0, .58]) {
+      const fish = new THREE.Mesh(new THREE.SphereGeometry(.09, 7, 5), accent);
+      fish.scale.set(1.65, .48, .5);
+      this.detailPosition(fish, dx, dz, lateral, side, 1.42, .76);
+      fish.rotation.y = dir % 2 ? 0 : Math.PI / 2;
+      group.add(fish);
+    }
+    const rail = this.orientedBox(1.45, .06, .07, dir, this.wood);
+    this.detailPosition(rail, dx, dz, lateral, 0, 1.39, .94);
+    group.add(rail);
+  }
+
+  private addWeaverDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (let index = 0; index < 3; index++) {
+      const roll = new THREE.Mesh(new THREE.CylinderGeometry(.11, .11, .55, 8), index % 2 ? accent : this.cream);
+      this.detailPosition(roll, dx, dz, lateral, -.58 + index * .46, 1.42, .26);
+      roll.rotation.z = Math.PI / 2;
+      roll.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      group.add(roll);
+    }
+  }
+
+  private addShipyardDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (const side of [-.52, 0, .52]) {
+      const rib = new THREE.Mesh(new THREE.TorusGeometry(.28, .035, 5, 10, Math.PI), side === 0 ? accent : this.wood);
+      this.detailPosition(rib, dx, dz, lateral, side, 1.46, .35);
+      rib.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      rib.rotation.z = Math.PI;
+      group.add(rib);
+    }
+    const keel = this.orientedBox(1.45, .07, .09, dir, this.wood);
+    this.detailPosition(keel, dx, dz, lateral, 0, 1.43, .18);
+    group.add(keel);
   }
 
   private addAirConditioner(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, y: number) {

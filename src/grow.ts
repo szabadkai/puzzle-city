@@ -99,6 +99,7 @@ type SnapshotInput = {
 const BUSINESS_TYPES: readonly BusinessType[] = [
   'bakery', 'cafe', 'flower-shop', 'workshop', 'bookstore',
   'fishmonger', 'restaurant', 'tea-house', 'inn', 'pottery',
+  'mill', 'smokehouse', 'weaver', 'shipyard',
 ];
 
 export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
@@ -242,6 +243,7 @@ type ConditionProgress = { value: number; hint: string };
 const BUSINESS_LABELS: Record<BusinessType, string> = {
   bakery: 'bakery', cafe: 'café', 'flower-shop': 'flower shop', workshop: 'workshop', bookstore: 'bookstore',
   fishmonger: 'fishmonger', restaurant: 'restaurant', 'tea-house': 'tea house', inn: 'inn', pottery: 'pottery studio',
+  mill: 'mill', smokehouse: 'smokehouse', weaver: 'weaver', shipyard: 'shipyard',
 };
 
 function countBusinesses(condition: Extract<DiscoveryCondition, { kind: 'business' }>, snapshot: WorldSnapshot) {

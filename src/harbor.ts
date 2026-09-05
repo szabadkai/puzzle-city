@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BusinessSave, Cell, CitizenSave } from './types';
 import { hash } from './random';
 import { analyzeWaterTopology, createShorelineRoute, WORLD_CELL_SIZE, type WaterTopology } from './water';
-import { FaunaSystem, type CatMemoryInspection, type WildlifeAction, type WildlifeKind } from './fauna';
+import { FaunaSystem, type WildlifeAction, type WildlifeKind, type WildlifeMemoryInspection } from './fauna';
 
 export function createWaterRoute(cells: Iterable<Cell>, seed: number, lane = 0) {
   return createShorelineRoute(cells, seed, lane);
@@ -49,6 +49,7 @@ type BoatActor = {
   phase: number;
   speed: number;
   bobSpeed: number;
+  eligible: boolean;
 };
 
 export class HarborAmbience {
@@ -139,8 +140,8 @@ export class HarborAmbience {
 
   wildlifeStats() { return this.fauna.stats(); }
 
-  catMemoryFromObject(object: THREE.Object3D | null, absoluteHours: number, colonyFoundedAt?: number): CatMemoryInspection | null {
-    return this.fauna.catMemoryFromObject(object, absoluteHours, colonyFoundedAt);
+  wildlifeMemoryFromObject(object: THREE.Object3D | null, absoluteHours: number, colonyFoundedAt?: number, instanceId?: number): WildlifeMemoryInspection | null {
+    return this.fauna.wildlifeMemoryFromObject(object, absoluteHours, colonyFoundedAt, instanceId);
   }
 
   wildlifeEffect(action: WildlifeAction, animal: WildlifeKind, focus?: { x: number; z: number } | null) {
@@ -151,6 +152,7 @@ export class HarborAmbience {
 
   update(time: number, daylight: number, timeOfDay: number, absoluteHours: number, catColonyFoundedAt?: number, rainIntensity = 0) {
     for (const boat of this.fleet) {
+      boat.model.visible = boat.eligible && this.boatOnShift(boat.kind, timeOfDay);
       if (!boat.model.visible) continue;
       const progress = (time * boat.speed + boat.phase) % 1;
       const point = boat.route.getPointAt(progress);
@@ -161,6 +163,7 @@ export class HarborAmbience {
       // by a quarter turn. Without this, the fleet travels broadside along its route.
       boat.model.rotation.y = Math.atan2(tangent.x, tangent.z) - Math.PI / 2;
       boat.model.rotation.z = Math.sin(time * boat.bobSpeed * .78 + boat.phase * 5) * .028;
+      if (boat.kind === 'fishing boat') this.updateFishingWork(boat, time, timeOfDay);
     }
     this.fauna.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, rainIntensity);
     this.clouds.position.x = Math.sin(time * .018) * 2.5;
@@ -215,10 +218,10 @@ export class HarborAmbience {
     const merchantBoat = this.createMerchantBoat();
     const ferry = this.createFerry();
     this.fleet.push(
-      { kind: 'rowboat', model: rowboat, route: emptyRoute, phase: .08, speed: .012, bobSpeed: 1.15 },
-      { kind: 'fishing boat', model: fishingBoat, route: emptyRoute, phase: .42, speed: .009, bobSpeed: 1.4 },
-      { kind: 'merchant boat', model: merchantBoat, route: emptyRoute, phase: .68, speed: .0065, bobSpeed: 1.05 },
-      { kind: 'ferry', model: ferry, route: emptyRoute, phase: .87, speed: .0075, bobSpeed: .92 },
+      { kind: 'rowboat', model: rowboat, route: emptyRoute, phase: .08, speed: .012, bobSpeed: 1.15, eligible: false },
+      { kind: 'fishing boat', model: fishingBoat, route: emptyRoute, phase: .42, speed: .009, bobSpeed: 1.4, eligible: false },
+      { kind: 'merchant boat', model: merchantBoat, route: emptyRoute, phase: .68, speed: .0065, bobSpeed: 1.05, eligible: false },
+      { kind: 'ferry', model: ferry, route: emptyRoute, phase: .87, speed: .0075, bobSpeed: .92, eligible: false },
     );
     for (const boat of this.fleet) {
       boat.model.name = boat.kind.replaceAll(' ', '-');
@@ -233,11 +236,40 @@ export class HarborAmbience {
     const hasInn = this.businesses.some((business) => business.type === 'inn');
     const hasFisher = this.citizens.some((citizen) => citizen.occupation === 'Fisher');
     for (const boat of this.fleet) {
-      if (boat.kind === 'rowboat') boat.model.visible = this.cells.length > 0;
-      if (boat.kind === 'fishing boat') boat.model.visible = hasDock && hasFisher && this.discoveries.has('fishing-boat');
-      if (boat.kind === 'merchant boat') boat.model.visible = hasDock && this.discoveries.has('merchant-arrival');
-      if (boat.kind === 'ferry') boat.model.visible = hasDock && hasInn && this.discoveries.has('ferry-route');
+      if (boat.kind === 'rowboat') boat.eligible = this.cells.length > 0;
+      if (boat.kind === 'fishing boat') boat.eligible = hasDock && hasFisher && this.discoveries.has('fishing-boat');
+      if (boat.kind === 'merchant boat') boat.eligible = hasDock && this.discoveries.has('merchant-arrival');
+      if (boat.kind === 'ferry') boat.eligible = hasDock && hasInn && this.discoveries.has('ferry-route');
+      boat.model.visible = boat.eligible;
     }
+  }
+
+  private boatOnShift(kind: BoatKind, hour: number) {
+    if (this.discoveries.has('lantern-finale') && hour >= 19 && hour < 23) return true;
+    if (kind === 'fishing boat') return (hour >= 4.5 && hour < 11.5) || (hour >= 15.5 && hour < 18.5);
+    if (kind === 'merchant boat') return hour >= 8 && hour < 18.5;
+    if (kind === 'ferry') return hour >= 6 && hour < 23;
+    return hour >= 6.5 && hour < 20.5;
+  }
+
+  private updateFishingWork(boat: BoatActor, time: number, hour: number) {
+    const net = boat.model.getObjectByName('cast-net');
+    const fisher = boat.model.getObjectByName('fishing-skipper');
+    if (!net) return;
+    const working = hour >= 5.25 && hour < 10.75;
+    const cast = (time * .09 + boat.phase) % 1;
+    const active = working && cast < .52;
+    net.visible = active;
+    if (!active) {
+      if (fisher) fisher.rotation.x = 0;
+      return;
+    }
+    const progress = cast / .52;
+    const reach = Math.sin(progress * Math.PI);
+    net.scale.setScalar(.12 + reach * .98);
+    net.position.set(.08, .2 + reach * .38, .34 + reach * .88);
+    net.rotation.y = progress * .7;
+    if (fisher) fisher.rotation.x = -.08 - reach * .2;
   }
 
   private createFishingBoat() {
@@ -255,10 +287,33 @@ export class HarborAmbience {
     ]), sailMaterial);
     const canopy = new THREE.Mesh(new THREE.BoxGeometry(.45, .05, .34), new THREE.MeshStandardMaterial({ color: 0xd7b260, roughness: 1 }));
     canopy.position.set(-.22, .28, 0);
-    const nets = new THREE.Mesh(new THREE.TorusGeometry(.2, .025, 5, 12), new THREE.MeshStandardMaterial({ color: 0xbfae83, roughness: 1 }));
+    const netMaterial = new THREE.MeshStandardMaterial({ color: 0xbfae83, roughness: 1 });
+    const nets = new THREE.Mesh(new THREE.TorusGeometry(.2, .025, 5, 12), netMaterial);
     nets.position.set(-.35, .18, .22);
     nets.rotation.x = Math.PI / 2;
-    boat.add(hull, mast, sail, canopy, nets);
+
+    const castNet = new THREE.Group();
+    castNet.name = 'cast-net';
+    const net = new THREE.Mesh(
+      new THREE.ConeGeometry(.5, .16, 12, 2, true),
+      new THREE.MeshBasicMaterial({ color: 0xd8c89d, wireframe: true, transparent: true, opacity: .62, depthWrite: false }),
+    );
+    net.rotation.x = Math.PI / 2;
+    castNet.add(net);
+    castNet.visible = false;
+
+    const fisher = new THREE.Group();
+    fisher.name = 'fishing-skipper';
+    fisher.position.set(.14, .24, -.03);
+    const fisherBody = new THREE.Mesh(new THREE.CapsuleGeometry(.055, .12, 2, 6), new THREE.MeshStandardMaterial({ color: 0x456f73, roughness: 1 }));
+    fisherBody.position.y = .12;
+    const fisherHead = new THREE.Mesh(new THREE.SphereGeometry(.055, 7, 5), new THREE.MeshStandardMaterial({ color: 0xd7a17a, roughness: 1 }));
+    fisherHead.position.y = .25;
+    const fisherHat = new THREE.Mesh(new THREE.ConeGeometry(.12, .05, 10), new THREE.MeshStandardMaterial({ color: 0xcaa35f, roughness: 1 }));
+    fisherHat.position.y = .31;
+    fisher.add(fisherBody, fisherHead, fisherHat);
+
+    boat.add(hull, mast, sail, canopy, nets, castNet, fisher);
     return consolidateModel(boat);
   }
 

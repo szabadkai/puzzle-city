@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { businessLabel, businessOccupation, isBusinessOpen } from './businesses';
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenSave, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenSave, type CraftGood, keyOf } from './types';
 import { hash, pick } from './random';
 import { findPlazaAnchors } from './topology';
 import {
@@ -10,6 +10,7 @@ import {
   CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_WALK_Y, QUAY_PATH_OFFSET,
   TERRACE_STEP_COUNT, terraceStepOutward, terraceStepWalkY, roofWalkY,
 } from './spatial';
+import { hasDock } from './water';
 
 const CELL = CELL_SIZE;
 const FLOOR = FLOOR_HEIGHT;
@@ -42,6 +43,7 @@ type Citizen = CitizenSave & {
   nextDecisionAt: number;
   activity: string;
   stepPhase: number;
+  carryingGood: CraftGood | null;
 };
 
 export type CitizenCard = {
@@ -70,6 +72,7 @@ export class NavGraph {
   readonly nodes = new Map<string, NavNode>();
   readonly entrances = new Map<string, string>();
   readonly plazas: string[] = [];
+  readonly docks: string[] = [];
   readonly rooftops = new Map<string, string>();
   private readonly cells: Map<string, Cell>;
   private readonly seed: number;
@@ -114,6 +117,7 @@ export class NavGraph {
         const a = this.addNode(centerX + lx * EDGE, centerZ + lz * EDGE);
         const middle = this.addNode(centerX, centerZ);
         const b = this.addNode(centerX - lx * EDGE, centerZ - lz * EDGE);
+        if (hasDock(cell, dir, this.seed)) this.docks.push(middle);
         sides[dir] = { a, b };
         this.connect(a, middle);
         this.connect(middle, b);
@@ -295,6 +299,12 @@ export class NavGraph {
     return this.nodes.get(options[Math.floor(value * options.length) % options.length]);
   }
 
+  dockNode(value: number, from: string) {
+    const options = this.docks.filter((key) => this.canReach(from, key));
+    if (!options.length) return undefined;
+    return this.nodes.get(options[Math.floor(value * options.length) % options.length]);
+  }
+
   rooftopNode(value: number, from: string) {
     const reachable = new Set<string>();
     const pending = [from];
@@ -413,12 +423,16 @@ export class CitizenSystem {
   private readonly hairGeometry = new THREE.SphereGeometry(.094, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
   private readonly legGeometry = new THREE.CylinderGeometry(.022, .027, .17, 6);
   private readonly hatGeometry = new THREE.ConeGeometry(.145, .065, 12);
+  private readonly cargoGeometry = new THREE.BoxGeometry(.2, .16, .18);
+  private readonly cargoMaterial = new THREE.MeshStandardMaterial({ color: 0xc49a58, roughness: 1 });
   private readonly bodyInstances: THREE.InstancedMesh[];
   private readonly headInstances: THREE.InstancedMesh;
   private readonly hairInstances: THREE.InstancedMesh;
   private readonly legInstances: THREE.InstancedMesh;
   private readonly hatInstances: THREE.InstancedMesh;
+  private readonly cargoInstances: THREE.InstancedMesh;
   private readonly renderMatrix = new THREE.Matrix4();
+  private readonly cargoTransform = new THREE.Object3D();
 
   constructor(seed: number, cells: Map<string, Cell>, saved: CitizenSave[]) {
     this.seed = seed;
@@ -431,7 +445,9 @@ export class CitizenSystem {
     this.hairInstances = this.createInstanceBatch(this.hairGeometry, this.darkMaterial, 'citizen-hair');
     this.legInstances = this.createInstanceBatch(this.legGeometry, this.darkMaterial, 'citizen-legs');
     this.hatInstances = this.createInstanceBatch(this.hatGeometry, this.hatMaterial, 'citizen-hats');
-    this.renderRoot.add(...this.bodyInstances, this.headInstances, this.hairInstances, this.legInstances, this.hatInstances);
+    this.cargoInstances = this.createInstanceBatch(this.cargoGeometry, this.cargoMaterial, 'citizen-cargo');
+    this.cargoTransform.position.set(.14, .35, 0);
+    this.renderRoot.add(...this.bodyInstances, this.headInstances, this.hairInstances, this.legInstances, this.hatInstances, this.cargoInstances);
     this.debugRoot.name = 'citizen-navigation';
     this.debugRoot.visible = false;
     this.root.add(this.renderRoot, this.debugRoot);
@@ -611,6 +627,7 @@ export class CitizenSystem {
       nextDecisionAt: 0,
       activity: movingIn ? 'moving in' : 'watching the tide',
       stepPhase: hash(this.seed, this.citizens.length, 0, 906) * Math.PI * 2,
+      carryingGood: null,
     });
   }
 
@@ -693,6 +710,7 @@ export class CitizenSystem {
     let hairs = 0;
     let legs = 0;
     let hats = 0;
+    let cargo = 0;
     for (const citizen of this.citizens.slice(0, MAX_RENDERED_CITIZENS)) {
       const color = citizen.color % this.bodyInstances.length;
       this.setActorPart(this.bodyInstances[color], bodyCounts[color]++, citizen.model, citizen.body);
@@ -701,12 +719,13 @@ export class CitizenSystem {
       this.setActorPart(this.legInstances, legs++, citizen.model, citizen.leftLeg);
       this.setActorPart(this.legInstances, legs++, citizen.model, citizen.rightLeg);
       if (citizen.hat) this.setActorPart(this.hatInstances, hats++, citizen.model, citizen.hat);
+      if (citizen.carryingGood) this.setActorPart(this.cargoInstances, cargo++, citizen.model, this.cargoTransform);
     }
     this.bodyInstances.forEach((batch, index) => {
       batch.count = bodyCounts[index];
       if (batch.count) batch.instanceMatrix.needsUpdate = true;
     });
-    for (const [batch, count] of [[this.headInstances, heads], [this.hairInstances, hairs], [this.legInstances, legs], [this.hatInstances, hats]] as const) {
+    for (const [batch, count] of [[this.headInstances, heads], [this.hairInstances, hairs], [this.legInstances, legs], [this.hatInstances, hats], [this.cargoInstances, cargo]] as const) {
       batch.count = count;
       if (count) batch.instanceMatrix.needsUpdate = true;
     }
@@ -719,7 +738,7 @@ export class CitizenSystem {
     let target = home;
     const choice = hash(this.seed, Math.floor(absoluteHours * 4), this.citizens.indexOf(citizen), 1001);
     const businessVisit = this.chooseBusinessVisit(citizen, hour, choice, from.key);
-    const rooftopChance = citizen.occupation === 'Gardener' ? .62 : citizen.ageGroup === 'elder' ? .4 : .3;
+    const rooftopChance = citizen.occupation === 'Fisher' ? 0 : citizen.occupation === 'Gardener' ? .62 : citizen.ageGroup === 'elder' ? .4 : .3;
     const rooftop = hour >= 7 && hour < 21 && (citizen.ageGroup !== 'child' || hour >= 15) && choice < rooftopChance
       ? this.graph.rooftopNode((choice * 3.17 + this.citizens.indexOf(citizen) * .137) % 1, from.key)
       : undefined;
@@ -743,18 +762,18 @@ export class CitizenSystem {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
         target = businessVisit.target;
       } else {
-        citizen.activity = citizen.occupation === 'Fisher'
-          ? this.discoveries.has('silver-shoal') ? 'following the silver shoal toward the nets' : 'checking the morning tide'
-          : 'taking an early walk';
-        target = this.graph.randomNode(choice, from.key, (node) => Math.hypot(node.position.x, node.position.z) > 2);
+        const morningWork = this.professionRoutine(citizen, hour, choice, from.key);
+        citizen.activity = morningWork?.activity ?? 'taking an early walk';
+        target = morningWork?.target ?? this.graph.randomNode(choice, from.key, (node) => Math.hypot(node.position.x, node.position.z) > 2);
       }
     } else if (hour < 12) {
       if (businessVisit && choice > .35) {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
         target = businessVisit.target;
       } else {
-        citizen.activity = `working as a ${citizen.occupation.toLowerCase()}`;
-        target = this.graph.randomNode(choice, from.key);
+        const work = this.professionRoutine(citizen, hour, choice, from.key);
+        citizen.activity = work?.activity ?? `working as a ${citizen.occupation.toLowerCase()}`;
+        target = work?.target ?? this.graph.randomNode(choice, from.key);
       }
     } else if (hour < 14) {
       const plaza = choice < .34 ? this.graph.plazaNode(choice * 2.7, from.key) : undefined;
@@ -795,15 +814,56 @@ export class CitizenSystem {
     citizen.nextDecisionAt = absoluteHours + .35 + choice * .65;
   }
 
+  private professionRoutine(citizen: Citizen, hour: number, choice: number, from: string) {
+    if (citizen.occupation === 'Fisher') {
+      const target = this.graph.dockNode(choice, from) ?? this.graph.randomNode(choice, from);
+      const activity = hour < 6
+        ? 'carrying the nets down to the morning boat'
+        : hour < 9
+          ? this.discoveries.has('silver-shoal') ? 'watching the boat cast its net over the silver shoal' : 'sorting the morning catch beside the boat'
+          : 'mending nets along the quay';
+      return target ? { target, activity } : null;
+    }
+    if (citizen.occupation === 'Gardener') {
+      const target = this.graph.rooftopNode(choice, from) ?? this.graph.plazaNode(choice, from) ?? this.graph.randomNode(choice, from);
+      return target ? { target, activity: this.graph.rooftopLabel(target.key) ? 'watering the rooftop planters' : 'tending the public flowers' } : null;
+    }
+    if (citizen.occupation === 'Teacher') {
+      const target = this.graph.plazaNode(choice, from) ?? this.graph.randomNode(choice, from);
+      return target ? { target, activity: hour < 9 ? 'walking to lessons with the children' : 'holding a small lesson in the open air' } : null;
+    }
+    if (citizen.occupation === 'Cartographer') {
+      const target = this.graph.rooftopNode(choice, from) ?? this.graph.dockNode(choice, from) ?? this.graph.randomNode(choice, from);
+      return target ? { target, activity: this.graph.rooftopLabel(target.key) ? 'sketching the harbor from above' : 'measuring the tide against the quay' } : null;
+    }
+    if (citizen.occupation === 'Bookbinder') {
+      const bookstore = this.businesses.find((business) => business.type === 'bookstore');
+      const entrance = bookstore ? this.graph.entrance(bookstore.cellKey) : undefined;
+      const target = entrance && this.graph.canReach(from, entrance.key) ? entrance : this.graph.randomNode(choice, from);
+      return target ? { target, activity: bookstore ? 'delivering a newly bound book' : 'carrying a parcel of stitched pages' } : null;
+    }
+    if (citizen.occupation === 'Caretaker') {
+      const target = this.graph.randomNode(choice, from);
+      return target ? { target, activity: hour < 9 ? 'opening shutters along the lane' : 'checking the lamps and doorways' } : null;
+    }
+    if (citizen.occupation === 'Cook') {
+      const market = this.businesses.find((business) => business.type === 'fishmonger' || business.type === 'flower-shop');
+      const entrance = market ? this.graph.entrance(market.cellKey) : undefined;
+      const target = entrance && this.graph.canReach(from, entrance.key) ? entrance : this.graph.randomNode(choice, from);
+      return target ? { target, activity: market ? 'choosing ingredients for the midday kitchen' : 'bringing a basket back to the kitchen' } : null;
+    }
+    return null;
+  }
+
   private chooseBusinessVisit(citizen: Citizen, hour: number, choice: number, from: string) {
     const open = this.businesses.filter((business) => isBusinessOpen(business.type, hour));
     const owned = open.find((business) => business.ownerId === citizen.id);
     const preferredTypes: BusinessType[] = hour < 9
       ? ['bakery', 'fishmonger', 'flower-shop']
       : hour < 15
-        ? ['cafe', 'tea-house', 'bakery', 'flower-shop', 'bookstore', 'fishmonger', 'workshop', 'pottery', 'restaurant']
+        ? ['cafe', 'tea-house', 'bakery', 'flower-shop', 'bookstore', 'fishmonger', 'workshop', 'pottery', 'mill', 'smokehouse', 'weaver', 'shipyard', 'restaurant']
         : hour < 19
-          ? ['workshop', 'pottery', 'flower-shop', 'bookstore', 'cafe', 'tea-house', 'restaurant', 'inn']
+          ? ['workshop', 'pottery', 'smokehouse', 'weaver', 'shipyard', 'flower-shop', 'bookstore', 'cafe', 'tea-house', 'restaurant', 'inn']
           : ['restaurant', 'tea-house', 'cafe', 'bookstore', 'inn'];
     const reachable = (business: BusinessSave) => {
       const entrance = this.graph.entrance(business.cellKey);
@@ -858,6 +918,10 @@ export class CitizenSystem {
       'tea-house': 'warming the kettle for afternoon guests',
       inn: 'welcoming travelers from the quay',
       pottery: 'turning a small bowl at the wheel',
+      mill: 'grinding grain between the millstones',
+      smokehouse: 'hanging the morning catch over cedar smoke',
+      weaver: 'passing the shuttle through blue thread',
+      shipyard: 'fitting new ribs along a little keel',
     }[type];
   }
 
@@ -882,6 +946,10 @@ export class CitizenSystem {
       'tea-house': 'sharing a quiet pot of tea',
       inn: 'listening to stories at the inn',
       pottery: 'turning a glazed cup in the light',
+      mill: 'collecting a small sack of flour',
+      smokehouse: 'choosing fish for a journey',
+      weaver: 'feeling a new bolt of cloth',
+      shipyard: 'watching a boat take shape',
     }[type] ?? `visiting the ${businessLabel(type)}`;
   }
 
@@ -913,7 +981,35 @@ export class CitizenSystem {
       citizen.model.position.y = target.y;
       citizen.model.position.z = target.z;
       citizen.path.shift();
+      if (!citizen.path.length && citizen.carryingGood) {
+        citizen.activity = `delivered the ${citizen.carryingGood.replace('-', ' ')}`;
+        citizen.carryingGood = null;
+        citizen.nextDecisionAt = Math.max(citizen.nextDecisionAt, this.currentHours + .12);
+      }
     }
+  }
+
+  beginDelivery(fromCellKey: string, toCellKey: string, good: CraftGood) {
+    const source = this.graph.entrance(fromCellKey);
+    const destination = this.graph.entrance(toCellKey);
+    if (!source || !destination || !this.graph.canReach(source.key, destination.key)) return null;
+    const owners = new Set(this.businesses.map((business) => business.ownerId));
+    const candidates = this.citizens
+      .filter((citizen) => citizen.ageGroup !== 'child' && citizen.residentKind !== 'visitor' && !citizen.carryingGood && !owners.has(citizen.id))
+      .map((citizen) => ({ citizen, from: this.graph.closest(citizen.model.position) }))
+      .filter((entry): entry is { citizen: Citizen; from: NavNode } => Boolean(entry.from && this.graph.canReach(entry.from.key, source.key)))
+      .sort((a, b) => Number(b.citizen.occupation === 'Caretaker') - Number(a.citizen.occupation === 'Caretaker'));
+    const chosen = candidates[0];
+    if (!chosen) return null;
+    chosen.citizen.path = [
+      ...this.graph.path(chosen.from.key, source.key),
+      ...this.graph.path(source.key, destination.key),
+    ];
+    chosen.citizen.targetKey = destination.key;
+    chosen.citizen.carryingGood = good;
+    chosen.citizen.activity = `carrying ${good.replace('-', ' ')} between workshops`;
+    chosen.citizen.nextDecisionAt = this.currentHours + 1.2;
+    return chosen.citizen.id;
   }
 
   private updateRelationships(deltaSeconds: number, hour: number, absoluteHours: number) {

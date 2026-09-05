@@ -55,8 +55,9 @@ try {
   const businessTypes = [
     'bakery', 'cafe', 'flower-shop', 'workshop', 'bookstore',
     'fishmonger', 'restaurant', 'tea-house', 'inn', 'pottery',
+    'mill', 'smokehouse', 'weaver', 'shipyard',
   ];
-  const businesses = cells.slice(0, 10).map((cell, index) => ({
+  const businesses = cells.slice(0, businessTypes.length).map((cell, index) => ({
     id: `business-${index}`,
     type: businessTypes[index],
     cellKey: `${cell.x},${cell.z}`,
@@ -118,6 +119,25 @@ try {
   ambience.setTown(cells, businesses, citizens, city.matureTreeAnchors(240));
   ambience.setDiscoveryState(discoveries);
   ambience.update(1, .8, 12, 240, 0, 0);
+
+  const turtleBatch = ambience.root.getObjectByName('harbor-turtles')?.children
+    .find((object) => object instanceof THREE.InstancedMesh && object.count > 0);
+  if (!turtleBatch) throw new Error('Harbor turtles were not visible around a built town.');
+  if (ambience.wildlifeMemoryFromObject(turtleBatch, 240, 0)?.title !== 'Harbor turtle') {
+    throw new Error('Visible turtles cannot be inspected in Observe mode.');
+  }
+  const catBatch = ambience.root.getObjectByName('harbor-cats')?.children
+    .find((object) => object instanceof THREE.InstancedMesh && object.count > 0);
+  if (!catBatch || ambience.wildlifeMemoryFromObject(catBatch, 240, 0)?.kind !== 'cat') {
+    throw new Error('Visible harbor cats cannot be inspected in Observe mode.');
+  }
+  const fishBatch = ambience.root.getObjectByName('fish-schools')?.children
+    .flatMap((school) => school.children)
+    .find((object) => object instanceof THREE.InstancedMesh && object.count > 0)
+    ?? ambience.root.getObjectByName('fish-schools')?.children.find((object) => object instanceof THREE.InstancedMesh && object.count > 0);
+  if (!fishBatch || ambience.wildlifeMemoryFromObject(fishBatch, 240, 0)?.title !== 'Silver shoal') {
+    throw new Error('Visible waterlife cannot be inspected in Observe mode.');
+  }
 
   const root = new THREE.Group();
   root.add(city.root, people.root, ambience.root);

@@ -7,9 +7,13 @@ import { BusinessSystem, type BusinessUpdate } from './businesses';
 import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryClue, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
 import { HarborAmbience } from './harbor';
 import { weatherAt, type TownMemorySnapshot } from './memory';
-import type { CatMemoryInspection } from './fauna';
+import { CraftingSystem } from './crafting';
+import type { WildlifeMemoryInspection } from './fauna';
 import type { JournalEntry, JournalIllustration, SavedTown } from './types';
 import { FLOOR_HEIGHT } from './spatial';
+import { makeTidePostcard, readTidePostcard, TidePostcardError } from './tide-postcard';
+import { makeTownStl } from './town-stl';
+import { composePostcard, postcardDate } from './postcard-image';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
@@ -31,6 +35,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="top-actions">
       <button id="journal-open" aria-label="Open observation journal"><span class="desktop-journal-label">Journal</span><span class="mobile-journal-label" aria-hidden="true">▤</span><span id="journal-count">0</span></button>
       <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
+      <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
       <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
       <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
     </div>
@@ -95,7 +100,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to orbit around your town.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Drag</strong> with two fingers to move the view, or pinch to zoom.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">−</span><p>Choose <strong>Remove</strong>, then tap a building to take down one floor.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">◉</span><p>Choose <strong>Observe</strong> above, then tap a building, tree, cat, or resident to read its history.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">◉</span><p>Choose <strong>Observe</strong> above, then tap a building, tree, animal, or resident to read its history.</p></div>
         </div>
         <button class="guide-done" id="touch-guide-done">Got it</button>
       </section>
@@ -117,7 +122,22 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <h2 id="about-title">Little Tides</h2>
         <p>Build without pressure and watch a tiny harbor find its own routines, friendships, and quiet surprises.</p>
         <p class="creator-credit">Made by <a href="https://szabadkai.com" target="_blank" rel="noreferrer">Levente Szabadkai</a>.</p>
-        <p class="music-credit">Music: <a href="https://opengameart.org/content/caketown-cuteplayful" target="_blank" rel="noreferrer">“Caketown - Cute/playful”</a> by Matthew Pablo, licensed <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.</p>
+        <p class="music-credit">Music: <a href="https://opengameart.org/content/caketown-cuteplayful" target="_blank" rel="noreferrer">“Caketown - Cute/playful”</a> by Matthew Pablo, licensed <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.<br><a href="https://opengameart.org/content/free-contemplative-fantasy-music-pack" target="_blank" rel="noreferrer">“Déjà Vus”</a> by <a href="https://yannz41.itch.io" target="_blank" rel="noreferrer">YannZ</a>, licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Transcoded from MP3 to 64 kbps AAC. <a href="https://open.spotify.com/intl-it/artist/76CUcHd0t0XViSm9YBbHBw" target="_blank" rel="noreferrer">Spotify</a> · <a href="mailto:yziango@gmail.com">Contact</a>.</p>
+      </section>
+    </div>
+    <div class="postcard-scrim" id="postcard-scrim" aria-hidden="true">
+      <section class="postcard-panel" role="dialog" aria-modal="true" aria-labelledby="postcard-title">
+        <button class="postcard-close" id="postcard-close" aria-label="Close tide postcard">×</button>
+        <span class="postcard-kicker">Keep this little harbor</span>
+        <h2 id="postcard-title">Tide postcard</h2>
+        <p>Save a shareable, restorable PNG—or bring your harbor into the physical world.</p>
+        <div class="postcard-preview" aria-hidden="true"><span class="postcard-stamp">潮</span><strong id="postcard-message-preview">Wish you were here by the water.</strong><i id="postcard-date-preview">Day 1</i></div>
+        <label class="postcard-inscription" for="postcard-message">Inscription<input id="postcard-message" maxlength="60" value="Wish you were here by the water."></label>
+        <button class="postcard-save" id="postcard-save">Save tide postcard</button>
+        <button class="postcard-stl" id="postcard-stl">Export 3D model (.stl)</button>
+        <button class="postcard-load" id="postcard-load">Load a postcard</button>
+        <input id="postcard-file" type="file" accept="image/png,.png" hidden>
+        <p class="postcard-note" id="postcard-note" aria-live="polite">Anyone can view the picture. Little Tides can also read the town tucked inside it.</p>
       </section>
     </div>
   </div>
@@ -140,7 +160,8 @@ let lastChimedHour = Math.floor(timeOfDay);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x91c7c1);
-scene.fog = new THREE.FogExp2(0x91c7c1, .0135);
+const sceneFog = new THREE.FogExp2(0x91c7c1, .0135);
+scene.fog = sceneFog;
 
 const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, .1, 300);
 camera.position.set(18, 19, 20);
@@ -266,6 +287,7 @@ const businesses = new BusinessSystem(seed, saved?.businesses ?? []);
 businesses.maintain(citizens.residents(), city.cells);
 city.setBusinesses(businesses.all());
 citizens.setBusinesses(businesses.all());
+const crafting = new CraftingSystem(saved?.crafting);
 const grow = new GrowSystem(
   DISCOVERY_EVENTS,
   saved?.discoveries ?? [],
@@ -302,15 +324,21 @@ let toastTimer = 0;
 let saveTimer = 0;
 let audioContext: AudioContext | null = null;
 let musicMuted = localStorage.getItem(MUSIC_MUTED_KEY) === 'true';
-const backgroundMusic = new Audio(`${import.meta.env.BASE_URL}audio/caketown.mp3`);
-backgroundMusic.loop = true;
+const musicTracks = ['audio/deja-vus.m4a', 'audio/caketown.mp3'];
+let musicTrackIndex = 0;
+const backgroundMusic = new Audio(`${import.meta.env.BASE_URL}${musicTracks[musicTrackIndex]}`);
 backgroundMusic.preload = 'metadata';
 backgroundMusic.volume = .18;
+backgroundMusic.addEventListener('ended', () => {
+  musicTrackIndex = (musicTrackIndex + 1) % musicTracks.length;
+  backgroundMusic.src = `${import.meta.env.BASE_URL}${musicTracks[musicTrackIndex]}`;
+  void startBackgroundMusic();
+});
 let selectedCitizenId: string | null = null;
 let touchMode: 'build' | 'remove' = 'build';
 let followedThreadId: string | null = saved?.followedDiscoveryId ?? null;
 let observeMode = false;
-let selectedMemoryReader: (() => CityMemoryInspection | CatMemoryInspection | null) | null = null;
+let selectedMemoryReader: (() => CityMemoryInspection | WildlifeMemoryInspection | null) | null = null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   activePointers.add(event.pointerId);
@@ -464,27 +492,35 @@ function inspectTownMemory(clientX: number, clientY: number) {
   pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
   const absoluteHours = day * 24 + timeOfDay;
-  const catHit = raycaster.intersectObject(ambience.root, true)
-    .find((intersection) => ambience.catMemoryFromObject(intersection.object, absoluteHours, catColonyFoundedAt) !== null);
-  const cat = catHit ? ambience.catMemoryFromObject(catHit.object, absoluteHours, catColonyFoundedAt) : null;
+  const wildlifeHit = raycaster.intersectObject(ambience.root, true)
+    .find((intersection) => ambience.wildlifeMemoryFromObject(intersection.object, absoluteHours, catColonyFoundedAt, intersection.instanceId) !== null);
+  const wildlife = wildlifeHit ? ambience.wildlifeMemoryFromObject(wildlifeHit.object, absoluteHours, catColonyFoundedAt, wildlifeHit.instanceId) : null;
   const cityPoint = raycaster.intersectObject(city.root, true)
     .map((intersection) => city.cellFromObject(intersection.object))
     .find((point) => point !== null) ?? hoveredCell;
-  const memory = cat ?? (cityPoint ? city.memoryAt(cityPoint.x, cityPoint.z, absoluteHours) : null);
+  const memory = wildlife ?? (cityPoint ? cityObservationAt(cityPoint.x, cityPoint.z, absoluteHours) : null);
   if (!memory) {
     hideMemoryCard();
-    showToast('This patch of water has no memory yet.');
+    showToast('Nothing here is ready to be observed yet.');
     return false;
   }
-  selectedMemoryReader = cat && catHit
-    ? () => ambience.catMemoryFromObject(catHit.object, day * 24 + timeOfDay, catColonyFoundedAt)
-    : cityPoint ? () => city.memoryAt(cityPoint.x, cityPoint.z, day * 24 + timeOfDay) : null;
+  selectedMemoryReader = wildlife && wildlifeHit
+    ? () => ambience.wildlifeMemoryFromObject(wildlifeHit.object, day * 24 + timeOfDay, catColonyFoundedAt, wildlifeHit.instanceId)
+    : cityPoint ? () => cityObservationAt(cityPoint.x, cityPoint.z, day * 24 + timeOfDay) : null;
   showMemoryCard(memory);
   return true;
 }
 
-function showMemoryCard(memory: CityMemoryInspection | CatMemoryInspection) {
-  document.querySelector('#memory-kicker')!.textContent = memory.kind === 'cat' ? 'Harbor family' : memory.kind === 'tree' ? 'Living landmark' : 'Town memory';
+function cityObservationAt(x: number, z: number, absoluteHours: number) {
+  const memory = city.memoryAt(x, z, absoluteHours);
+  if (!memory || memory.kind !== 'building') return memory;
+  const business = businesses.all().find((candidate) => candidate.cellKey === `${x},${z}`);
+  const status = business ? crafting.businessStatus(business.type) : null;
+  return status ? { ...memory, detail: status, note: `${memory.detail} ${memory.note}` } : memory;
+}
+
+function showMemoryCard(memory: CityMemoryInspection | WildlifeMemoryInspection) {
+  document.querySelector('#memory-kicker')!.textContent = memory.kind === 'cat' ? 'Harbor family' : memory.kind === 'wildlife' ? 'Harbor wildlife' : memory.kind === 'tree' ? 'Living landmark' : 'Town memory';
   document.querySelector('#memory-title')!.textContent = memory.title;
   document.querySelector('#memory-age')!.textContent = memory.ageLabel;
   document.querySelector('#memory-detail')!.textContent = memory.detail;
@@ -562,9 +598,9 @@ function persistSoon() {
   saveTimer = window.setTimeout(saveTown, 250);
 }
 
-function saveTown() {
-  const data: SavedTown = {
-    version: 6,
+function currentTownData(): SavedTown {
+  return {
+    version: 7,
     seed,
     cells: city.serialize(),
     timeOfDay,
@@ -576,14 +612,19 @@ function saveTown() {
     eventLastTriggeredAt: grow.recurringTriggerTimes(),
     followedDiscoveryId: followedThreadId ?? undefined,
     catColonyFoundedAt,
+    crafting: crafting.serialize(),
   };
+}
+
+function saveTown() {
+  const data = currentTownData();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
 function loadTown(): SavedTown | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedTown | null;
-    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 || parsed?.version === 5 || parsed?.version === 6 ? parsed : null;
+    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 || parsed?.version === 5 || parsed?.version === 6 || parsed?.version === 7 ? parsed : null;
   } catch {
     return null;
   }
@@ -707,7 +748,7 @@ function updateGrowInspector() {
   const selected = hoveredCell ? `${hoveredCell.x},${hoveredCell.z}: ${city.topologyLabel(hoveredCell.x, hoveredCell.z)}` : 'none';
   const nav = citizens.navStats();
   const fauna = ambience.wildlifeStats();
-  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · memory: ${snapshot.memory.patinaCells} weathered, ${snapshot.memory.growingTrees} growing/${snapshot.memory.matureTrees} mature trees, oldest ${Math.floor(snapshot.memory.oldestBuildingHours)}h, ${snapshot.memory.raining ? `rain ${snapshot.memory.rainIntensity.toFixed(2)}` : 'dry'} · fleet: ${fleet.join(', ') || 'none'} · fauna: ${fauna.birds} birds, ${fauna.gulls} gulls (${fauna.gullModes.flying} flying/${fauna.gullModes.feeding} feeding/${fauna.gullModes.perching} perched/${fauna.gullModes.scattering} scattering), ${fauna.fish} fish, ${fauna.crabs} crabs, ${fauna.cats}/${fauna.catCapacity} cats (${fauna.kittens} kittens, ${fauna.migratingCats} leaving), ${fauna.butterflies} butterflies · passing: ${fauna.whale} whale, ${fauna.dolphins} dolphins, ${fauna.squids} squids, ${fauna.tuna} tuna · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
+  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · craft: ${crafting.completedCount()}/${crafting.recipeCount()} chains, ${crafting.summary() || 'waiting for materials'} · memory: ${snapshot.memory.patinaCells} weathered, ${snapshot.memory.growingTrees} growing/${snapshot.memory.matureTrees} mature trees, oldest ${Math.floor(snapshot.memory.oldestBuildingHours)}h, ${snapshot.memory.raining ? `rain ${snapshot.memory.rainIntensity.toFixed(2)}` : 'dry'} · fleet: ${fleet.join(', ') || 'none'} · fauna: ${fauna.birds} birds, ${fauna.gulls} gulls (${fauna.gullModes.flying} flying/${fauna.gullModes.feeding} feeding/${fauna.gullModes.perching} perched/${fauna.gullModes.scattering} scattering), ${fauna.fish} fish, ${fauna.crabs} crabs, ${fauna.turtles} turtles, ${fauna.cats}/${fauna.catCapacity} cats (${fauna.kittens} kittens, ${fauna.migratingCats} leaving), ${fauna.butterflies} butterflies · passing: ${fauna.whale} whale, ${fauna.dolphins} dolphins, ${fauna.squids} squids, ${fauna.tuna} tuna · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
   const eligibleTitle = document.createElement('span');
   eligibleTitle.textContent = 'Eligible next';
   const eligibleList = document.createElement('p');
@@ -999,6 +1040,109 @@ function setAboutOpen(open: boolean) {
   }
 }
 
+function setPostcardOpen(open: boolean) {
+  const scrim = document.querySelector<HTMLElement>('#postcard-scrim')!;
+  const openButton = document.querySelector<HTMLButtonElement>('#postcard-open')!;
+  scrim.classList.toggle('show', open);
+  scrim.setAttribute('aria-hidden', String(!open));
+  if (open) {
+    setJournalOpen(false);
+    setAboutOpen(false);
+    setTouchGuideOpen(false);
+    document.querySelector('#postcard-date-preview')!.textContent = `${postcardDate()} · Day ${day}`;
+    document.querySelector('#postcard-note')!.textContent = 'Anyone can view the picture. Little Tides can also read the town tucked inside it.';
+    window.setTimeout(() => document.querySelector<HTMLButtonElement>('#postcard-save')!.focus(), 50);
+  } else if (scrim.contains(document.activeElement)) {
+    openButton.focus();
+  }
+}
+
+function canvasPng(inscription: string) {
+  return new Promise<Blob>((resolve, reject) => {
+    const hoverWasVisible = hover.visible;
+    hover.visible = false;
+    renderer.render(scene, camera);
+    void composePostcard(renderer.domElement, { inscription, date: postcardDate(), day }).then((blob) => {
+      hover.visible = hoverWasVisible;
+      resolve(blob);
+    }, (error) => {
+      hover.visible = hoverWasVisible;
+      reject(error);
+    });
+  });
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function savePostcard() {
+  const button = document.querySelector<HTMLButtonElement>('#postcard-save')!;
+  const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
+  button.disabled = true;
+  button.textContent = 'Painting postcard…';
+  note.textContent = 'Holding the harbor still for just a moment.';
+  try {
+    saveTown();
+    const inscription = document.querySelector<HTMLInputElement>('#postcard-message')!.value;
+    const postcard = await makeTidePostcard(await canvasPng(inscription), currentTownData());
+    const date = new Date().toISOString().slice(0, 10);
+    downloadBlob(postcard, `little-tides-day-${day}-${date}.png`);
+    note.textContent = 'Saved. This PNG can be shared as a picture or loaded back here later.';
+    showToast('Your tide postcard is ready.');
+  } catch (error) {
+    note.textContent = error instanceof Error ? error.message : 'The postcard could not be saved.';
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Save tide postcard';
+  }
+}
+
+async function saveTownModel() {
+  const button = document.querySelector<HTMLButtonElement>('#postcard-stl')!;
+  const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
+  button.disabled = true;
+  button.textContent = 'Building 3D model…';
+  note.textContent = 'Joining the harbor onto a small print base.';
+  try {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const model = makeTownStl(city.root);
+    const date = new Date().toISOString().slice(0, 10);
+    downloadBlob(model, `little-tides-day-${day}-${date}.stl`);
+    note.textContent = 'STL saved in millimeters. It includes the visible town on a shared base; colors are not part of STL files.';
+    showToast('Your harbor model is ready.');
+  } catch (error) {
+    note.textContent = error instanceof Error ? error.message : 'The 3D model could not be exported.';
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Export 3D model (.stl)';
+  }
+}
+
+async function loadPostcard(file: File) {
+  const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
+  note.textContent = 'Reading the tide tucked inside this picture…';
+  try {
+    const town = await readTidePostcard(file);
+    const townDay = town.day ?? 1;
+    if (!confirm(`Let the current town drift away and return to the tide from Day ${townDay}?`)) {
+      note.textContent = 'Nothing changed. Your current town is still here.';
+      return;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(town));
+    location.reload();
+  } catch (error) {
+    note.textContent = error instanceof TidePostcardError ? error.message : 'That postcard could not be opened.';
+  }
+}
+
 function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
   if (!update.changed) return;
   const current = businesses.all();
@@ -1174,7 +1318,7 @@ document.querySelector('#observe-toggle')!.addEventListener('click', () => {
   button.classList.toggle('active', observeMode);
   button.setAttribute('aria-pressed', String(observeMode));
   if (!observeMode) hideMemoryCard();
-  showToast(observeMode ? 'Observe mode: choose a building, tree, cat, or resident.' : 'Build mode restored.');
+  showToast(observeMode ? 'Observe mode: choose a building, tree, animal, or resident.' : 'Build mode restored.');
 });
 document.querySelector('#thread-close')!.addEventListener('click', () => {
   followedThreadId = null;
@@ -1197,6 +1341,24 @@ document.querySelector('#about-open')!.addEventListener('click', () => setAboutO
 document.querySelector('#about-close')!.addEventListener('click', () => setAboutOpen(false));
 document.querySelector('#about-scrim')!.addEventListener('click', (event) => {
   if (event.target === event.currentTarget) setAboutOpen(false);
+});
+document.querySelector('#postcard-open')!.addEventListener('click', () => setPostcardOpen(true));
+document.querySelector('#postcard-close')!.addEventListener('click', () => setPostcardOpen(false));
+document.querySelector('#postcard-save')!.addEventListener('click', () => { void savePostcard(); });
+document.querySelector('#postcard-stl')!.addEventListener('click', () => { void saveTownModel(); });
+document.querySelector('#postcard-message')!.addEventListener('input', (event) => {
+  const message = (event.currentTarget as HTMLInputElement).value.trim();
+  document.querySelector('#postcard-message-preview')!.textContent = message || 'Wish you were here by the water.';
+});
+document.querySelector('#postcard-load')!.addEventListener('click', () => document.querySelector<HTMLInputElement>('#postcard-file')!.click());
+document.querySelector('#postcard-file')!.addEventListener('change', (event) => {
+  const input = event.currentTarget as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (file) void loadPostcard(file);
+});
+document.querySelector('#postcard-scrim')!.addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) setPostcardOpen(false);
 });
 document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) => {
   button.addEventListener('click', () => {
@@ -1366,7 +1528,10 @@ function animate() {
   const twilight = Math.max(0, 1 - Math.abs(timeOfDay - 18.6) / 2.4, 1 - Math.abs(timeOfDay - 5.7) / 2.1);
   currentSky.copy(nightSky).lerp(daySky, daylight).lerp(dawnSky, twilight * .28);
   scene.background = currentSky;
-  if (scene.fog instanceof THREE.FogExp2) scene.fog.color.copy(currentSky);
+  sceneFog.color.copy(currentSky);
+  const cameraDistance = camera.position.distanceTo(controls.target);
+  const distantView = THREE.MathUtils.smoothstep(cameraDistance, 34, 64);
+  sceneFog.density = THREE.MathUtils.lerp(.0135, .0012, distantView);
   hemi.intensity = .42 + daylight * 1.83;
   sun.intensity = .12 + daylight * 4.58;
   const sunAngle = (timeOfDay - 6) / 24 * Math.PI * 2;
@@ -1394,6 +1559,13 @@ function animate() {
     applyBusinessUpdate(businesses.recordVisits(citizens.drainBusinessVisits(), residentState), true);
     const businessUpdate = businesses.update(residentState, city.cells, absoluteHours);
     applyBusinessUpdate(businessUpdate, true);
+    const craftingUpdate = crafting.update(businesses.all(), residentState, grow.discoveredIds(), absoluteHours);
+    if (craftingUpdate.delivery) citizens.beginDelivery(craftingUpdate.delivery.fromCellKey, craftingUpdate.delivery.toCellKey, craftingUpdate.delivery.good);
+    if (craftingUpdate.milestone) {
+      showToast(craftingUpdate.milestone);
+      playCue('door');
+    }
+    if (craftingUpdate.changed) persistSoon();
     businessCheckElapsed = 0;
   }
   if (discoveryCheckElapsed > .5) {

@@ -18,6 +18,16 @@ export type CatMemoryInspection = Readonly<{
   note: string;
 }>;
 
+export type WildlifeMemoryInspection = CatMemoryInspection | Readonly<{
+  kind: 'wildlife';
+  title: string;
+  ageLabel: string;
+  detail: string;
+  note: string;
+}>;
+
+type ObservableWildlife = 'fish' | 'crab' | 'cat' | 'turtle' | 'whale' | 'dolphins' | 'squids' | 'tuna';
+
 type GullActor = {
   model: THREE.Group;
   leftWing: THREE.Object3D;
@@ -90,12 +100,14 @@ export class FaunaSystem {
   private readonly fishRoot = new THREE.Group();
   private readonly crabRoot = new THREE.Group();
   private readonly catRoot = new THREE.Group();
+  private readonly turtleRoot = new THREE.Group();
   private readonly butterflyRoot = new THREE.Group();
   private readonly marineRoot = new THREE.Group();
   private readonly gulls: GullActor[] = [];
   private readonly fishSchools: THREE.Group[] = [];
   private readonly crabs: THREE.Group[] = [];
   private readonly cats: THREE.Group[] = [];
+  private readonly turtles: THREE.Group[] = [];
   private readonly butterflies: THREE.Group[] = [];
   private readonly marineVisitors: Record<'whale' | 'dolphins' | 'squids' | 'tuna', MarineVisitor>;
   private readonly actorInstanceBatches: ActorInstanceBatch[] = [];
@@ -132,6 +144,7 @@ export class FaunaSystem {
     this.fishRoot.name = 'fish-schools';
     this.crabRoot.name = 'dock-crabs';
     this.catRoot.name = 'harbor-cats';
+    this.turtleRoot.name = 'harbor-turtles';
     this.butterflyRoot.name = 'garden-butterflies';
     this.marineRoot.name = 'passing-sea-life';
     this.createAmbientBirds();
@@ -139,9 +152,10 @@ export class FaunaSystem {
     this.createFishSchools();
     this.createCrabs();
     this.createCats();
+    this.createTurtles();
     this.createButterflies();
     this.marineVisitors = this.createMarineVisitors();
-    this.root.add(this.ambientBirds, this.gullRoot, this.fishRoot, this.crabRoot, this.catRoot, this.butterflyRoot, this.marineRoot);
+    this.root.add(this.ambientBirds, this.gullRoot, this.fishRoot, this.crabRoot, this.catRoot, this.turtleRoot, this.butterflyRoot, this.marineRoot);
     this.setDiscoveryState([]);
   }
 
@@ -196,6 +210,7 @@ export class FaunaSystem {
     } else this.townCenter.set(0, 0, 0);
     this.ambientBirds.visible = this.cells.length > 0;
     this.marineRoot.visible = this.cells.length > 0;
+    this.turtleRoot.visible = this.cells.length > 0 && this.waterAnchors.length > 0;
     Object.values(this.marineVisitors).forEach((visitor, index) => {
       visitor.route = createShorelineRoute(this.cells, this.seed + 4100 + index * 97, 1.35 + index * .38);
     });
@@ -242,6 +257,7 @@ export class FaunaSystem {
     this.updateFish(time);
     this.updateCrabs(time);
     this.updateCats(time, timeOfDay, absoluteHours, catColonyFoundedAt, rainIntensity);
+    this.updateTurtles(time);
     this.updateButterflies(time, daylight, rainIntensity);
     this.updateMarineVisitors(time);
     this.updateActorInstances();
@@ -262,6 +278,7 @@ export class FaunaSystem {
       catCapacity: this.catCapacity,
       kittens: this.kittenCount,
       migratingCats: timeBefore(this.lastRealTime, this.migrationUntil) ? this.migratingCatCount : 0,
+      turtles: this.turtleRoot.visible && this.waterAnchors.length ? this.turtles.length : 0,
       butterflies: this.butterflyRoot.visible ? Math.min(this.butterflies.length, Math.max(0, this.gardenAnchors.length * 3)) : 0,
       whale: this.marineRoot.visible && this.marineVisitors.whale.model.visible ? 1 : 0,
       dolphins: this.marineRoot.visible && this.marineVisitors.dolphins.model.visible ? 3 : 0,
@@ -293,6 +310,82 @@ export class FaunaSystem {
     return null;
   }
 
+  wildlifeMemoryFromObject(object: THREE.Object3D | null, absoluteHours: number, colonyFoundedAt?: number, instanceId?: number): WildlifeMemoryInspection | null {
+    if (!object || !this.isVisibleInScene(object)) return null;
+    const instanceSource = object instanceof THREE.InstancedMesh && instanceId !== undefined
+      ? (object.userData.visibleActorSources as THREE.Group[] | undefined)?.[instanceId]
+      : undefined;
+    const observedObject = instanceSource ?? object;
+    let current: THREE.Object3D | null = observedObject;
+    while (current && current !== this.root) {
+      const wildlife = current.userData.wildlifeObservation as ObservableWildlife | undefined;
+      if (wildlife === 'cat') {
+        const individual = this.catMemoryFromObject(observedObject, absoluteHours, colonyFoundedAt);
+        if (individual) return individual;
+        return {
+          kind: 'cat',
+          title: 'Harbor cats',
+          ageLabel: describeAge(ageInHours(colonyFoundedAt, absoluteHours)),
+          detail: `${this.visibleCatCount} ${this.visibleCatCount === 1 ? 'cat lives' : 'cats live'} among the inns, gardens, and fishmongers.`,
+          note: this.kittenCount ? `${this.kittenCount} of them ${this.kittenCount === 1 ? 'is a growing kitten' : 'are growing kittens'}.` : 'The colony has settled into the town’s daily rhythm.',
+        };
+      }
+      const observation = wildlife ? this.waterlifeObservation(wildlife) : null;
+      if (observation) return observation;
+      current = current.parent;
+    }
+    return null;
+  }
+
+  private isVisibleInScene(object: THREE.Object3D) {
+    if (object instanceof THREE.InstancedMesh && object.count === 0) return false;
+    for (let current: THREE.Object3D | null = object; current && current !== this.root.parent; current = current.parent) {
+      if (!current.visible) return false;
+    }
+    return true;
+  }
+
+  private waterlifeObservation(wildlife: Exclude<ObservableWildlife, 'cat'>): WildlifeMemoryInspection {
+    const observations: Record<Exclude<ObservableWildlife, 'cat'>, Omit<WildlifeMemoryInspection, 'kind'>> = {
+      fish: {
+        title: 'Silver shoal', ageLabel: 'Sheltered-water residents',
+        detail: 'Small fish circle slowly beneath the harbor’s calmer water.',
+        note: 'They gather where walls, canals, and quays soften the open tide.',
+      },
+      crab: {
+        title: 'Quay crab', ageLabel: 'Low-tide forager',
+        detail: 'A little crab patrols the damp edge of the dock.',
+        note: 'It moves sideways between barnacled stones and dropped scraps.',
+      },
+      turtle: {
+        title: 'Harbor turtle', ageLabel: 'Gentle tide-wanderer',
+        detail: 'A sea turtle paddles near the surface, its shell catching the light.',
+        note: 'It favors the quiet water beside the growing town.',
+      },
+      whale: {
+        title: 'Passing whale', ageLabel: 'Deep-water visitor',
+        detail: 'A whale follows the outer shoreline at an unhurried pace.',
+        note: 'Its route keeps to the deep water beyond the harbor walls.',
+      },
+      dolphins: {
+        title: 'Dolphin pod', ageLabel: 'Playful visitors',
+        detail: 'Three dolphins travel together, rising through the harbor swell.',
+        note: 'Their looping path carries them safely around the town’s shoreline.',
+      },
+      squids: {
+        title: 'Drifting squids', ageLabel: 'Below the surface',
+        detail: 'A small group of squids pulses through the green-blue water.',
+        note: 'They become clearest when the tide carries them close to shore.',
+      },
+      tuna: {
+        title: 'Passing tuna', ageLabel: 'Open-water school',
+        detail: 'A tight school of tuna streams past the harbor.',
+        note: 'The whole group turns almost as if it were a single creature.',
+      },
+    };
+    return { kind: 'wildlife', ...observations[wildlife] };
+  }
+
   private exteriorAnchor(x: number, z: number, occupied: ReadonlyMap<string, Cell>, distance: number) {
     const direction = CARDINALS.findIndex(([dx, dz]) => !occupied.has(keyOf(x + dx, z + dz)));
     const [dx, dz] = CARDINALS[direction < 0 ? 0 : direction];
@@ -309,7 +402,7 @@ export class FaunaSystem {
 
   /**
    * Render many independently moving tiny actors as a few material batches.
-   * Their hidden source meshes remain in place for cat picking and simulation.
+   * Their hidden source groups remain in place for simulation and per-animal inspection.
    */
   private createActorInstances(parent: THREE.Group, actors: THREE.Group[]) {
     const layouts = new Map<string, { material: THREE.Material; geometry: THREE.BufferGeometry; sources: THREE.Group[] }>();
@@ -349,7 +442,7 @@ export class FaunaSystem {
       mesh.count = 0;
       mesh.frustumCulled = false;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      mesh.raycast = () => {};
+      mesh.userData.wildlifeObservation = layout.sources[0]?.userData.wildlifeObservation;
       parent.add(mesh);
       this.actorInstanceBatches.push({ mesh, parent, sources: layout.sources });
     }
@@ -364,9 +457,12 @@ export class FaunaSystem {
       batch.parent.updateWorldMatrix(true, false);
       this.inverseParentMatrix.copy(batch.parent.matrixWorld).invert();
       let count = 0;
+      const visibleActorSources = (batch.mesh.userData.visibleActorSources ??= []) as THREE.Group[];
+      visibleActorSources.length = 0;
       for (const source of batch.sources) {
         if (!source.visible || !source.parent?.visible) continue;
         source.updateWorldMatrix(true, false);
+        visibleActorSources.push(source);
         batch.mesh.setMatrixAt(count++, this.instanceMatrix.multiplyMatrices(this.inverseParentMatrix, source.matrixWorld));
       }
       batch.mesh.count = count;
@@ -420,6 +516,7 @@ export class FaunaSystem {
       const school = new THREE.Group();
       for (let fishIndex = 0; fishIndex < 5; fishIndex++) {
         const fish = new THREE.Group();
+        fish.userData.wildlifeObservation = 'fish' satisfies ObservableWildlife;
         const body = new THREE.Mesh(new THREE.SphereGeometry(.09, 7, 5), materials[(schoolIndex + fishIndex) % materials.length]);
         body.scale.set(1.8, .45, .68);
         const tail = new THREE.Mesh(new THREE.ConeGeometry(.08, .16, 3), materials[(schoolIndex + fishIndex) % materials.length]);
@@ -442,6 +539,7 @@ export class FaunaSystem {
     const legMaterial = new THREE.MeshStandardMaterial({ color: 0x783c35, roughness: 1 });
     for (let index = 0; index < 5; index++) {
       const crab = new THREE.Group();
+      crab.userData.wildlifeObservation = 'crab' satisfies ObservableWildlife;
       const shell = new THREE.Mesh(new THREE.SphereGeometry(.1, 7, 5), shellMaterial);
       shell.scale.set(1.35, .45, .85);
       crab.add(shell);
@@ -470,6 +568,7 @@ export class FaunaSystem {
       const cat = new THREE.Group();
       cat.userData.catIndex = index;
       cat.userData.catFamily = family;
+      cat.userData.wildlifeObservation = 'cat' satisfies ObservableWildlife;
       const body = new THREE.Mesh(new THREE.CapsuleGeometry(.09, .25, 3, 7), coat);
       body.rotation.z = Math.PI / 2;
       body.position.y = .13;
@@ -497,6 +596,37 @@ export class FaunaSystem {
       this.cats.push(cat);
     }
     this.createActorInstances(this.catRoot, this.cats);
+  }
+
+  private createTurtles() {
+    const shellMaterial = new THREE.MeshStandardMaterial({ color: 0x58725b, roughness: .9 });
+    const skin = new THREE.MeshStandardMaterial({ color: 0x78947b, roughness: .95 });
+    for (let index = 0; index < 4; index++) {
+      const turtle = new THREE.Group();
+      turtle.userData.wildlifeObservation = 'turtle' satisfies ObservableWildlife;
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(.22, 9, 6), shellMaterial);
+      shell.scale.set(1.25, .34, .88);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(.075, 7, 5), skin);
+      head.scale.set(1.25, .72, .82);
+      head.position.x = .28;
+      turtle.add(shell, head);
+      for (const side of [-1, 1]) {
+        const frontFlipper = new THREE.Mesh(new THREE.SphereGeometry(.09, 6, 4), skin);
+        frontFlipper.scale.set(1.1, .18, .72);
+        frontFlipper.position.set(.08, -.015, side * .22);
+        frontFlipper.rotation.y = side * .38;
+        const backFlipper = frontFlipper.clone();
+        backFlipper.scale.set(.72, .15, .52);
+        backFlipper.position.set(-.18, -.02, side * .18);
+        backFlipper.rotation.y = -side * .48;
+        turtle.add(frontFlipper, backFlipper);
+      }
+      consolidateActor(turtle);
+      turtle.scale.setScalar(1.12 + index * .06);
+      this.turtleRoot.add(turtle);
+      this.turtles.push(turtle);
+    }
+    this.createActorInstances(this.turtleRoot, this.turtles);
   }
 
   private createButterflies() {
@@ -555,6 +685,7 @@ export class FaunaSystem {
   private createWhale() {
     const whale = new THREE.Group();
     whale.name = 'whale';
+    whale.userData.wildlifeObservation = 'whale' satisfies ObservableWildlife;
     const blue = new THREE.MeshStandardMaterial({ color: 0x3d6871, roughness: .8 });
     const pale = new THREE.MeshStandardMaterial({ color: 0x91aaa5, roughness: .88 });
     const body = new THREE.Mesh(new THREE.SphereGeometry(.5, 12, 7), blue);
@@ -595,12 +726,14 @@ export class FaunaSystem {
   private createDolphinPod() {
     const pod = new THREE.Group();
     pod.name = 'dolphin-pod';
+    pod.userData.wildlifeObservation = 'dolphins' satisfies ObservableWildlife;
     const blue = new THREE.MeshStandardMaterial({ color: 0x56828a, roughness: .76 });
     const pale = new THREE.MeshStandardMaterial({ color: 0xa8bbb2, roughness: .86 });
     const dolphinActors: THREE.Group[] = [];
     for (let index = 0; index < 3; index++) {
       const dolphin = new THREE.Group();
       dolphin.userData.podIndex = index;
+      dolphin.userData.wildlifeObservation = 'dolphins' satisfies ObservableWildlife;
       const body = new THREE.Mesh(new THREE.SphereGeometry(.25, 9, 6), blue);
       body.scale.set(2.15, .55, .62);
       const belly = new THREE.Mesh(new THREE.SphereGeometry(.2, 8, 5), pale);
@@ -633,9 +766,11 @@ export class FaunaSystem {
   private createSquidGroup() {
     const group = new THREE.Group();
     group.name = 'squid-group';
+    group.userData.wildlifeObservation = 'squids' satisfies ObservableWildlife;
     const colors = [0xaa6f79, 0xc28782, 0x8d6e88, 0xb77c68];
     for (let index = 0; index < 4; index++) {
       const squid = new THREE.Group();
+      squid.userData.wildlifeObservation = 'squids' satisfies ObservableWildlife;
       const material = new THREE.MeshStandardMaterial({
         color: colors[index], transparent: true, opacity: .72, roughness: .8, depthWrite: false,
       });
@@ -660,11 +795,13 @@ export class FaunaSystem {
   private createTunaPack() {
     const pack = new THREE.Group();
     pack.name = 'tuna-pack';
+    pack.userData.wildlifeObservation = 'tuna' satisfies ObservableWildlife;
     const silver = new THREE.MeshStandardMaterial({ color: 0x78999a, roughness: .7, metalness: .08, transparent: true, opacity: .78, depthWrite: false });
     const tunaActors: THREE.Group[] = [];
     for (let index = 0; index < 11; index++) {
       const fish = new THREE.Group();
       fish.userData.schoolIndex = index;
+      fish.userData.wildlifeObservation = 'tuna' satisfies ObservableWildlife;
       const body = new THREE.Mesh(new THREE.SphereGeometry(.11, 7, 5), silver);
       body.scale.set(2.4, .55, .72);
       const tail = new THREE.Mesh(new THREE.ConeGeometry(.1, .22, 3), silver);
@@ -844,6 +981,22 @@ export class FaunaSystem {
         const kittenAge = Math.max(0, colonyAge - bornAt);
         cat.scale.setScalar(.5 + THREE.MathUtils.clamp(kittenAge / KITTEN_GROWTH_HOURS, 0, 1) * .4);
       }
+    });
+  }
+
+  private updateTurtles(time: number) {
+    if (!this.turtleRoot.visible || !this.waterAnchors.length) return;
+    this.turtles.forEach((turtle, index) => {
+      const anchor = this.waterAnchors[(index * 5 + 1) % this.waterAnchors.length];
+      const angle = time * (.075 + index * .008) + index * 1.73;
+      const radius = .72 + index * .11;
+      turtle.position.set(
+        anchor.x + Math.cos(angle) * radius,
+        -.17 + Math.sin(time * .62 + index) * .025,
+        anchor.z + Math.sin(angle) * radius,
+      );
+      turtle.rotation.y = -angle;
+      turtle.rotation.z = Math.sin(time * .8 + index * 1.4) * .035;
     });
   }
 

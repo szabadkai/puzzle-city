@@ -80,6 +80,32 @@ const RECIPES: readonly BusinessRecipe[] = [
     names: ['Harbor Clay', 'Little Kiln', 'Blue Glaze', 'Wheel & Tide'],
     score: (citizen) => traitScore(citizen, ['artistic', 'patient', 'industrious']) + occupationScore(citizen, ['Artisan', 'Gardener']),
   },
+  {
+    type: 'mill',
+    population: 13,
+    names: ['Tidewheel Mill', 'White Sail Mill', 'Harbor Flour', 'The Little Millstone'],
+    score: (citizen, cell, cells) => traitScore(citizen, ['patient', 'industrious']) + occupationScore(citizen, ['Baker', 'Gardener']) + waterEdges(cell, cells),
+  },
+  {
+    type: 'smokehouse',
+    population: 14,
+    names: ['Cedar Smokehouse', 'Salt & Ember', 'Red Chimney', 'The Keeping Fire'],
+    score: (citizen, cell, cells) => traitScore(citizen, ['patient', 'industrious']) + occupationScore(citizen, ['Fisher', 'Cook', 'Fishmonger']) + waterEdges(cell, cells) * 1.2,
+    available: (citizens, businesses) => citizens.some((citizen) => citizen.occupation === 'Fisher') && businesses.some((business) => business.type === 'fishmonger'),
+  },
+  {
+    type: 'weaver',
+    population: 15,
+    names: ['Blue Thread', 'Harbor Loom', 'The Woven Gull', 'Shuttle & Sail'],
+    score: (citizen) => traitScore(citizen, ['artistic', 'patient', 'quiet']) + occupationScore(citizen, ['Bookbinder', 'Caretaker']),
+  },
+  {
+    type: 'shipyard',
+    population: 16,
+    names: ['Red Keel Yard', 'Little Tides Shipwright', 'Spar & Peg', 'Harbor Bones'],
+    score: (citizen, cell, cells) => traitScore(citizen, ['industrious', 'adventurous', 'patient']) + occupationScore(citizen, ['Artisan', 'Cartographer']) + waterEdges(cell, cells) * 1.8,
+    available: (_citizens, businesses) => businesses.some((business) => business.type === 'workshop'),
+  },
 ];
 
 function traitScore(citizen: CitizenSave, traits: string[]) {
@@ -116,6 +142,10 @@ export function businessOccupation(type: BusinessType) {
     'tea-house': 'Tea master',
     inn: 'Innkeeper',
     pottery: 'Potter',
+    mill: 'Miller',
+    smokehouse: 'Smokehouse keeper',
+    weaver: 'Weaver',
+    shipyard: 'Shipwright',
   }[type];
 }
 
@@ -134,6 +164,10 @@ export function isBusinessOpen(type: BusinessType, hour: number) {
   if (type === 'restaurant') return hour >= 11.5 && hour < 23;
   if (type === 'tea-house') return hour >= 10 && hour < 21.5;
   if (type === 'pottery') return hour >= 8 && hour < 18;
+  if (type === 'mill') return hour >= 5 && hour < 15;
+  if (type === 'smokehouse') return hour >= 7 && hour < 18;
+  if (type === 'weaver') return hour >= 8 && hour < 18;
+  if (type === 'shipyard') return hour >= 7 && hour < 19;
   return hour >= 6 || hour < 1;
 }
 

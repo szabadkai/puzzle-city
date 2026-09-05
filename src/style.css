@@ -189,6 +189,7 @@ canvas.dragging { cursor: grabbing; }
 .top-actions { position: absolute; right: 24px; top: 22px; display: flex; gap: 8px; pointer-events: auto; }
 .mobile-about-label { display: none; }
 .mobile-observe-label { display: none; }
+.mobile-postcard-label { display: none; }
 .mobile-journal-label,
 .mobile-reset-label,
 .mobile-clock { display: none; }
@@ -473,6 +474,128 @@ button:active { transform: translateY(1px); }
   font-size: 23px;
 }
 
+.postcard-scrim {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(22, 39, 40, .24);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .22s ease, visibility .22s ease;
+}
+.postcard-scrim.show { pointer-events: auto; opacity: 1; visibility: visible; }
+.postcard-panel {
+  position: relative;
+  width: min(390px, calc(100vw - 36px));
+  padding: 31px;
+  border: 1px solid rgba(255,244,216,.72);
+  border-radius: 18px 18px 18px 6px;
+  background: rgba(239,224,188,.97);
+  box-shadow: 0 28px 80px rgba(22,48,47,.3);
+  color: #38463e;
+  transform: translateY(10px) rotate(.15deg);
+  transition: transform .24s cubic-bezier(.2,.75,.25,1);
+  pointer-events: auto;
+}
+.postcard-scrim.show .postcard-panel { transform: translateY(0) rotate(.15deg); }
+.postcard-kicker { color: #a8463e; font-size: 9px; font-weight: 600; letter-spacing: 1.6px; text-transform: uppercase; }
+.postcard-panel h2 { margin: 5px 34px 10px 0; color: #30413b; font: 600 31px/1 'Fraunces', serif; }
+.postcard-panel > p { margin: 0; color: rgba(49,62,53,.76); font: 13px/1.5 'Fraunces', serif; }
+.postcard-close {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 23px;
+}
+.postcard-preview {
+  position: relative;
+  display: flex;
+  height: 104px;
+  margin: 20px 0 16px;
+  padding: 17px;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  border: 7px solid rgba(255,249,228,.72);
+  border-radius: 6px 10px 5px 8px;
+  color: #fff8dc;
+  background:
+    radial-gradient(circle at 72% 37%, #ebbf78 0 5%, transparent 5.5%),
+    linear-gradient(150deg, transparent 0 49%, rgba(233,194,123,.82) 50% 54%, transparent 55%),
+    linear-gradient(165deg, #668f82 0 40%, #396f70 41% 64%, #265d63 65%);
+  box-shadow: 0 9px 24px rgba(34,67,62,.16);
+  transform: rotate(-.7deg);
+}
+.postcard-preview::after {
+  content: '';
+  position: absolute;
+  right: 23px;
+  bottom: 13px;
+  width: 35px;
+  height: 41px;
+  border-radius: 3px 3px 1px 1px;
+  background: #a94e43;
+  box-shadow: -31px 10px 0 -5px #ead29b, 28px 7px 0 -8px #f0ca79;
+}
+.postcard-preview span { position: absolute; top: 9px; right: 9px; z-index: 1; padding: 4px 6px; border-radius: 4px; background: rgba(28,57,58,.45); font-size: 8px; font-weight: 600; letter-spacing: 1px; }
+.postcard-preview .postcard-stamp {
+  display: grid;
+  width: 31px;
+  height: 35px;
+  padding: 0;
+  place-items: center;
+  border: 2px solid rgba(255,246,215,.82);
+  border-radius: 2px;
+  color: #8e493f;
+  background: rgba(239,224,188,.88);
+  font: 600 13px/1 'Fraunces', serif;
+  transform: rotate(3deg);
+}
+.postcard-preview strong, .postcard-preview i { position: relative; z-index: 1; width: max-content; text-shadow: 0 1px 7px rgba(20,48,49,.5); }
+.postcard-preview strong { max-width: 72%; overflow: hidden; font: italic 600 15px/1.12 'Fraunces', serif; text-overflow: ellipsis; white-space: nowrap; }
+.postcard-preview i { margin-top: 4px; font: 9px/1 'DM Sans', sans-serif; letter-spacing: .8px; }
+.postcard-inscription {
+  display: block;
+  margin: 0 0 12px;
+  color: rgba(52,68,62,.62);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.postcard-inscription input {
+  display: block;
+  width: 100%;
+  height: 40px;
+  margin-top: 6px;
+  padding: 0 12px;
+  border: 1px solid rgba(70,91,78,.18);
+  border-radius: 9px;
+  outline: none;
+  color: #34443e;
+  background: rgba(255,248,224,.38);
+  font: italic 12px/1 'Fraunces', serif;
+  text-transform: none;
+}
+.postcard-inscription input:focus { border-color: rgba(82,111,105,.7); box-shadow: 0 0 0 3px rgba(82,111,105,.1); }
+.postcard-save, .postcard-stl, .postcard-load { width: 100%; min-height: 43px; font-size: 11px; }
+.postcard-save { color: #fff5da; background: #526f69; }
+.postcard-save:hover { color: #fff5da; background: #5e7b75; }
+.postcard-save:disabled, .postcard-stl:disabled { cursor: wait; opacity: .65; transform: none; }
+.postcard-stl, .postcard-load { margin-top: 8px; border-color: rgba(70,91,78,.2); background: rgba(255,248,224,.28); box-shadow: none; }
+.postcard-panel .postcard-note { min-height: 32px; margin-top: 13px; color: rgba(49,62,53,.58); font: 10px/1.5 'DM Sans', sans-serif; text-align: center; }
+
 .mobile-controls,
 .touch-guide-scrim { display: none; }
 
@@ -639,13 +762,16 @@ button:active { transform: translateY(1px); }
   }
   .desktop-journal-label,
   .desktop-reset-label,
-  .desktop-about-label { display: none; }
+  .desktop-about-label,
+  .desktop-postcard-label { display: none; }
   .desktop-observe-label { display: none; }
   .mobile-journal-label,
   .mobile-reset-label { display: inline; font: 500 18px/1 'DM Sans', sans-serif; }
+  .mobile-postcard-label { display: inline; font: 500 19px/1 'DM Sans', sans-serif; }
   .mobile-about-label { display: inline; font-family: 'Fraunces', serif; font-size: 14px; font-style: italic; }
   .mobile-observe-label { display: inline; font: 600 18px/1 'Fraunces', serif; }
   .about-panel { padding: 28px 24px 23px; }
+  .postcard-panel { padding: 28px 24px 23px; }
   .journal-scrim { z-index: 20; padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); }
   .journal { width: 100%; padding: 22px 18px 14px; }
   .journal-entry { grid-template-columns: 88px 1fr; gap: 12px; }
@@ -653,9 +779,22 @@ button:active { transform: translateY(1px); }
   .clue-heading small { display: none; }
 }
 
+@media (max-width: 420px) {
+  .time-widget { top: calc(max(10px, env(safe-area-inset-top)) + 48px); padding-left: 5px; }
+}
+
 @media (max-width: 380px) {
   .mobile-clock { display: none; }
-  .time-widget { padding-left: 5px; }
   .top-actions { gap: 3px; }
   .top-actions button { flex-basis: 38px; width: 38px; }
+}
+
+@media (max-height: 620px) {
+  .postcard-panel {
+    max-height: calc(100dvh - 24px);
+    padding: 22px 24px 18px;
+    overflow-y: auto;
+  }
+  .postcard-preview { display: none; }
+  .postcard-save { margin-top: 16px; }
 }

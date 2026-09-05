@@ -11,7 +11,7 @@ export type Cell = {
 };
 
 export type SavedTown = {
-  version: 1 | 2 | 3 | 4 | 5 | 6;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7;
   seed: number;
   cells: Cell[];
   timeOfDay?: number;
@@ -23,6 +23,7 @@ export type SavedTown = {
   eventLastTriggeredAt?: Record<string, number>;
   followedDiscoveryId?: string;
   catColonyFoundedAt?: number;
+  crafting?: CraftingSave;
 };
 
 export type JournalIllustration =
@@ -44,7 +45,20 @@ export type JournalEntry = {
 
 export type BusinessType =
   | 'bakery' | 'cafe' | 'flower-shop' | 'workshop' | 'bookstore'
-  | 'fishmonger' | 'restaurant' | 'tea-house' | 'inn' | 'pottery';
+  | 'fishmonger' | 'restaurant' | 'tea-house' | 'inn' | 'pottery'
+  | 'mill' | 'smokehouse' | 'weaver' | 'shipyard';
+
+export type CraftGood =
+  | 'fish' | 'grain' | 'flour' | 'bread' | 'herbs' | 'tea'
+  | 'timber' | 'tools' | 'clay' | 'tableware' | 'fiber' | 'cloth'
+  | 'smoked-fish' | 'supper' | 'hospitality' | 'fishing-gear' | 'harbor-goods';
+
+export type CraftingSave = {
+  goods: Partial<Record<CraftGood, number>>;
+  completedRecipes: string[];
+  lastProducedAt: number;
+  cursor: number;
+};
 
 export type BusinessSave = {
   id: string;

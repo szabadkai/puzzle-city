@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { CityRenderer } from './city';
+import { CityRenderer, type CityMemoryInspection } from './city';
 import { CitizenSystem } from './citizens';
 import { BusinessSystem, type BusinessUpdate } from './businesses';
 import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryClue, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
 import { HarborAmbience } from './harbor';
+import { weatherAt, type TownMemorySnapshot } from './memory';
+import type { CatMemoryInspection } from './fauna';
 import type { JournalEntry, JournalIllustration, SavedTown } from './types';
 import './style.css';
 
@@ -26,6 +28,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     <div class="top-actions">
       <button id="journal-open" aria-label="Open observation journal">Journal <span id="journal-count">0</span></button>
+      <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
       <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
       <button id="reset" aria-label="Start a new town">New tide</button>
     </div>
@@ -44,6 +47,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div><dt>Going</dt><dd id="citizen-destination"></dd></div>
       </dl>
       <p class="card-relationship" id="citizen-relationship"></p>
+    </aside>
+    <aside class="memory-card" id="memory-card" aria-label="Town memory" aria-live="polite">
+      <button class="card-close" id="memory-card-close" aria-label="Close town memory">×</button>
+      <span class="card-kicker" id="memory-kicker">Town memory</span>
+      <h2 id="memory-title"></h2>
+      <p class="card-role" id="memory-age"></p>
+      <p id="memory-detail"></p>
+      <p class="card-relationship" id="memory-note"></p>
     </aside>
     <aside class="tide-thread" id="tide-thread" aria-live="polite">
       <button class="thread-close" id="thread-close" aria-label="Stop following this thread">×</button>
@@ -82,6 +93,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to orbit around your town.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Drag</strong> with two fingers to move the view, or pinch to zoom.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">−</span><p>Choose <strong>Remove</strong>, then tap a building to take down one floor.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">◉</span><p>Choose <strong>Observe</strong> above, then tap a building, tree, cat, or resident to read its history.</p></div>
         </div>
         <button class="guide-done" id="touch-guide-done">Got it</button>
       </section>
@@ -137,7 +149,7 @@ const maximumPixelRatio = Math.min(devicePixelRatio, 1.5);
 let renderPixelRatio = maximumPixelRatio;
 renderer.setPixelRatio(renderPixelRatio);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.shadowMap.autoUpdate = false;
 renderer.shadowMap.needsUpdate = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -146,8 +158,8 @@ renderer.toneMappingExposure = 1.08;
 document.querySelector('#app')!.prepend(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = .07;
+// Keep dragging direct: camera movement should stop as soon as the pointer is released.
+controls.enableDamping = false;
 controls.enablePan = true;
 controls.screenSpacePanning = false;
 controls.minDistance = 12;
@@ -176,21 +188,41 @@ sun.shadow.camera.far = 60;
 sun.shadow.bias = -.0005;
 scene.add(sun);
 
-const waterUniforms = { uTime: { value: 0 }, uDay: { value: 1 } };
+function createWaterNoiseTexture(size = 128) {
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const u = x / size * Math.PI * 2;
+    const v = y / size * Math.PI * 2;
+    const first = Math.sin(u * 3 + Math.sin(v * 2)) * .5 + .5;
+    const second = Math.sin(v * 5 - Math.cos(u * 2)) * .5 + .5;
+    const fine = Math.sin((u + v) * 7) * .5 + .5;
+    const index = (y * size + x) * 4;
+    data[index] = Math.round(first * 255);
+    data[index + 1] = Math.round(second * 255);
+    data[index + 2] = Math.round(fine * 255);
+    data[index + 3] = 255;
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+const waterUniforms = {
+  uTime: { value: 0 },
+  uDay: { value: 1 },
+  uRain: { value: 0 },
+  uNoise: { value: createWaterNoiseTexture() },
+};
 const waterMaterial = new THREE.ShaderMaterial({
   uniforms: waterUniforms,
   transparent: false,
   vertexShader: `
-    uniform float uTime;
-    uniform float uDay;
-    varying float vWave;
     varying vec3 vWorld;
     void main() {
-      vec3 p = position;
-      float wave = sin(p.x * .42 + uTime * .65) * .09 + sin(p.y * .58 - uTime * .48) * .055;
-      p.z += wave;
-      vWave = wave;
-      vec4 world = modelMatrix * vec4(p, 1.0);
+      vec4 world = modelMatrix * vec4(position, 1.0);
       vWorld = world.xyz;
       gl_Position = projectionMatrix * viewMatrix * world;
     }
@@ -198,33 +230,30 @@ const waterMaterial = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform float uTime;
     uniform float uDay;
-    varying float vWave;
+    uniform float uRain;
+    uniform sampler2D uNoise;
     varying vec3 vWorld;
     void main() {
-      float ribbons = sin((vWorld.x + vWorld.z) * .7 + uTime * .45) * .5 + .5;
+      vec2 baseUv = vWorld.xz * .018;
+      vec3 first = texture2D(uNoise, baseUv + vec2(uTime * .007, -uTime * .004)).rgb;
+      vec3 second = texture2D(uNoise, baseUv * 1.73 + vec2(-uTime * .004, uTime * .006)).rgb;
+      float wave = (first.r + second.g - 1.0) * (.12 + uRain * .08);
+      float ribbons = first.b * .55 + second.r * .45;
       vec3 deep = vec3(.075, .34, .37);
       vec3 pale = vec3(.24, .61, .58);
-      vec3 color = mix(deep, pale, .50 + vWave * 1.75 + ribbons * .055);
+      vec3 color = mix(deep, pale, .50 + wave * 1.75 + ribbons * .055);
       color += vec3(.055, .035, .008) * ribbons;
       color *= mix(.34, 1.0, uDay);
       color += vec3(.018, .026, .055) * (1.0 - uDay);
+      color = mix(color, color * .72 + vec3(.025, .055, .065), uRain * .58);
       gl_FragColor = vec4(color, 1.0);
     }
   `,
 });
-const water = new THREE.Mesh(new THREE.PlaneGeometry(240, 240, 120, 120), waterMaterial);
+const water = new THREE.Mesh(new THREE.PlaneGeometry(240, 240), waterMaterial);
 water.rotation.x = -Math.PI / 2;
 water.position.y = -.31;
-water.receiveShadow = true;
 scene.add(water);
-
-const seabed = new THREE.Mesh(
-  new THREE.CylinderGeometry(22.5, 25, .9, 28),
-  new THREE.MeshStandardMaterial({ color: 0x7d9274, roughness: 1 }),
-);
-seabed.position.y = -1.2;
-seabed.receiveShadow = true;
-scene.add(seabed);
 
 const city = new CityRenderer(seed);
 scene.add(city.root);
@@ -273,11 +302,13 @@ let audioContext: AudioContext | null = null;
 let musicMuted = localStorage.getItem(MUSIC_MUTED_KEY) === 'true';
 const backgroundMusic = new Audio(`${import.meta.env.BASE_URL}audio/caketown.mp3`);
 backgroundMusic.loop = true;
-backgroundMusic.preload = 'auto';
+backgroundMusic.preload = 'metadata';
 backgroundMusic.volume = .18;
 let selectedCitizenId: string | null = null;
 let touchMode: 'build' | 'remove' = 'build';
 let followedThreadId: string | null = saved?.followedDiscoveryId ?? null;
+let observeMode = false;
+let selectedMemoryReader: (() => CityMemoryInspection | CatMemoryInspection | null) | null = null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   activePointers.add(event.pointerId);
@@ -295,6 +326,11 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 });
 
 renderer.domElement.addEventListener('pointermove', (event) => {
+  // Mouse/pen hover should keep the build target live before a gesture begins.
+  if (!activePointers.size) {
+    updateHover(event.clientX, event.clientY);
+    return;
+  }
   if (event.pointerId !== gesturePointerId || multiTouchGesture) return;
   const dragThreshold = event.pointerType === 'touch' ? 10 : 5;
   if (Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > dragThreshold) {
@@ -323,13 +359,18 @@ renderer.domElement.addEventListener('pointerup', (event) => {
       demolish(hoveredCell.x, hoveredCell.z);
     } else if (!inspectCitizen(event.clientX, event.clientY)) {
       hideCitizenCard();
-      build(hoveredCell.x, hoveredCell.z);
+      if (observeMode) inspectTownMemory(event.clientX, event.clientY);
+      else {
+        hideMemoryCard();
+        build(hoveredCell.x, hoveredCell.z);
+      }
     }
   }
   if (event.button === 2) demolish(hoveredCell.x, hoveredCell.z);
   if (event.pointerType === 'touch') {
     hover.visible = false;
     hoveredCell = null;
+    renderer.domElement.classList.remove('inspect-resident');
   }
   resetPointerGesture();
 });
@@ -343,6 +384,7 @@ renderer.domElement.addEventListener('pointerleave', () => {
   if (activePointers.size) return;
   hover.visible = false;
   hoveredCell = null;
+  renderer.domElement.classList.remove('inspect-resident');
   renderer.domElement.classList.remove('dragging');
 });
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -362,6 +404,7 @@ function cancelCameraGesture() {
   resetPointerGesture();
   hover.visible = false;
   hoveredCell = null;
+  renderer.domElement.classList.remove('inspect-resident');
 
   // Preserve the current view while forcing OrbitControls back to its idle state.
   controls.saveState();
@@ -371,6 +414,9 @@ function cancelCameraGesture() {
 function updateHover(clientX: number, clientY: number) {
   pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
+  const residentHovered = raycaster.intersectObject(citizens.root, true)
+    .some((intersection) => citizens.citizenIdFrom(intersection.object) !== null);
+  renderer.domElement.classList.toggle('inspect-resident', residentHovered);
   const size = CityRenderer.cellSize();
   const cityHit = raycaster.intersectObject(city.root, true)
     .map((intersection) => city.cellFromObject(intersection.object))
@@ -405,10 +451,43 @@ function inspectCitizen(clientX: number, clientY: number) {
     .map((intersection) => citizens.citizenIdFrom(intersection.object))
     .find((id) => id !== null) ?? null;
   if (!citizenId) return false;
+  hideMemoryCard();
   selectedCitizenId = citizenId;
   updateCitizenCard();
   hover.visible = false;
   return true;
+}
+
+function inspectTownMemory(clientX: number, clientY: number) {
+  pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const absoluteHours = day * 24 + timeOfDay;
+  const catHit = raycaster.intersectObject(ambience.root, true)
+    .find((intersection) => ambience.catMemoryFromObject(intersection.object, absoluteHours, catColonyFoundedAt) !== null);
+  const cat = catHit ? ambience.catMemoryFromObject(catHit.object, absoluteHours, catColonyFoundedAt) : null;
+  const cityPoint = raycaster.intersectObject(city.root, true)
+    .map((intersection) => city.cellFromObject(intersection.object))
+    .find((point) => point !== null) ?? hoveredCell;
+  const memory = cat ?? (cityPoint ? city.memoryAt(cityPoint.x, cityPoint.z, absoluteHours) : null);
+  if (!memory) {
+    hideMemoryCard();
+    showToast('This patch of water has no memory yet.');
+    return false;
+  }
+  selectedMemoryReader = cat && catHit
+    ? () => ambience.catMemoryFromObject(catHit.object, day * 24 + timeOfDay, catColonyFoundedAt)
+    : cityPoint ? () => city.memoryAt(cityPoint.x, cityPoint.z, day * 24 + timeOfDay) : null;
+  showMemoryCard(memory);
+  return true;
+}
+
+function showMemoryCard(memory: CityMemoryInspection | CatMemoryInspection) {
+  document.querySelector('#memory-kicker')!.textContent = memory.kind === 'cat' ? 'Harbor family' : memory.kind === 'tree' ? 'Living landmark' : 'Town memory';
+  document.querySelector('#memory-title')!.textContent = memory.title;
+  document.querySelector('#memory-age')!.textContent = memory.ageLabel;
+  document.querySelector('#memory-detail')!.textContent = memory.detail;
+  document.querySelector('#memory-note')!.textContent = memory.note;
+  document.querySelector('#memory-card')!.classList.add('show');
 }
 
 function updateCitizenCard() {
@@ -430,6 +509,11 @@ function hideCitizenCard() {
   document.querySelector('#citizen-card')!.classList.remove('show');
 }
 
+function hideMemoryCard() {
+  selectedMemoryReader = null;
+  document.querySelector('#memory-card')!.classList.remove('show');
+}
+
 function build(x: number, z: number) {
   if (!city.place(x, z, day * 24 + timeOfDay)) {
     showToast(city.get(x, z) ? 'That tower is tall enough.' : 'The water is too deep to build there.');
@@ -442,7 +526,10 @@ function build(x: number, z: number) {
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), false);
   performanceWarmup = 0;
   performanceCooldown = 0;
+  overloadSeconds = 0;
+  severeOverloadSeconds = 0;
   renderer.shadowMap.needsUpdate = true;
+  ignoreNextPerformanceSample = true;
   popSound();
   persistSoon();
   document.querySelector('#hint')?.classList.add('hidden');
@@ -451,13 +538,17 @@ function build(x: number, z: number) {
 
 function demolish(x: number, z: number) {
   if (!city.remove(x, z, day * 24 + timeOfDay)) return;
+  hideMemoryCard();
   citizens.rebuild(city.cells);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), true);
   performanceWarmup = 0;
   performanceCooldown = 0;
+  overloadSeconds = 0;
+  severeOverloadSeconds = 0;
   renderer.shadowMap.needsUpdate = true;
+  ignoreNextPerformanceSample = true;
   hideCitizenCard();
   softTone(190, .07);
   persistSoon();
@@ -505,6 +596,19 @@ function showToast(message: string) {
 }
 
 function currentSnapshot() {
+  const absoluteHours = day * 24 + timeOfDay;
+  const cityMemory = city.memoryStats(absoluteHours);
+  const fauna = ambience.wildlifeStats();
+  const weather = weatherAt(seed, absoluteHours);
+  const memory: TownMemorySnapshot = {
+    ...cityMemory,
+    catPopulation: fauna.cats,
+    catCapacity: fauna.catCapacity,
+    kittenCount: fauna.kittens,
+    migratingCats: fauna.migratingCats,
+    rainIntensity: weather.intensity,
+    raining: weather.raining,
+  };
   return createWorldSnapshot({
     cells: city.cells.values(),
     citizens: citizens.residents(),
@@ -513,6 +617,7 @@ function currentSnapshot() {
     day,
     timeOfDay,
     priorDiscoveries: grow.discoveredIds(),
+    memory,
   });
 }
 
@@ -600,7 +705,7 @@ function updateGrowInspector() {
   const selected = hoveredCell ? `${hoveredCell.x},${hoveredCell.z}: ${city.topologyLabel(hoveredCell.x, hoveredCell.z)}` : 'none';
   const nav = citizens.navStats();
   const fauna = ambience.wildlifeStats();
-  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · fleet: ${fleet.join(', ') || 'none'} · fauna: ${fauna.birds} birds, ${fauna.gulls} gulls (${fauna.gullModes.flying} flying/${fauna.gullModes.feeding} feeding/${fauna.gullModes.perching} perched/${fauna.gullModes.scattering} scattering), ${fauna.fish} fish, ${fauna.crabs} crabs, ${fauna.cats} cats, ${fauna.butterflies} butterflies · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
+  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · memory: ${snapshot.memory.patinaCells} weathered, ${snapshot.memory.growingTrees} growing/${snapshot.memory.matureTrees} mature trees, oldest ${Math.floor(snapshot.memory.oldestBuildingHours)}h, ${snapshot.memory.raining ? `rain ${snapshot.memory.rainIntensity.toFixed(2)}` : 'dry'} · fleet: ${fleet.join(', ') || 'none'} · fauna: ${fauna.birds} birds, ${fauna.gulls} gulls (${fauna.gullModes.flying} flying/${fauna.gullModes.feeding} feeding/${fauna.gullModes.perching} perched/${fauna.gullModes.scattering} scattering), ${fauna.fish} fish, ${fauna.crabs} crabs, ${fauna.cats}/${fauna.catCapacity} cats (${fauna.kittens} kittens, ${fauna.migratingCats} leaving), ${fauna.butterflies} butterflies · passing: ${fauna.whale} whale, ${fauna.dolphins} dolphins, ${fauna.squids} squids, ${fauna.tuna} tuna · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
   const eligibleTitle = document.createElement('span');
   eligibleTitle.textContent = 'Eligible next';
   const eligibleList = document.createElement('p');
@@ -619,7 +724,7 @@ function updateGrowInspector() {
   effects.textContent = committedEffects.length ? committedEffects.join('\n') : 'none this session';
   const controls = document.createElement('div');
   controls.className = 'grow-tools';
-  controls.innerHTML = `<button data-grow-action="nav">${navDebugVisible ? 'Hide' : 'Show'} nav</button><button data-grow-action="spawn">Spawn citizen</button><button data-grow-action="fauna">Scatter fauna</button><button data-grow-action="hour">+1 hour</button>`;
+  controls.innerHTML = `<button data-grow-action="nav">${navDebugVisible ? 'Hide' : 'Show'} nav</button><button data-grow-action="spawn">Spawn citizen</button><button data-grow-action="fauna">Scatter fauna</button><button data-grow-action="hour">+1 hour</button><button data-grow-action="day">+1 day</button>`;
   const select = document.createElement('select');
   select.setAttribute('aria-label', 'Discovery to force');
   for (const event of events) {
@@ -739,6 +844,10 @@ const JOURNAL_SKETCHES: Record<JournalIllustration, string> = {
     <path class="wash" d="M27 55 Q52 48 79 55 L77 66 Q51 70 25 64Z"/>
     <path d="M22 58 Q52 52 84 58 M29 57 L31 43 L72 41 L76 56 M31 43 Q50 38 72 41 M39 43 L38 55 M52 41 L53 54 M64 42 L65 55"/>
     <path class="faint" d="M27 61 Q52 56 79 61 M33 46 Q52 41 70 44"/>`,
+  rain: `
+    <path class="wash water" d="M15 55 Q49 47 92 55 L94 69 L12 69Z"/>
+    <path d="M19 57 Q52 50 91 57 M31 51 L35 34 L51 30 L55 50 M55 50 L59 28 L77 32 L81 53 M17 27 L13 35 M31 19 L26 28 M49 15 L44 24 M69 17 L64 26 M88 22 L83 31"/>
+    <path class="faint" d="M14 63 Q48 55 94 62 M22 34 L18 42 M42 23 L37 32 M61 18 L56 27 M80 29 L75 38"/>`,
   garden: `
     <path class="wash botanical" d="M33 53 Q31 29 51 28 Q72 30 69 54Z"/>
     <path d="M20 61 Q51 55 86 60 M31 55 Q35 49 39 55 Q43 46 47 54 Q52 43 57 54 Q62 47 68 55 M50 55 Q49 42 52 28 M51 40 Q43 35 40 28 M52 37 Q61 32 65 24"/>
@@ -864,9 +973,6 @@ function createJournalEntry(entry: JournalEntry) {
   return article;
 }
 
-renderJournal();
-updateThreadStatus();
-
 function setJournalOpen(open: boolean) {
   const scrim = document.querySelector('#journal-scrim')!;
   if (open) {
@@ -895,11 +1001,14 @@ function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
   if (!update.changed) return;
   const current = businesses.all();
   const visibleChange = update.opened.length > 0 || update.closed.length > 0 || update.hired.length > 0;
+  // Visit-count buckets add worn approach stones without rebuilding a shop on
+  // every single visit.
+  city.setBusinesses(current);
   if (visibleChange) {
-    city.setBusinesses(current);
     citizens.setBusinesses(current);
     refreshAmbience();
     renderer.shadowMap.needsUpdate = true;
+    ignoreNextPerformanceSample = true;
   }
   if (announce && update.closed[0]) {
     showToast(`${update.closed[0].name} has quietly closed its shutters.`);
@@ -934,13 +1043,14 @@ function softTone(frequency: number, duration: number, delay = 0, volume = .055,
   oscillator.stop(context.currentTime + delay + duration + .02);
 }
 
-function playHarborAmbience(daylight: number) {
+function playHarborAmbience(daylight: number, rainIntensity = 0) {
   if (!audioContext || audioContext.state !== 'running') return;
   playCue('water', daylight);
   if (citizens.walkingCount() > 0) playCue('footsteps');
   if (citizens.population() > 3 && daylight > .28) playCue('chatter');
   if (grow.discoveredIds().includes('gulls-return') && daylight > .4) playCue('gulls');
   if (daylight < .32) playCue('insects');
+  if (rainIntensity > .12) playCue('rain');
   if (ambience.activeFleet().some((kind) => kind === 'ferry' || kind === 'merchant boat')) playCue('horn');
   if (grow.discoveredIds().includes('lantern-finale')) {
     softTone(760, .38, .5, .01, 'sine');
@@ -948,7 +1058,7 @@ function playHarborAmbience(daylight: number) {
   }
 }
 
-type SoundCue = 'water' | 'gulls' | 'footsteps' | 'door' | 'chatter' | 'bell' | 'horn' | 'insects' | 'celebration';
+type SoundCue = 'water' | 'gulls' | 'footsteps' | 'door' | 'chatter' | 'bell' | 'horn' | 'insects' | 'rain' | 'celebration';
 
 function playCue(cue: SoundCue, daylight = 1) {
   if (audioContext && audioContext.state !== 'running') return;
@@ -960,6 +1070,7 @@ function playCue(cue: SoundCue, daylight = 1) {
   if (cue === 'bell') { softTone(690, .72, 0, .035, 'sine'); softTone(1035, .85, .04, .018, 'sine'); }
   if (cue === 'horn') softTone(132, .62, .14, .02, 'sine');
   if (cue === 'insects') { softTone(1320, .08, .2, .004, 'triangle'); softTone(1480, .06, .34, .003, 'triangle'); }
+  if (cue === 'rain') { softTone(185, .18, 0, .004, 'triangle'); softTone(240, .12, .22, .003, 'triangle'); }
   if (cue === 'celebration') {
     playCue('bell');
     [520, 660, 790, 1040].forEach((frequency, index) => softTone(frequency, .24, .18 + index * .11, .018, 'triangle'));
@@ -1016,7 +1127,7 @@ function setTouchMode(mode: 'build' | 'remove') {
   touchMode = mode;
   hover.visible = false;
   hoveredCell = null;
-  renderer.domElement.classList.toggle('remove-mode', mode === 'remove');
+  renderer.domElement.classList.remove('inspect-resident');
   document.querySelectorAll<HTMLButtonElement>('[data-touch-mode]').forEach((button) => {
     const active = button.dataset.touchMode === mode;
     button.classList.toggle('active', active);
@@ -1054,6 +1165,15 @@ document.querySelector('#reset')!.addEventListener('click', () => {
 });
 
 document.querySelector('#card-close')!.addEventListener('click', hideCitizenCard);
+document.querySelector('#memory-card-close')!.addEventListener('click', hideMemoryCard);
+document.querySelector('#observe-toggle')!.addEventListener('click', () => {
+  observeMode = !observeMode;
+  const button = document.querySelector<HTMLButtonElement>('#observe-toggle')!;
+  button.classList.toggle('active', observeMode);
+  button.setAttribute('aria-pressed', String(observeMode));
+  if (!observeMode) hideMemoryCard();
+  showToast(observeMode ? 'Observe mode: choose a building, tree, cat, or resident.' : 'Build mode restored.');
+});
 document.querySelector('#thread-close')!.addEventListener('click', () => {
   followedThreadId = null;
   updateThreadStatus();
@@ -1106,6 +1226,10 @@ document.querySelector('#grow-inspector')!.addEventListener('click', (event) => 
     if (timeOfDay >= 24) { timeOfDay %= 24; day += 1; }
     evaluateDiscoveries();
     persistSoon();
+  } else if (action === 'day') {
+    day += 1;
+    evaluateDiscoveries();
+    persistSoon();
   } else if (action === 'force') {
     const discovery = grow.force(forcedEventSelection, currentSnapshot());
     if (discovery) {
@@ -1123,6 +1247,7 @@ document.querySelector('#grow-inspector')!.addEventListener('click', (event) => 
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'p') document.querySelector('#perf-panel')!.classList.toggle('show');
   if (event.key.toLowerCase() === 'j') setJournalOpen(!document.querySelector('#journal-scrim')!.classList.contains('show'));
+  if (event.key.toLowerCase() === 'i') document.querySelector<HTMLButtonElement>('#observe-toggle')!.click();
   if (event.key.toLowerCase() === 'g') {
     document.querySelector('#grow-inspector')!.classList.toggle('show');
     updateGrowInspector();
@@ -1137,13 +1262,20 @@ window.addEventListener('keydown', (event) => {
 
 const ambience = new HarborAmbience(seed, camera, city.cells.values());
 ambience.setDiscoveryState(grow.discoveredIds());
-ambience.setTown(city.cells.values(), businesses.all(), citizens.residents());
+ambience.setTown(city.cells.values(), businesses.all(), citizens.residents(), city.matureTreeAnchors(day * 24 + timeOfDay));
 scene.add(ambience.root);
+renderJournal();
+updateThreadStatus();
 
 function refreshAmbience() {
-  ambience.setTown(city.cells.values(), businesses.all(), citizens.residents());
+  const catsBefore = ambience.wildlifeStats();
+  ambience.setTown(city.cells.values(), businesses.all(), citizens.residents(), city.matureTreeAnchors(day * 24 + timeOfDay));
   ambience.setDiscoveryState(grow.discoveredIds());
   citizens.setDiscoveries(grow.discoveredIds());
+  const catsAfter = ambience.wildlifeStats();
+  if (catsAfter.migratingCats > catsBefore.migratingCats) {
+    showToast(`${catsAfter.migratingCats} ${catsAfter.migratingCats === 1 ? 'cat is' : 'cats are'} finding a new harbor home.`);
+  }
 }
 
 const clock = new THREE.Clock();
@@ -1158,12 +1290,17 @@ let frameTimeEma = 16.7;
 let performanceWarmup = 0;
 let performanceCooldown = 0;
 let performanceUpdate = 0;
+let overloadSeconds = 0;
+let severeOverloadSeconds = 0;
+let recoverySeconds = 0;
+let ignoreNextPerformanceSample = false;
 let businessCheckElapsed = 0;
 let discoveryCheckElapsed = 0;
 let ambientSoundElapsed = 0;
 let inspectorElapsed = 0;
 let nightMode = false;
 let shadowsActive = true;
+let lastRaining = weatherAt(seed, day * 24 + timeOfDay).raining;
 
 function daylightAt(hour: number) {
   const solar = Math.sin((hour - 6) / 12 * Math.PI);
@@ -1175,6 +1312,8 @@ function updateTimeDisplay() {
   const minutes = Math.floor((timeOfDay - hours) * 60);
   document.querySelector('#clock-display')!.textContent = `Day ${day} · ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')} · ${citizens.population()} ${citizens.population() === 1 ? 'resident' : 'residents'}`;
   updateCitizenCard();
+  const memory = selectedMemoryReader?.();
+  if (memory) showMemoryCard(memory);
 }
 
 function animate() {
@@ -1183,7 +1322,12 @@ function animate() {
   if (document.hidden) return;
   const delta = Math.min(rawDelta, .1);
   const time = clock.elapsedTime;
-  frameTimeEma += (rawDelta * 1000 - frameTimeEma) * .035;
+  if (ignoreNextPerformanceSample) ignoreNextPerformanceSample = false;
+  else frameTimeEma += (rawDelta * 1000 - frameTimeEma) * .035;
+  const performanceDelta = Math.min(rawDelta, .1);
+  overloadSeconds = frameTimeEma > 22 ? overloadSeconds + performanceDelta : Math.max(0, overloadSeconds - performanceDelta * 2);
+  severeOverloadSeconds = frameTimeEma > 26 ? severeOverloadSeconds + performanceDelta : Math.max(0, severeOverloadSeconds - performanceDelta * 2);
+  recoverySeconds = frameTimeEma < 17.5 ? recoverySeconds + performanceDelta : 0;
   performanceWarmup += rawDelta;
   performanceCooldown += rawDelta;
   performanceUpdate += rawDelta;
@@ -1198,6 +1342,12 @@ function animate() {
     day += 1;
   }
   const absoluteHours = day * 24 + timeOfDay;
+  const weather = weatherAt(seed, absoluteHours);
+  if (weather.raining !== lastRaining) {
+    lastRaining = weather.raining;
+    showToast(weather.raining ? 'A passing shower crosses the harbor.' : 'The shower passes, leaving the stones shining.');
+    if (weather.raining) playCue('rain');
+  }
   const currentHour = Math.floor(absoluteHours);
   if (currentHour !== lastChimedHour) {
     lastChimedHour = currentHour;
@@ -1218,13 +1368,20 @@ function animate() {
   const sunAngle = (timeOfDay - 6) / 24 * Math.PI * 2;
   sun.position.set(Math.cos(sunAngle) * 18, 5 + daylight * 20, Math.sin(sunAngle) * 16);
   shadowElapsed += rawDelta;
-  if (shadowsActive && shadowElapsed > 1.4) {
+  // The town is mostly static. Coarse solar steps keep the shadows alive
+  // without periodically rerendering every caster during ordinary motion.
+  if (shadowsActive && shadowElapsed > 12) {
     renderer.shadowMap.needsUpdate = true;
+    // The next delta includes the deliberately scheduled shadow render. Do not
+    // mistake that isolated maintenance frame for sustained GPU pressure.
+    ignoreNextPerformanceSample = true;
     shadowElapsed = 0;
   }
   renderer.toneMappingExposure = .72 + daylight * .36;
   waterUniforms.uTime.value = time;
   waterUniforms.uDay.value = daylight;
+  waterUniforms.uRain.value = weather.intensity;
+  city.setWeather(weather.intensity);
   city.update(time, absoluteHours);
   city.setDaylight(daylight);
   citizens.update(delta * simulationSpeed, timeOfDay, absoluteHours, time);
@@ -1240,14 +1397,14 @@ function animate() {
     discoveryCheckElapsed = 0;
   }
   if (ambientSoundElapsed > 11) {
-    playHarborAmbience(daylight);
+    playHarborAmbience(daylight, weather.intensity);
     ambientSoundElapsed = 0;
   }
   if (inspectorElapsed > .75) {
     updateGrowInspector();
     inspectorElapsed = 0;
   }
-  ambience.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt);
+  ambience.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, weather.intensity);
   clockUpdate += delta;
   autosaveElapsed += delta;
   if (clockUpdate > .25) {
@@ -1258,18 +1415,26 @@ function animate() {
     saveTown();
     autosaveElapsed = 0;
   }
-  if (performanceWarmup > 3 && performanceCooldown > 3 && frameTimeEma > 22 && renderPixelRatio > 1) {
+  if (performanceWarmup > 3 && performanceCooldown > 3 && overloadSeconds > 1.5 && renderPixelRatio > 1) {
     renderPixelRatio = Math.max(1, renderPixelRatio - (frameTimeEma > 30 ? .3 : .2));
     renderer.setPixelRatio(renderPixelRatio);
     performanceCooldown = 0;
-  } else if (performanceWarmup > 8 && performanceCooldown > 4 && frameTimeEma > 26 && renderPixelRatio <= 1 && shadowsActive) {
+    overloadSeconds = 0;
+  } else if (performanceWarmup > 8 && performanceCooldown > 4 && severeOverloadSeconds > 2 && renderPixelRatio <= 1 && shadowsActive) {
     shadowsActive = false;
     renderer.shadowMap.enabled = false;
     performanceCooldown = 0;
-  } else if (performanceWarmup > 20 && performanceCooldown > 15 && frameTimeEma < 17.5 && renderPixelRatio < maximumPixelRatio) {
+    severeOverloadSeconds = 0;
+  } else if (performanceWarmup > 12 && performanceCooldown > 4 && severeOverloadSeconds > 2 && renderPixelRatio > .75) {
+    renderPixelRatio = Math.max(.75, renderPixelRatio - .1);
+    renderer.setPixelRatio(renderPixelRatio);
+    performanceCooldown = 0;
+    severeOverloadSeconds = 0;
+  } else if (performanceWarmup > 20 && performanceCooldown > 15 && recoverySeconds > 8 && renderPixelRatio < maximumPixelRatio) {
     renderPixelRatio = Math.min(maximumPixelRatio, renderPixelRatio + .1);
     renderer.setPixelRatio(renderPixelRatio);
     performanceCooldown = 0;
+    recoverySeconds = 0;
   }
   if (performanceUpdate > .75) {
     const info = renderer.info.render;

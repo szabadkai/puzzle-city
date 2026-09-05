@@ -26,7 +26,7 @@ export type SavedTown = {
 };
 
 export type JournalIllustration =
-  | 'foundation' | 'garden' | 'arch' | 'bridge' | 'tower'
+  | 'foundation' | 'rain' | 'garden' | 'arch' | 'bridge' | 'tower'
   | 'neighbors' | 'street' | 'friendship'
   | 'bread' | 'tea' | 'tools' | 'fish' | 'inn'
   | 'market' | 'town' | 'pots' | 'gulls' | 'blossom'

@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:memory": "node --experimental-strip-types scripts/memory-check.mjs",
+    "test:render-structure": "node scripts/render-structure-check.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

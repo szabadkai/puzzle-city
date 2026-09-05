@@ -3,8 +3,12 @@ import { businessLabel, businessOccupation, isBusinessOpen } from './businesses'
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenSave, keyOf } from './types';
 import { hash, pick } from './random';
 import { findPlazaAnchors } from './topology';
+import {
+  arcadeFeature, isRoofAccessCell, isWalkableRoof, roofAccessDirection, roofCourtFeature, steppedTerrace,
+} from './architecture';
 
 const CELL = 2.45;
+const FLOOR = 1.42;
 const EDGE = CELL / 2;
 const WALK_OUT = EDGE + .24;
 const WALK_Y = .27;
@@ -13,6 +17,7 @@ const NAMES = ['Mei', 'Ren', 'Aiko', 'Hana', 'Jun', 'Mina', 'Sora', 'Tomo', 'Yun
 const TRAITS = ['sociable', 'quiet', 'ambitious', 'curious', 'artistic', 'industrious', 'dreamy', 'patient', 'adventurous'];
 const OCCUPATIONS = ['Baker', 'Fisher', 'Gardener', 'Teacher', 'Bookbinder', 'Caretaker', 'Cartographer', 'Cook'];
 const CLOTHES = [0xc9564d, 0xd99a42, 0x457b78, 0x536c92, 0xa75e77, 0x718551];
+const MAX_RENDERED_CITIZENS = 512;
 
 type NavNode = {
   key: string;
@@ -24,6 +29,10 @@ type Citizen = CitizenSave & {
   model: THREE.Group;
   leftLeg: THREE.Object3D;
   rightLeg: THREE.Object3D;
+  body: THREE.Object3D;
+  head: THREE.Object3D;
+  hair: THREE.Object3D;
+  hat: THREE.Object3D | null;
   path: THREE.Vector3[];
   targetKey: string | null;
   nextDecisionAt: number;
@@ -57,6 +66,7 @@ export class NavGraph {
   readonly nodes = new Map<string, NavNode>();
   readonly entrances = new Map<string, string>();
   readonly plazas: string[] = [];
+  readonly rooftops = new Map<string, string>();
   private readonly cells: Map<string, Cell>;
   private readonly seed: number;
 
@@ -170,6 +180,68 @@ export class NavGraph {
       this.connect(deckCenter, deckB);
       this.connect(deckB, groundB);
     }
+
+    this.buildRooftops();
+  }
+
+  private buildRooftops() {
+    const roofNodes = new Map<string, { center: string; edges: string[]; y: number }>();
+    for (const cell of this.cells.values()) {
+      if (!isWalkableRoof(cell, this.cells)) continue;
+      const y = .38 + cell.height * FLOOR + .18;
+      const center = this.addNode(cell.x * CELL, cell.z * CELL, y);
+      const edges = CARDINALS.map(([dx, dz]) => this.addNode(cell.x * CELL + dx * .68, cell.z * CELL + dz * .68, y));
+      edges.forEach((edge) => this.connect(center, edge));
+      roofNodes.set(keyOf(cell.x, cell.z), { center, edges, y });
+      const feature = roofCourtFeature(cell, this.cells)
+        ?? steppedTerrace(cell, this.cells)?.feature
+        ?? arcadeFeature(cell, this.cells)
+        ?? 'rooftop deck';
+      this.rooftops.set(center, feature);
+      edges.forEach((edge) => this.rooftops.set(edge, feature));
+    }
+
+    for (const cell of this.cells.values()) {
+      const roof = roofNodes.get(keyOf(cell.x, cell.z));
+      if (!roof) continue;
+      CARDINALS.forEach(([dx, dz], direction) => {
+        const neighbor = this.cells.get(keyOf(cell.x + dx, cell.z + dz));
+        const neighborRoof = neighbor && roofNodes.get(keyOf(neighbor.x, neighbor.z));
+        if (neighborRoof && neighbor?.height === cell.height) this.connect(roof.edges[direction], neighborRoof.edges[(direction + 2) % 4]);
+      });
+
+      const terrace = steppedTerrace(cell, this.cells);
+      if (terrace) {
+        const [dx, dz] = CARDINALS[terrace.direction];
+        const lower = this.cells.get(keyOf(cell.x + dx, cell.z + dz));
+        const lowerRoof = lower && roofNodes.get(keyOf(lower.x, lower.z));
+        if (lowerRoof && lower?.height === cell.height - 1) {
+          let previous = roof.center;
+          for (let index = 0; index < 6; index++) {
+            const outward = .48 + index * .25;
+            const step = this.addNode(cell.x * CELL + dx * outward, cell.z * CELL + dz * outward, roof.y - index * .21);
+            this.connect(previous, step);
+            previous = step;
+          }
+          this.connect(previous, lowerRoof.edges[(terrace.direction + 2) % 4]);
+        }
+      }
+
+      if (!isRoofAccessCell(cell, this.cells, this.seed)) continue;
+      const direction = roofAccessDirection(cell, this.cells, this.seed);
+      const entrance = this.entrance(keyOf(cell.x, cell.z));
+      if (direction === null || !entrance) continue;
+      const [dx, dz] = CARDINALS[direction];
+      const hatchX = cell.x * CELL + dx * .5;
+      const hatchZ = cell.z * CELL + dz * .5;
+      const inside = this.addNode(cell.x * CELL, cell.z * CELL, WALK_Y);
+      const stairBottom = this.addNode(hatchX, hatchZ, WALK_Y);
+      const stairTop = this.addNode(hatchX, hatchZ, roof.y);
+      this.connect(entrance.key, inside);
+      this.connect(inside, stairBottom);
+      this.connect(stairBottom, stairTop);
+      this.connect(stairTop, roof.center);
+    }
   }
 
   private doorDirection(cell: Cell, open: boolean[]) {
@@ -206,8 +278,9 @@ export class NavGraph {
       for (const neighbor of this.nodes.get(key)?.links ?? []) pending.push(neighbor);
     }
     const component = [...this.nodes.values()].filter((node) => reachable.has(node.key));
-    const preferred = predicate ? component.filter(predicate) : component;
-    const options = preferred.length ? preferred : component;
+    const everyday = component.filter((node) => !this.rooftops.has(node.key));
+    const preferred = predicate ? everyday.filter(predicate) : everyday;
+    const options = preferred.length ? preferred : everyday.length ? everyday : component;
     return options.length ? options[Math.floor(value * options.length) % options.length] : undefined;
   }
 
@@ -216,6 +289,22 @@ export class NavGraph {
     if (!options.length) return undefined;
     return this.nodes.get(options[Math.floor(value * options.length) % options.length]);
   }
+
+  rooftopNode(value: number, from: string) {
+    const reachable = new Set<string>();
+    const pending = [from];
+    while (pending.length) {
+      const key = pending.pop()!;
+      if (reachable.has(key)) continue;
+      reachable.add(key);
+      for (const neighbor of this.nodes.get(key)?.links ?? []) pending.push(neighbor);
+    }
+    const options = [...this.rooftops.keys()].filter((key) => reachable.has(key));
+    if (!options.length) return undefined;
+    return this.nodes.get(options[Math.floor(value * options.length) % options.length]);
+  }
+
+  rooftopLabel(key: string) { return this.rooftops.get(key) ?? null; }
 
   canReach(from: string, to: string) {
     if (from === to) return true;
@@ -296,6 +385,7 @@ export class NavGraph {
 export class CitizenSystem {
   readonly root = new THREE.Group();
   readonly debugRoot = new THREE.Group();
+  private readonly renderRoot = new THREE.Group();
   private readonly seed: number;
   private readonly citizens: Citizen[] = [];
   private graph: NavGraph;
@@ -318,15 +408,28 @@ export class CitizenSystem {
   private readonly hairGeometry = new THREE.SphereGeometry(.109, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
   private readonly legGeometry = new THREE.CylinderGeometry(.025, .03, .2, 6);
   private readonly hatGeometry = new THREE.ConeGeometry(.18, .08, 12);
+  private readonly bodyInstances: THREE.InstancedMesh[];
+  private readonly headInstances: THREE.InstancedMesh;
+  private readonly hairInstances: THREE.InstancedMesh;
+  private readonly legInstances: THREE.InstancedMesh;
+  private readonly hatInstances: THREE.InstancedMesh;
+  private readonly renderMatrix = new THREE.Matrix4();
 
   constructor(seed: number, cells: Map<string, Cell>, saved: CitizenSave[]) {
     this.seed = seed;
     this.cells = cells;
     this.graph = new NavGraph(cells, seed);
     this.root.name = 'citizens';
+    this.renderRoot.name = 'citizen-instance-batches';
+    this.bodyInstances = this.clothesMaterials.map((material, index) => this.createInstanceBatch(this.bodyGeometry, material, `citizen-bodies-${index}`));
+    this.headInstances = this.createInstanceBatch(this.headGeometry, this.skinMaterial, 'citizen-heads');
+    this.hairInstances = this.createInstanceBatch(this.hairGeometry, this.darkMaterial, 'citizen-hair');
+    this.legInstances = this.createInstanceBatch(this.legGeometry, this.darkMaterial, 'citizen-legs');
+    this.hatInstances = this.createInstanceBatch(this.hatGeometry, this.hatMaterial, 'citizen-hats');
+    this.renderRoot.add(...this.bodyInstances, this.headInstances, this.hairInstances, this.legInstances, this.hatInstances);
     this.debugRoot.name = 'citizen-navigation';
     this.debugRoot.visible = false;
-    this.root.add(this.debugRoot);
+    this.root.add(this.renderRoot, this.debugRoot);
     for (const data of saved) this.restoreCitizen(data);
     this.nextCitizen = this.citizens.reduce((largest, citizen) => {
       const index = Number(citizen.id.split('-').at(-1));
@@ -334,6 +437,19 @@ export class CitizenSystem {
     }, -1) + 1;
     this.reconcileHomes();
     this.rebuildDebugGraph();
+    this.updateRenderInstances();
+  }
+
+  private createInstanceBatch(geometry: THREE.BufferGeometry, material: THREE.Material, name: string) {
+    const mesh = new THREE.InstancedMesh(geometry, material, MAX_RENDERED_CITIZENS * (name === 'citizen-legs' ? 2 : 1));
+    mesh.name = name;
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    // Picking uses the original invisible parts so an instance ID never has to
+    // be translated back through color-specific body batches.
+    mesh.raycast = () => {};
+    return mesh;
   }
 
   rebuild(cells: Map<string, Cell>) {
@@ -342,6 +458,8 @@ export class CitizenSystem {
     for (const citizen of this.citizens) {
       citizen.path = [];
       citizen.targetKey = null;
+      const nearest = this.graph.closest(citizen.model.position);
+      if (nearest) citizen.model.position.copy(nearest.position);
     }
     this.reconcileHomes();
     this.rebuildDebugGraph();
@@ -475,6 +593,10 @@ export class CitizenSystem {
       model,
       leftLeg: model.userData.leftLeg as THREE.Object3D,
       rightLeg: model.userData.rightLeg as THREE.Object3D,
+      body: model.userData.body as THREE.Object3D,
+      head: model.userData.head as THREE.Object3D,
+      hair: model.userData.hair as THREE.Object3D,
+      hat: model.userData.hat as THREE.Object3D | null,
       path: [],
       targetKey: null,
       nextDecisionAt: 0,
@@ -493,10 +615,13 @@ export class CitizenSystem {
     group.userData.citizenId = data.id;
     const clothes = this.clothesMaterials[data.color % this.clothesMaterials.length];
     const body = new THREE.Mesh(this.bodyGeometry, clothes);
+    body.name = 'citizen-body';
     body.position.y = .34;
     const head = new THREE.Mesh(this.headGeometry, this.skinMaterial);
+    head.name = 'citizen-head';
     head.position.y = .62;
     const hair = new THREE.Mesh(this.hairGeometry, this.darkMaterial);
+    hair.name = 'citizen-hair';
     hair.position.y = .64;
     const legs: THREE.Mesh[] = [];
     for (const side of [-1, 1]) {
@@ -506,8 +631,9 @@ export class CitizenSystem {
       legs.push(leg);
       group.add(leg);
     }
+    let hat: THREE.Mesh | null = null;
     if (data.occupation === 'Fisher' || data.occupation === 'Gardener') {
-      const hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
+      hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
       hat.name = 'occupation-hat';
       hat.position.y = .72;
       group.add(hat);
@@ -515,10 +641,15 @@ export class CitizenSystem {
     group.add(body, head, hair);
     group.userData.leftLeg = legs[0];
     group.userData.rightLeg = legs[1];
+    group.userData.body = body;
+    group.userData.head = head;
+    group.userData.hair = hair;
+    group.userData.hat = hat;
     const targetScale = data.ageGroup === 'child' ? .76 : data.ageGroup === 'elder' ? .94 : 1;
     group.userData.targetScale = targetScale;
     group.scale.setScalar(targetScale);
     group.traverse((object) => { object.userData.citizenId = data.id; });
+    for (const child of group.children) child.visible = false;
     return group;
   }
 
@@ -538,6 +669,38 @@ export class CitizenSystem {
       this.updateRelationships(this.relationshipAccumulator, timeOfDay, absoluteHours);
       this.relationshipAccumulator = 0;
     }
+    this.updateRenderInstances();
+  }
+
+  private setActorPart(batch: THREE.InstancedMesh, index: number, model: THREE.Group, part: THREE.Object3D) {
+    model.updateMatrix();
+    part.updateMatrix();
+    batch.setMatrixAt(index, this.renderMatrix.multiplyMatrices(model.matrix, part.matrix));
+  }
+
+  private updateRenderInstances() {
+    const bodyCounts = this.bodyInstances.map(() => 0);
+    let heads = 0;
+    let hairs = 0;
+    let legs = 0;
+    let hats = 0;
+    for (const citizen of this.citizens.slice(0, MAX_RENDERED_CITIZENS)) {
+      const color = citizen.color % this.bodyInstances.length;
+      this.setActorPart(this.bodyInstances[color], bodyCounts[color]++, citizen.model, citizen.body);
+      this.setActorPart(this.headInstances, heads++, citizen.model, citizen.head);
+      this.setActorPart(this.hairInstances, hairs++, citizen.model, citizen.hair);
+      this.setActorPart(this.legInstances, legs++, citizen.model, citizen.leftLeg);
+      this.setActorPart(this.legInstances, legs++, citizen.model, citizen.rightLeg);
+      if (citizen.hat) this.setActorPart(this.hatInstances, hats++, citizen.model, citizen.hat);
+    }
+    this.bodyInstances.forEach((batch, index) => {
+      batch.count = bodyCounts[index];
+      if (batch.count) batch.instanceMatrix.needsUpdate = true;
+    });
+    for (const [batch, count] of [[this.headInstances, heads], [this.hairInstances, hairs], [this.legInstances, legs], [this.hatInstances, hats]] as const) {
+      batch.count = count;
+      if (count) batch.instanceMatrix.needsUpdate = true;
+    }
   }
 
   private chooseRoutine(citizen: Citizen, hour: number, absoluteHours: number) {
@@ -547,6 +710,10 @@ export class CitizenSystem {
     let target = home;
     const choice = hash(this.seed, Math.floor(absoluteHours * 4), this.citizens.indexOf(citizen), 1001);
     const businessVisit = this.chooseBusinessVisit(citizen, hour, choice, from.key);
+    const rooftopChance = citizen.occupation === 'Gardener' ? .62 : citizen.ageGroup === 'elder' ? .4 : .3;
+    const rooftop = hour >= 7 && hour < 21 && (citizen.ageGroup !== 'child' || hour >= 15) && choice < rooftopChance
+      ? this.graph.rooftopNode((choice * 3.17 + this.citizens.indexOf(citizen) * .137) % 1, from.key)
+      : undefined;
     if (hour < 4.5 || (hour < 6 && citizen.occupation !== 'Fisher') || hour >= 22) {
       citizen.activity = 'sleeping at home';
     } else if (businessVisit?.owned) {
@@ -556,6 +723,9 @@ export class CitizenSystem {
       const plaza = this.discoveries.has('birds-nest') ? this.graph.plazaNode(choice, from.key) : undefined;
       citizen.activity = plaza ? 'feeding the birds in the plaza after lessons' : this.discoveries.has('birds-nest') ? 'looking up at the tower nest after lessons' : 'walking to lessons with a neighbor';
       target = plaza ?? this.graph.randomNode(choice, from.key);
+    } else if (rooftop) {
+      citizen.activity = this.rooftopActivity(citizen, this.graph.rooftopLabel(rooftop.key));
+      target = rooftop;
     } else if (citizen.ageGroup === 'elder' && hour >= 14 && hour < 18) {
       citizen.activity = 'resting by the water and greeting passersby';
       target = this.graph.randomNode(choice, from.key, (node) => Math.hypot(node.position.x, node.position.z) > 3);
@@ -610,7 +780,7 @@ export class CitizenSystem {
       citizen.activity = 'walking home beneath the lanterns';
     }
     if (!target) return;
-    if (businessVisit && !businessVisit.owned) this.recordBusinessVisit(citizen, businessVisit.business);
+    if (businessVisit && !businessVisit.owned && target.key === businessVisit.target.key) this.recordBusinessVisit(citizen, businessVisit.business);
     citizen.targetKey = target.key;
     citizen.path = this.graph.path(from.key, target.key);
     citizen.nextDecisionAt = absoluteHours + .35 + choice * .65;
@@ -680,6 +850,15 @@ export class CitizenSystem {
       inn: 'welcoming travelers from the quay',
       pottery: 'turning a small bowl at the wheel',
     }[type];
+  }
+
+  private rooftopActivity(citizen: Citizen, feature: string | null) {
+    if (citizen.occupation === 'Gardener' || feature?.includes('garden')) return 'tending the rooftop planters';
+    if (citizen.ageGroup === 'child') return 'playing on the rooftop terrace';
+    if (citizen.ageGroup === 'elder') return 'resting in the rooftop garden';
+    if (citizen.traits.includes('sociable')) return 'meeting neighbors on the rooftop';
+    if (citizen.traits.includes('quiet')) return 'watching the harbor from the rooftop';
+    return feature === 'roof promenade' ? 'walking the roof promenade' : 'taking the air on the rooftop';
   }
 
   private visitorActivity(type: BusinessType) {
@@ -832,7 +1011,10 @@ export class CitizenSystem {
       hat.name = 'occupation-hat';
       hat.position.y = .72;
       hat.userData.citizenId = citizen.id;
+      hat.visible = false;
       citizen.model.add(hat);
+      citizen.model.userData.hat = hat;
+      citizen.hat = hat;
     }
     return citizen.id;
   }
@@ -955,6 +1137,8 @@ export class CitizenSystem {
     const business = this.businesses.find((candidate) => this.graph.entrance(candidate.cellKey)?.key === citizen.targetKey);
     if (business) return business.name;
     if (this.graph.plazas.includes(citizen.targetKey)) return 'Harbor plaza';
+    const rooftop = this.graph.rooftopLabel(citizen.targetKey);
+    if (rooftop) return rooftop === 'rooftop deck' ? 'A rooftop' : rooftop.replace(/^./, (letter) => letter.toUpperCase());
     const friend = this.citizens.find((candidate) => candidate.id !== citizen.id
       && citizen.relationships.includes(candidate.id)
       && this.graph.entrance(candidate.homeKey)?.key === citizen.targetKey);

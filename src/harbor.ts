@@ -1,11 +1,43 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BusinessSave, Cell, CitizenSave } from './types';
 import { hash } from './random';
-import { analyzeWaterTopology, createShorelineRoute, type WaterTopology } from './water';
-import { FaunaSystem, type WildlifeAction, type WildlifeKind } from './fauna';
+import { analyzeWaterTopology, createShorelineRoute, WORLD_CELL_SIZE, type WaterTopology } from './water';
+import { FaunaSystem, type CatMemoryInspection, type WildlifeAction, type WildlifeKind } from './fauna';
 
 export function createWaterRoute(cells: Iterable<Cell>, seed: number, lane = 0) {
   return createShorelineRoute(cells, seed, lane);
+}
+
+function consolidateModel(group: THREE.Group) {
+  const buckets = new Map<string, THREE.Mesh[]>();
+  for (const child of [...group.children]) {
+    if (!(child instanceof THREE.Mesh) || Array.isArray(child.material)) continue;
+    const bucket = buckets.get(child.material.uuid) ?? [];
+    bucket.push(child);
+    buckets.set(child.material.uuid, bucket);
+  }
+  for (const meshes of buckets.values()) {
+    if (meshes.length < 2) continue;
+    const keepIndexed = meshes.every((mesh) => mesh.geometry.index !== null);
+    const geometries = meshes.map((mesh) => {
+      mesh.updateMatrix();
+      const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
+      geometry.applyMatrix4(mesh.matrix);
+      return geometry;
+    });
+    const geometry = mergeGeometries(geometries, false);
+    for (const part of geometries) part.dispose();
+    if (!geometry) continue;
+    const merged = new THREE.Mesh(geometry, meshes[0].material);
+    merged.castShadow = meshes.some((mesh) => mesh.castShadow);
+    for (const mesh of meshes) {
+      group.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    group.add(merged);
+  }
+  return group;
 }
 
 type BoatKind = 'rowboat' | 'fishing boat' | 'merchant boat' | 'ferry';
@@ -28,6 +60,7 @@ export class HarborAmbience {
   private readonly fireflies: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly floatingLanterns: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly fireworks: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+  private readonly rain: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
   private readonly starMaterial = new THREE.PointsMaterial({ color: 0xffe4a3, size: .13, transparent: true, opacity: 0, depthWrite: false });
   private readonly sunDisc: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
@@ -36,6 +69,7 @@ export class HarborAmbience {
   private citizens: CitizenSave[] = [];
   private discoveries = new Set<string>();
   private topology!: WaterTopology;
+  private readonly townCenter = new THREE.Vector3();
 
   constructor(private readonly seed: number, camera: THREE.Camera, cells: Iterable<Cell>) {
     this.root.name = 'harbor-ambience';
@@ -61,6 +95,10 @@ export class HarborAmbience {
     this.fireworks.name = 'finale-fireworks';
     this.fireworks.visible = false;
     this.root.add(this.fireworks);
+    this.rain = this.createRain();
+    this.rain.name = 'passing-rain';
+    this.rain.visible = false;
+    this.root.add(this.rain);
     this.sunDisc = new THREE.Mesh(
       new THREE.CircleGeometry(2.2, 32),
       new THREE.MeshBasicMaterial({ color: 0xffc36f, transparent: true, opacity: .65, depthWrite: false }),
@@ -70,13 +108,18 @@ export class HarborAmbience {
     this.root.add(this.sunDisc);
   }
 
-  setTown(cells: Iterable<Cell>, businesses: readonly BusinessSave[] = this.businesses, citizens: readonly CitizenSave[] = this.citizens) {
+  setTown(cells: Iterable<Cell>, businesses: readonly BusinessSave[] = this.businesses, citizens: readonly CitizenSave[] = this.citizens, matureTreeAnchors: readonly THREE.Vector3[] = []) {
     this.cells = [...cells].map((cell) => ({ ...cell }));
     this.businesses = businesses.map((business) => ({ ...business }));
     this.citizens = citizens.map((citizen) => ({ ...citizen, traits: [...citizen.traits], relationships: [...citizen.relationships] }));
     this.topology = analyzeWaterTopology(this.cells, this.seed);
+    if (this.cells.length) this.townCenter.set(
+      this.cells.reduce((sum, cell) => sum + cell.x * WORLD_CELL_SIZE, 0) / this.cells.length,
+      0,
+      this.cells.reduce((sum, cell) => sum + cell.z * WORLD_CELL_SIZE, 0) / this.cells.length,
+    );
     this.fleet.forEach((boat, index) => { boat.route = createWaterRoute(this.cells, this.seed, index * .42); });
-    this.fauna.setTown(this.cells, this.businesses);
+    this.fauna.setTown(this.cells, this.businesses, matureTreeAnchors);
     this.refreshFleetVisibility();
   }
 
@@ -96,13 +139,17 @@ export class HarborAmbience {
 
   wildlifeStats() { return this.fauna.stats(); }
 
+  catMemoryFromObject(object: THREE.Object3D | null, absoluteHours: number, colonyFoundedAt?: number): CatMemoryInspection | null {
+    return this.fauna.catMemoryFromObject(object, absoluteHours, colonyFoundedAt);
+  }
+
   wildlifeEffect(action: WildlifeAction, animal: WildlifeKind, focus?: { x: number; z: number } | null) {
     this.fauna.apply(action, animal, focus);
   }
 
   scatterWildlife(x: number, z: number) { this.fauna.scatterAt(x, z); }
 
-  update(time: number, daylight: number, timeOfDay: number, absoluteHours: number, catColonyFoundedAt?: number) {
+  update(time: number, daylight: number, timeOfDay: number, absoluteHours: number, catColonyFoundedAt?: number, rainIntensity = 0) {
     for (const boat of this.fleet) {
       if (!boat.model.visible) continue;
       const progress = (time * boat.speed + boat.phase) % 1;
@@ -115,7 +162,7 @@ export class HarborAmbience {
       boat.model.rotation.y = Math.atan2(tangent.x, tangent.z) - Math.PI / 2;
       boat.model.rotation.z = Math.sin(time * boat.bobSpeed * .78 + boat.phase * 5) * .028;
     }
-    this.fauna.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt);
+    this.fauna.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, rainIntensity);
     this.clouds.position.x = Math.sin(time * .018) * 2.5;
     this.cloudMaterial.opacity = .12 + daylight * .32;
     this.starMaterial.opacity = Math.pow(1 - daylight, 2) * (.62 + Math.sin(time * .7) * .08);
@@ -131,6 +178,34 @@ export class HarborAmbience {
     this.fireworks.rotation.y = time * .025;
     this.fireworks.material.opacity = Math.pow(1 - daylight, 2) * (.38 + Math.pow(Math.max(0, Math.sin(time * 1.35)), 5) * .62);
     this.fireworks.material.size = .11 + (Math.sin(time * 1.35) * .5 + .5) * .11;
+    this.updateRain(time, rainIntensity);
+  }
+
+  private createRain() {
+    const positions = new Float32Array(260 * 3);
+    for (let index = 0; index < 260; index++) {
+      positions[index * 3] = (hash(this.seed, index, 0, 8900) - .5) * 34;
+      positions[index * 3 + 1] = 1 + hash(this.seed, index, 1, 8901) * 14;
+      positions[index * 3 + 2] = (hash(this.seed, index, 2, 8902) - .5) * 30;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.PointsMaterial({ color: 0xb8d9d7, size: .055, transparent: true, opacity: 0, depthWrite: false });
+    return new THREE.Points(geometry, material);
+  }
+
+  private updateRain(time: number, intensity: number) {
+    this.rain.visible = intensity > .025;
+    this.rain.material.opacity = intensity * .62;
+    if (!this.rain.visible) return;
+    this.rain.position.set(this.townCenter.x, 0, this.townCenter.z);
+    const positions = this.rain.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let index = 0; index < positions.count; index++) {
+      const baseY = 1 + hash(this.seed, index, 1, 8901) * 14;
+      positions.setY(index, 1 + ((baseY - time * (7 + intensity * 8)) % 14 + 14) % 14);
+      positions.setX(index, (hash(this.seed, index, 0, 8900) - .5) * 34 - time * .18 % 2);
+    }
+    positions.needsUpdate = true;
   }
 
   private createFleet() {
@@ -184,7 +259,7 @@ export class HarborAmbience {
     nets.position.set(-.35, .18, .22);
     nets.rotation.x = Math.PI / 2;
     boat.add(hull, mast, sail, canopy, nets);
-    return boat;
+    return consolidateModel(boat);
   }
 
   private createRowboat() {
@@ -198,7 +273,7 @@ export class HarborAmbience {
     cover.position.y = .2;
     boat.add(hull, cover);
     boat.scale.setScalar(.84);
-    return boat;
+    return consolidateModel(boat);
   }
 
   private createMerchantBoat() {
@@ -218,7 +293,7 @@ export class HarborAmbience {
       boat.add(crate);
     }
     boat.scale.setScalar(1.08);
-    return boat;
+    return consolidateModel(boat);
   }
 
   private createFerry() {
@@ -234,27 +309,33 @@ export class HarborAmbience {
     const roof = new THREE.Mesh(new THREE.BoxGeometry(1.08, .08, .62), roofMaterial);
     roof.position.y = .56;
     boat.add(hull, cabin, roof);
+    const windowMaterial = new THREE.MeshBasicMaterial({ color: 0xffc66d, toneMapped: false });
     for (const x of [-.34, 0, .34]) {
-      const window = new THREE.Mesh(new THREE.BoxGeometry(.17, .14, .015), new THREE.MeshStandardMaterial({ color: 0xffc66d, emissive: 0xff9d3d, emissiveIntensity: .8 }));
+      const window = new THREE.Mesh(new THREE.BoxGeometry(.17, .14, .015), windowMaterial);
       window.position.set(x, .38, .25);
       boat.add(window);
     }
     boat.scale.setScalar(1.12);
-    return boat;
+    return consolidateModel(boat);
   }
 
   private createClouds() {
+    const geometries: THREE.BufferGeometry[] = [];
     for (let cloudIndex = 0; cloudIndex < 5; cloudIndex++) {
-      const cloud = new THREE.Group();
       for (let puff = 0; puff < 4; puff++) {
-        const shape = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1 + (puff % 2) * .45, 1), this.cloudMaterial);
-        shape.scale.set(1.65, .55, .7);
-        shape.position.set(puff * 1.25, Math.sin(puff) * .32, 0);
-        cloud.add(shape);
+        const geometry = new THREE.IcosahedronGeometry(1.1 + (puff % 2) * .45, 1);
+        const matrix = new THREE.Matrix4().compose(
+          new THREE.Vector3(-24 + cloudIndex * 11 + puff * 1.25, 10 + (cloudIndex % 2) * 2.5 + Math.sin(puff) * .32, -20 - cloudIndex * 2),
+          new THREE.Quaternion(),
+          new THREE.Vector3(1.65, .55, .7),
+        );
+        geometry.applyMatrix4(matrix);
+        geometries.push(geometry);
       }
-      cloud.position.set(-24 + cloudIndex * 11, 10 + (cloudIndex % 2) * 2.5, -20 - cloudIndex * 2);
-      this.clouds.add(cloud);
     }
+    const geometry = mergeGeometries(geometries, false);
+    for (const part of geometries) part.dispose();
+    if (geometry) this.clouds.add(new THREE.Mesh(geometry, this.cloudMaterial));
     this.root.add(this.clouds);
   }
 

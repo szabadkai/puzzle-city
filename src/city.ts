@@ -3,10 +3,12 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, keyOf } from './types';
 import { hash, pick } from './random';
+import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { plazaAnchorAt } from './topology';
 import { hasDock, hasWaterStairs } from './water';
 import {
-  arcadeFeature, courtyardFeature, emptyCrossingFeature, roofCourtAnchor, roofCourtFeature, steppedTerrace,
+  arcadeFeature, courtyardFeature, emptyCrossingFeature, isRoofAccessCell, isWalkableRoof,
+  roofAccessDirection, roofCourtAnchor, roofCourtFeature, steppedTerrace,
   type CourtyardFeature, type EmptyArchitectureFeature, type RoofCourtFeature, type TerraceFeature,
 } from './architecture';
 
@@ -20,6 +22,15 @@ const SIGN_TEXT = ['茶', '花', '本', '湯', '魚', '宿'];
 
 type Direction = 0 | 1 | 2 | 3;
 
+export type CityMemoryInspection = Readonly<{
+  kind: 'building' | 'tree';
+  title: string;
+  ageHours: number;
+  ageLabel: string;
+  detail: string;
+  note: string;
+}>;
+
 function dispose(root: THREE.Object3D) {
   root.traverse((object) => {
     if (object instanceof THREE.Mesh) object.geometry.dispose();
@@ -32,19 +43,103 @@ function shadow(mesh: THREE.Mesh, casts = true) {
   return mesh;
 }
 
+function createGlowTexture() {
+  const size = 32;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const context = canvas.getContext('2d')!;
+  const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, 'rgba(255,255,255,1)');
+  gradient.addColorStop(.28, 'rgba(255,235,174,.72)');
+  gradient.addColorStop(1, 'rgba(255,190,92,0)');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, size, size);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createSmokeTexture() {
+  const size = 32;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const context = canvas.getContext('2d')!;
+  const gradient = context.createRadialGradient(size / 2, size / 2, size * .04, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, 'rgba(255,255,255,.8)');
+  gradient.addColorStop(.5, 'rgba(255,255,255,.32)');
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+function createSignAtlas() {
+  const tileWidth = 96;
+  const tileHeight = 192;
+  const columns = 8;
+  const rows = 4;
+  const canvas = document.createElement('canvas');
+  canvas.width = tileWidth * columns;
+  canvas.height = tileHeight * rows;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const material = new THREE.MeshStandardMaterial({
+    map: texture,
+    side: THREE.DoubleSide,
+    roughness: .78,
+    emissive: 0x3b2b1e,
+    emissiveIntensity: .16,
+  });
+  return { canvas, texture, material, tileWidth, tileHeight, columns, rows, tiles: new Map<string, number>() };
+}
+
 export class CityRenderer {
   readonly root = new THREE.Group();
   readonly cells = new Map<string, Cell>();
   private readonly pieces = new Map<string, THREE.Group>();
+  private readonly staticBatchRoot = new THREE.Group();
   private readonly businesses = new Map<string, BusinessSave>();
   private readonly discoveries = new Set<string>();
-  private readonly nightLightRoot = new THREE.Group();
-  private readonly nightLights: THREE.PointLight[] = [];
-  private readonly signMaterials = new Map<string, THREE.MeshStandardMaterial>();
+  private readonly nightGlowGeometry = new THREE.BufferGeometry();
+  private readonly nightGlowMaterial = new THREE.PointsMaterial({
+    color: 0xffb45f,
+    map: createGlowTexture(),
+    size: 1.65,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  private readonly nightGlows = new THREE.Points(this.nightGlowGeometry, this.nightGlowMaterial);
+  private nightGlowCount = 0;
+  private readonly smokeGeometry = new THREE.BufferGeometry();
+  private readonly smokeMaterial = new THREE.PointsMaterial({
+    color: 0xd8d1c4,
+    map: createSmokeTexture(),
+    size: .34,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: .34,
+    depthWrite: false,
+  });
+  private readonly smokePoints = new THREE.Points(this.smokeGeometry, this.smokeMaterial);
+  private smokeAnchors: Array<{ x: number; y: number; z: number; phase: number; index: number }> = [];
+  private readonly signAtlas = createSignAtlas();
   private readonly wallMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly colorMaterials = new Map<number, THREE.MeshStandardMaterial>();
+  private readonly wallVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92 });
+  private readonly roofVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .82 });
+  private readonly accentVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92, side: THREE.DoubleSide });
   private readonly seed: number;
+  private rainIntensity = 0;
+  private lastPatinaUpdateBucket = -1;
+  private readonly wetTint = new THREE.Color(0x355c5b);
   private discoveryGlow: { mesh: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>; startedAt: number } | null = null;
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
   private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, roughness: 1 });
@@ -56,6 +151,8 @@ export class CityRenderer {
   private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
   private readonly warmLight = new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 });
+  private readonly flagMaterial = new THREE.MeshStandardMaterial({ color: 0xf3cc62, side: THREE.DoubleSide, roughness: .9 });
+  private readonly featureWaterMaterial = new THREE.MeshStandardMaterial({ color: 0x69a7a3, roughness: .35 });
   private readonly blossom = new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 });
   private readonly silverLeaf = new THREE.MeshStandardMaterial({ color: 0x9ab7a1, roughness: .82, emissive: 0x315b51, emissiveIntensity: .12 });
   private readonly saltPatina = new THREE.MeshStandardMaterial({ color: 0xd8d0b3, transparent: true, opacity: .42, roughness: 1, depthWrite: false, side: THREE.DoubleSide });
@@ -66,8 +163,14 @@ export class CityRenderer {
   constructor(seed: number) {
     this.seed = seed;
     this.root.name = 'town';
-    this.nightLightRoot.name = 'night-lights';
-    this.root.add(this.nightLightRoot);
+    this.staticBatchRoot.name = 'town-static-batches';
+    this.nightGlowGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+    this.smokeGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+    this.nightGlows.name = 'night-glows';
+    this.nightGlows.renderOrder = 2;
+    this.smokePoints.name = 'town-smoke-points';
+    this.smokePoints.frustumCulled = false;
+    this.root.add(this.staticBatchRoot, this.nightGlows, this.smokePoints);
   }
 
   static cellSize() { return CELL; }
@@ -94,7 +197,9 @@ export class CityRenderer {
     for (const key of affected) {
       const before = previous.get(key);
       const after = this.businesses.get(key);
-      if (before?.type === after?.type && before?.name === after?.name) continue;
+      const beforeWear = Math.floor((before?.visitCount ?? 0) / 12);
+      const afterWear = Math.floor((after?.visitCount ?? 0) / 12);
+      if (before?.type === after?.type && before?.name === after?.name && beforeWear === afterWear) continue;
       const [x, z] = key.split(',').map(Number);
       this.rebuildPiece(x, z);
     }
@@ -184,6 +289,16 @@ export class CityRenderer {
   serialize() { return [...this.cells.values()].map((cell) => ({ ...cell, placedAt: 0 })); }
 
   update(time: number, absoluteHours = 0) {
+    let staticBatchChanged = false;
+    // Patina growth is deliberately coarse. Rebuilding the town-wide static
+    // batches every simulated half-hour caused a visible frame-time spike.
+    const patinaUpdateBucket = Math.floor(absoluteHours / 6);
+    const updatePatina = patinaUpdateBucket !== this.lastPatinaUpdateBucket;
+    this.lastPatinaUpdateBucket = patinaUpdateBucket;
+    if (updatePatina && this.staticBatchRoot.children.length) {
+      this.clearGlobalStaticBatch();
+      staticBatchChanged = true;
+    }
     if (this.discoveryGlow) {
       const age = (performance.now() - this.discoveryGlow.startedAt) / 1000;
       const scale = 1 + age * 1.35;
@@ -208,6 +323,7 @@ export class CityRenderer {
         if (age >= 1) {
           if (cell) cell.placedAt = 0;
           delete group.userData.morphStartedAt;
+          staticBatchChanged = true;
         }
       } else {
         group.scale.y = 1;
@@ -216,22 +332,18 @@ export class CityRenderer {
       if (tree) tree.rotation.z = Math.sin(time * 1.35 + group.position.x) * .025;
       const growingTree = group.userData.growingTree as THREE.Object3D | undefined;
       if (growingTree) {
-        const age = Math.max(0, absoluteHours - ((group.userData.treeBornAt as number | undefined) ?? absoluteHours));
-        const progress = THREE.MathUtils.smoothstep(age, 0, 72);
+        const progress = treeGrowthAt(group.userData.treeBornAt as number | undefined, absoluteHours);
         const scale = .24 + progress * .76;
         growingTree.scale.set(scale, .32 + progress * .68, scale);
+        const shadeSeats = group.userData.shadeSeats as THREE.Object3D | undefined;
+        if (shadeSeats) shadeSeats.visible = progress > .82;
       }
       const patina = group.userData.patina as THREE.Object3D[] | undefined;
       if (patina?.length) {
-        const foundedAt = (group.userData.foundedAt as number | undefined) ?? absoluteHours;
-        const renovatedAt = (group.userData.renovatedAt as number | undefined) ?? foundedAt;
-        const age = Math.max(0, absoluteHours - foundedAt);
-        const sinceRenovation = Math.max(0, absoluteHours - renovatedAt);
-        const renovationRecovery = .3 + THREE.MathUtils.clamp(sinceRenovation / 28, 0, 1) * .7;
         for (const stain of patina) {
-          const threshold = stain.userData.ageThreshold as number;
-          const span = stain.userData.ageSpan as number;
-          const strength = THREE.MathUtils.smoothstep(age, threshold, threshold + span) * renovationRecovery;
+          if (!updatePatina && stain.userData.lastStrength !== undefined) continue;
+          const strength = this.patinaStrength(stain, group, absoluteHours);
+          stain.userData.lastStrength = strength;
           stain.visible = strength > .015;
           const width = stain.userData.patinaWidth as number;
           const height = stain.userData.patinaHeight as number;
@@ -240,23 +352,132 @@ export class CityRenderer {
       }
       const flag = group.userData.flag as THREE.Object3D | undefined;
       if (flag) flag.rotation.y = Math.sin(time * 3 + group.position.z) * .15;
+      const timeNest = group.userData.timeNest as THREE.Object3D | undefined;
+      if (timeNest) timeNest.visible = ageInHours(group.userData.foundedAt as number | undefined, absoluteHours) >= 72 && this.rainIntensity < .35;
       const laundry = group.userData.laundry as THREE.Object3D[] | undefined;
-      if (laundry) for (const cloth of laundry) cloth.rotation.z = Math.sin(time * 2.2 + cloth.id) * .045;
-      const smoke = group.getObjectByName('smoke-source');
-      smoke?.children.forEach((puff, index) => {
-        const phase = (time * .14 + index * .31 + hash(this.seed, group.position.x, group.position.z, index + 730)) % 1;
-        puff.position.set(Math.sin(time * .55 + index) * .11 * phase, phase * 1.35, Math.cos(time * .43 + index) * .08 * phase);
-        puff.scale.setScalar(.45 + phase * .95);
-        if (puff instanceof THREE.Mesh && puff.material instanceof THREE.MeshStandardMaterial) puff.material.opacity = Math.sin(phase * Math.PI) * .3;
-      });
+      if (laundry) for (const cloth of laundry) {
+        cloth.visible = this.rainIntensity < .08;
+        cloth.rotation.z = Math.sin(time * 2.2 + cloth.id) * .045;
+      }
     }
+    const smokePositions = this.smokeGeometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let index = 0; index < this.smokeAnchors.length; index++) {
+      const anchor = this.smokeAnchors[index];
+      const phase = (time * .14 + anchor.phase) % 1;
+      smokePositions.setXYZ(
+        index,
+        anchor.x + Math.sin(time * .55 + anchor.index) * .11 * phase,
+        anchor.y + phase * 1.35,
+        anchor.z + Math.cos(time * .43 + anchor.index) * .08 * phase,
+      );
+    }
+    if (this.smokeAnchors.length) smokePositions.needsUpdate = true;
+    if (staticBatchChanged) this.rebuildGlobalStaticBatch();
   }
 
   setDaylight(daylight: number) {
     const night = 1 - daylight;
     this.window.emissiveIntensity = .06 + night * 2.15;
     this.warmLight.emissiveIntensity = .4 + night * 3.8;
-    for (const light of this.nightLights) light.intensity = Math.max(0, night * 1.8 - .32);
+    this.nightGlowMaterial.opacity = Math.max(0, night * .72 - .08);
+    this.nightGlows.visible = this.nightGlowCount > 0 && this.nightGlowMaterial.opacity > .01;
+  }
+
+  setWeather(rainIntensity: number) {
+    this.rainIntensity = THREE.MathUtils.clamp(rainIntensity, 0, 1);
+    this.stone.roughness = 1 - this.rainIntensity * .48;
+    this.stoneDark.roughness = 1 - this.rainIntensity * .42;
+    this.stone.color.setHex(0xb9ad91).lerp(this.wetTint, this.rainIntensity * .18);
+    this.stoneDark.color.setHex(0x786f63).lerp(this.wetTint, this.rainIntensity * .16);
+    for (const [color, material] of this.wallMaterials) {
+      material.roughness = .92 - this.rainIntensity * .3;
+      material.color.setHex(color).lerp(this.wetTint, this.rainIntensity * .14);
+    }
+    for (const [color, material] of this.roofMaterials) {
+      material.roughness = .82 - this.rainIntensity * .34;
+      material.color.setHex(color).lerp(this.wetTint, this.rainIntensity * .2);
+    }
+    this.wallVertexMaterial.roughness = .92 - this.rainIntensity * .3;
+    this.wallVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .14);
+    this.roofVertexMaterial.roughness = .82 - this.rainIntensity * .34;
+    this.roofVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .2);
+  }
+
+  memoryStats(absoluteHours: number) {
+    let oldestBuildingHours = 0;
+    for (const cell of this.cells.values()) oldestBuildingHours = Math.max(oldestBuildingHours, ageInHours(cell.foundedAt, absoluteHours));
+    let patinaCells = 0;
+    let growingTrees = 0;
+    let matureTrees = 0;
+    let oldestTreeHours = 0;
+    for (const group of this.pieces.values()) {
+      const stains = group.userData.patina as THREE.Object3D[] | undefined;
+      if (stains?.some((stain) => this.patinaStrength(stain, group, absoluteHours) > .08)) patinaCells += 1;
+      if (group.userData.growingTree) {
+        const treeAge = ageInHours(group.userData.treeBornAt as number | undefined, absoluteHours);
+        oldestTreeHours = Math.max(oldestTreeHours, treeAge);
+        if (treeAge >= TREE_MATURE_HOURS) matureTrees += 1;
+        else growingTrees += 1;
+      }
+    }
+    return { patinaCells, growingTrees, matureTrees, oldestTreeHours, oldestBuildingHours };
+  }
+
+  memoryAt(x: number, z: number, absoluteHours: number): CityMemoryInspection | null {
+    const cell = this.get(x, z);
+    const group = this.pieces.get(keyOf(x, z));
+    if (cell) {
+      const ageHours = ageInHours(cell.foundedAt, absoluteHours);
+      const stains = (group?.userData.patina as THREE.Object3D[] | undefined) ?? [];
+      const visibleKinds = [...new Set(stains
+        .filter((stain) => group && this.patinaStrength(stain, group, absoluteHours) > .08)
+        .map((stain) => stain.name.replace('patina-', '')))];
+      const business = this.businesses.get(keyOf(x, z));
+      return {
+        kind: 'building',
+        title: business?.name ?? this.topologyLabel(x, z),
+        ageHours,
+        ageLabel: describeAge(ageHours),
+        detail: visibleKinds.length ? `Weathered by ${visibleKinds.join(', ')}.` : 'Its walls are still fresh.',
+        note: cell.renovatedAt && cell.renovatedAt > (cell.foundedAt ?? 0)
+          ? `Last reshaped on Day ${Math.max(1, Math.floor(cell.renovatedAt / 24))}.`
+          : `Raised on Day ${Math.max(1, Math.floor((cell.foundedAt ?? absoluteHours) / 24))}.`,
+      };
+    }
+    if (group?.userData.growingTree) {
+      const ageHours = ageInHours(group.userData.treeBornAt as number | undefined, absoluteHours);
+      const growth = treeGrowthAt(group.userData.treeBornAt as number | undefined, absoluteHours);
+      return {
+        kind: 'tree',
+        title: growth >= 1 ? 'Courtyard landmark' : growth > .55 ? 'Young shade tree' : 'Courtyard sapling',
+        ageHours,
+        ageLabel: describeAge(ageHours),
+        detail: growth >= 1 ? 'Its canopy now shades the courtyard benches.' : `${Math.round(growth * 100)}% of its mature canopy.`,
+        note: `Planted when the surrounding homes first sheltered this ground.`,
+      };
+    }
+    return null;
+  }
+
+  matureTreeAnchors(absoluteHours: number) {
+    const anchors: THREE.Vector3[] = [];
+    for (const group of this.pieces.values()) {
+      if (!group.userData.growingTree) continue;
+      if (ageInHours(group.userData.treeBornAt as number | undefined, absoluteHours) < TREE_MATURE_HOURS) continue;
+      anchors.push(new THREE.Vector3(group.position.x + .34, 1.24, group.position.z + .12));
+    }
+    return anchors;
+  }
+
+  private patinaStrength(stain: THREE.Object3D, group: THREE.Group, absoluteHours: number) {
+    const foundedAt = (group.userData.foundedAt as number | undefined) ?? absoluteHours;
+    const renovatedAt = (group.userData.renovatedAt as number | undefined) ?? foundedAt;
+    const age = Math.max(0, absoluteHours - foundedAt);
+    const sinceRenovation = Math.max(0, absoluteHours - renovatedAt);
+    const renovationRecovery = .3 + THREE.MathUtils.clamp(sinceRenovation / 28, 0, 1) * .7;
+    const threshold = stain.userData.ageThreshold as number;
+    const span = stain.userData.ageSpan as number;
+    return THREE.MathUtils.smoothstep(age, threshold, threshold + span) * renovationRecovery * (1 + this.rainIntensity * .18);
   }
 
   topologyLabel(x: number, z: number) {
@@ -278,6 +499,7 @@ export class CityRenderer {
   }
 
   private rebuildAll(animate: boolean) {
+    this.clearGlobalStaticBatch();
     for (const piece of this.pieces.values()) {
       this.root.remove(piece);
       dispose(piece);
@@ -290,9 +512,11 @@ export class CityRenderer {
     for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
       if (!this.get(x, z) && this.emptyFeature(x, z)) this.buildAt(x, z);
     }
+    this.rebuildGlobalStaticBatch();
   }
 
   private rebuildAround(x: number, z: number) {
+    this.clearGlobalStaticBatch();
     for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
       const px = x + dx;
       const pz = z + dz;
@@ -303,11 +527,17 @@ export class CityRenderer {
         dispose(old);
         this.pieces.delete(key);
       }
-      if (this.get(px, pz) || this.emptyFeature(px, pz)) this.buildAt(px, pz, true);
+      // Neighboring pieces must be regenerated because their façades and roofs
+      // depend on local topology, but only the edited tile should replay the
+      // construction morph. Animating every regenerated neighbor makes stable
+      // houses appear to collapse and gain a level at random.
+      if (this.get(px, pz) || this.emptyFeature(px, pz)) this.buildAt(px, pz, px === x && pz === z);
     }
+    this.rebuildGlobalStaticBatch();
   }
 
   private rebuildPiece(x: number, z: number) {
+    this.clearGlobalStaticBatch();
     const key = keyOf(x, z);
     const old = this.pieces.get(key);
     if (old) {
@@ -315,7 +545,11 @@ export class CityRenderer {
       dispose(old);
       this.pieces.delete(key);
     }
-    if (this.get(x, z) || this.emptyFeature(x, z)) this.buildAt(x, z, true);
+    // Business and wear changes replace the mesh without changing its height.
+    // Keep the established building at full scale instead of replaying the
+    // construction animation whenever that background state changes.
+    if (this.get(x, z) || this.emptyFeature(x, z)) this.buildAt(x, z);
+    this.rebuildGlobalStaticBatch();
   }
 
   private buildAt(x: number, z: number, animate = false) {
@@ -340,6 +574,7 @@ export class CityRenderer {
     for (const child of [...group.children]) {
       if (!(child instanceof THREE.Mesh) || child.name === 'flag' || child.name.startsWith('laundry-') || child.name.startsWith('patina-')) continue;
       if (Array.isArray(child.material)) continue;
+      this.applyVertexBatchMaterial(child);
       const key = `${child.material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
       const bucket = buckets.get(key) ?? [];
       bucket.push(child);
@@ -347,9 +582,10 @@ export class CityRenderer {
     }
     for (const meshes of buckets.values()) {
       if (meshes.length < 2) continue;
+      const keepIndexed = meshes.every((mesh) => mesh.geometry.index !== null);
       const geometries = meshes.map((mesh) => {
         mesh.updateMatrix();
-        const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+        const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
         geometry.applyMatrix4(mesh.matrix);
         return geometry;
       });
@@ -365,6 +601,107 @@ export class CityRenderer {
       }
       group.add(merged);
     }
+  }
+
+  private applyVertexBatchMaterial(mesh: THREE.Mesh) {
+    const source = mesh.material as THREE.Material;
+    const target = source.userData.vertexBatchMaterial as THREE.MeshStandardMaterial | undefined;
+    const colorValue = source.userData.vertexBatchColor as number | undefined;
+    if (!target || colorValue === undefined) return;
+    const color = new THREE.Color(colorValue);
+    const position = mesh.geometry.getAttribute('position');
+    const colors = new Float32Array(position.count * 3);
+    for (let index = 0; index < position.count; index++) {
+      colors[index * 3] = color.r;
+      colors[index * 3 + 1] = color.g;
+      colors[index * 3 + 2] = color.b;
+    }
+    mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    mesh.material = target;
+  }
+
+  private isStaticMesh(object: THREE.Object3D): object is THREE.Mesh {
+    return object instanceof THREE.Mesh
+      && object.name !== 'flag'
+      && !object.name.startsWith('laundry-')
+      && !Array.isArray(object.material);
+  }
+
+  private clearGlobalStaticBatch() {
+    for (const piece of this.pieces.values()) {
+      for (const child of piece.children) {
+        if (child.userData.hiddenByStaticBatch) {
+          child.visible = true;
+          delete child.userData.hiddenByStaticBatch;
+        }
+      }
+    }
+    for (const child of this.staticBatchRoot.children) {
+      if (child instanceof THREE.Mesh) child.geometry.dispose();
+    }
+    this.staticBatchRoot.clear();
+  }
+
+  private rebuildGlobalStaticBatch() {
+    this.clearGlobalStaticBatch();
+    const buckets = new Map<string, Array<{ mesh: THREE.Mesh; matrix: THREE.Matrix4 }>>();
+    const combined = new THREE.Matrix4();
+    for (const group of this.pieces.values()) {
+      const cell = this.cells.get(keyOf(group.userData.cellX as number, group.userData.cellZ as number));
+      if (group.userData.morphStartedAt !== undefined || (cell?.placedAt ?? 0) > 0) continue;
+      group.updateMatrix();
+      for (const child of group.children) {
+        if (!this.isStaticMesh(child) || !child.visible) continue;
+        child.updateMatrix();
+        const material = child.material as THREE.Material;
+        const key = `${material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
+        const bucket = buckets.get(key) ?? [];
+        bucket.push({ mesh: child, matrix: combined.multiplyMatrices(group.matrix, child.matrix).clone() });
+        buckets.set(key, bucket);
+      }
+    }
+    for (const entries of buckets.values()) {
+      if (entries.length < 2) continue;
+      const keepIndexed = entries.every(({ mesh }) => mesh.geometry.index !== null);
+      const geometries = entries.map(({ mesh, matrix }) => {
+        const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
+        geometry.applyMatrix4(matrix);
+        return geometry;
+      });
+      const geometry = mergeGeometries(geometries, false);
+      for (const part of geometries) part.dispose();
+      if (!geometry) continue;
+      const first = entries[0].mesh;
+      const batch = new THREE.Mesh(geometry, first.material as THREE.Material);
+      batch.castShadow = first.castShadow;
+      batch.receiveShadow = first.receiveShadow;
+      batch.matrixAutoUpdate = false;
+      this.staticBatchRoot.add(batch);
+      for (const { mesh } of entries) {
+        mesh.userData.hiddenByStaticBatch = true;
+        mesh.visible = false;
+      }
+    }
+    this.syncSmokeSources();
+  }
+
+  private syncSmokeSources() {
+    this.smokeAnchors = [];
+    for (const group of this.pieces.values()) {
+      const smoke = group.getObjectByName('smoke-source');
+      if (!smoke) continue;
+      for (let index = 0; index < 3; index++) {
+        this.smokeAnchors.push({
+          x: group.position.x + smoke.position.x,
+          y: smoke.position.y,
+          z: group.position.z + smoke.position.z,
+          phase: (index * .31 + hash(this.seed, group.position.x, group.position.z, index + 730)) % 1,
+          index,
+        });
+      }
+    }
+    this.smokeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(this.smokeAnchors.length * 3, 3));
+    this.smokePoints.visible = this.smokeAnchors.length > 0;
   }
 
   private neighborHeight(cell: Cell, dir: Direction) {
@@ -416,6 +753,11 @@ export class CityRenderer {
       this.addFlag(group, topY + 1.55);
       if (this.discoveries.has('tower-bell')) this.addTowerBell(group, topY + .18);
       if (this.discoveries.has('birds-nest')) this.addBirdNest(group, topY + 1.18);
+      else if (this.discoveries.has('gulls-return') && CARDINALS.some(([dx, dz]) => this.businesses.get(keyOf(cell.x + dx, cell.z + dz))?.type === 'bakery')) {
+        const nest = this.addBirdNest(group, topY + 1.18);
+        nest.visible = false;
+        group.userData.timeNest = nest;
+      }
       if (this.discoveries.has('clock-tower')) this.addClockFaces(group, topY - .22);
     } else if (!courtAnchor && !terrace && arcade !== 'roof promenade' && count <= 2 && diagonalCount < 3) {
       const cap = shadow(new THREE.Mesh(new THREE.ConeGeometry(CELL * .82, .88, 4), roof));
@@ -442,6 +784,10 @@ export class CityRenderer {
     if (courtAnchor && courtFeature && courtAnchor.x === cell.x && courtAnchor.z === cell.z) this.addRoofCourt(group, topY, courtFeature);
     if (terrace) this.addSteppedTerrace(group, terrace.direction, topY, terrace.feature);
     if (arcade) this.addArcadeRow(group, neighborHeights, topY, arcade === 'roof promenade');
+    if (isWalkableRoof(cell, this.cells) && isRoofAccessCell(cell, this.cells, this.seed)) {
+      const accessDirection = roofAccessDirection(cell, this.cells, this.seed);
+      if (accessDirection !== null) this.addRoofAccess(group, topY, accessDirection);
+    }
     if ((count === 2 && this.isCorner(neighborHeights)) || (cell.height >= 2 && count <= 1)) this.addBalcony(group, cell, topY);
     if (this.discoveries.has('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
     if (this.discoveries.has('festival-ribbons') && hash(this.seed, cell.x, cell.z, 1920) > .55) this.addFestivalRibbon(group, cell, topY);
@@ -449,7 +795,10 @@ export class CityRenderer {
     this.addPatina(group, cell, neighborHeights, count);
     this.addWaterEdges(group, cell, neighborHeights);
     const business = this.businesses.get(keyOf(cell.x, cell.z));
-    if (business) this.addBusinessFacade(group, cell, business);
+    if (business) {
+      this.addBusinessFacade(group, cell, business);
+      if ((business.visitCount ?? 0) >= 12) this.addWornThreshold(group, cell, Math.min(4, Math.floor((business.visitCount ?? 0) / 12)));
+    }
   }
 
   private addPatina(group: THREE.Group, cell: Cell, neighborHeights: number[], neighborCount: number) {
@@ -488,11 +837,28 @@ export class CityRenderer {
       }
       if (workingBuilding && dir === this.doorDirection(cell)) {
         addStain('soot', this.sootPatina, .44, .78, Math.max(1.45, cell.height * FLOOR - .12), -.48, 9, 34);
-      } else if (cell.height >= 2 && variation > .73) {
+      } else if (cell.height >= 2 && (variation > .73 || hash(this.seed, cell.x, cell.z, 146) > .5)) {
         addStain('rust', this.rustPatina, .22, .82, 1.65, .58, 34, 62);
       }
     }
     group.userData.patina = stains;
+  }
+
+  private addWornThreshold(group: THREE.Group, cell: Cell, wear: number) {
+    const dir = this.doorDirection(cell);
+    const [dx, dz] = CARDINALS[dir];
+    const lateral = new THREE.Vector3(dz, 0, -dx);
+    for (let index = 0; index < wear + 1; index++) {
+      const stone = new THREE.Mesh(new THREE.CircleGeometry(.18 + index * .025, 8), this.stoneDark);
+      stone.rotation.x = -Math.PI / 2;
+      stone.scale.y = .58 + hash(this.seed, cell.x, cell.z, 6700 + index) * .24;
+      stone.position.set(
+        dx * (CELL * .62 + index * .23) + lateral.x * Math.sin(index * 2.1) * .08,
+        .205,
+        dz * (CELL * .62 + index * .23) + lateral.z * Math.sin(index * 2.1) * .08,
+      );
+      group.add(stone);
+    }
   }
 
   private addFacade(group: THREE.Group, cell: Cell, dir: Direction, level: number, neighborCount: number) {
@@ -552,34 +918,53 @@ export class CityRenderer {
 
   private signMaterial(text: string, color: number) {
     const materialKey = `${text}-${color}`;
-    let material = this.signMaterials.get(materialKey);
-    if (!material) {
-      const canvas = document.createElement('canvas');
-      canvas.width = 96;
-      canvas.height = 192;
-      const context = canvas.getContext('2d')!;
+    let tile = this.signAtlas.tiles.get(materialKey);
+    if (tile === undefined) {
+      tile = this.signAtlas.tiles.size;
+      if (tile >= this.signAtlas.columns * this.signAtlas.rows) tile = 0;
+      this.signAtlas.tiles.set(materialKey, tile);
+      const column = tile % this.signAtlas.columns;
+      const row = Math.floor(tile / this.signAtlas.columns);
+      const x = column * this.signAtlas.tileWidth;
+      const y = row * this.signAtlas.tileHeight;
+      const context = this.signAtlas.canvas.getContext('2d')!;
       context.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
-      context.fillRect(4, 4, 88, 184);
+      context.fillRect(x, y, this.signAtlas.tileWidth, this.signAtlas.tileHeight);
       context.strokeStyle = '#ead9ad';
       context.lineWidth = 5;
-      context.strokeRect(8, 8, 80, 176);
+      context.strokeRect(x + 8, y + 8, this.signAtlas.tileWidth - 16, this.signAtlas.tileHeight - 16);
       context.fillStyle = '#fff1c7';
       context.font = `bold ${text.length > 1 ? 43 : 66}px serif`;
       context.textAlign = 'center';
       context.textBaseline = 'middle';
-      context.fillText(text, 48, 98);
-      const texture = new THREE.CanvasTexture(canvas);
-      texture.colorSpace = THREE.SRGBColorSpace;
-      material = new THREE.MeshStandardMaterial({ map: texture, side: THREE.DoubleSide, roughness: .78, emissive: color, emissiveIntensity: .08 });
-      this.signMaterials.set(materialKey, material);
+      context.fillText(text, x + this.signAtlas.tileWidth / 2, y + this.signAtlas.tileHeight / 2 + 2);
+      this.signAtlas.texture.needsUpdate = true;
     }
-    return material;
+    return { material: this.signAtlas.material, tile };
+  }
+
+  private signGeometry(tile: number) {
+    const geometry = new THREE.PlaneGeometry(.42, .86);
+    const uv = geometry.getAttribute('uv') as THREE.BufferAttribute;
+    const column = tile % this.signAtlas.columns;
+    const row = Math.floor(tile / this.signAtlas.columns);
+    const insetU = .5 / this.signAtlas.canvas.width;
+    const insetV = .5 / this.signAtlas.canvas.height;
+    const u0 = column / this.signAtlas.columns + insetU;
+    const u1 = (column + 1) / this.signAtlas.columns - insetU;
+    const v0 = 1 - (row + 1) / this.signAtlas.rows + insetV;
+    const v1 = 1 - row / this.signAtlas.rows - insetV;
+    for (let index = 0; index < uv.count; index++) {
+      uv.setXY(index, THREE.MathUtils.lerp(u0, u1, uv.getX(index)), THREE.MathUtils.lerp(v0, v1, uv.getY(index)));
+    }
+    uv.needsUpdate = true;
+    return geometry;
   }
 
   private addVerticalSign(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, text: string, color: number) {
-    const material = this.signMaterial(text, color);
+    const { material, tile } = this.signMaterial(text, color);
     const [dx, dz] = CARDINALS[dir];
-    const sign = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.42, .86), material), false);
+    const sign = shadow(new THREE.Mesh(this.signGeometry(tile), material), false);
     sign.position.set(px + dx * .13 + lateral.x * .73, 1.31, pz + dz * .13 + lateral.z * .73);
     sign.rotation.y = dir % 2 ? Math.PI / 2 : 0;
     group.add(sign);
@@ -815,6 +1200,12 @@ export class CityRenderer {
     let material = cache.get(color);
     if (!material) {
       material = new THREE.MeshStandardMaterial({ color, roughness });
+      material.userData.vertexBatchColor = color;
+      material.userData.vertexBatchMaterial = cache === this.wallMaterials
+        ? this.wallVertexMaterial
+        : cache === this.roofMaterials
+          ? this.roofVertexMaterial
+          : this.accentVertexMaterial;
       cache.set(color, material);
     }
     return material;
@@ -910,6 +1301,19 @@ export class CityRenderer {
       leg.position.set(x, y + .1, -.25);
       group.add(leg);
     }
+  }
+
+  private addRoofAccess(group: THREE.Group, y: number, dir: Direction) {
+    const [dx, dz] = CARDINALS[dir];
+    const landing = this.orientedBox(.58, .12, .52, dir, this.stoneDark);
+    landing.position.set(dx * .69, y + .22, dz * .69);
+    const housing = this.orientedBox(.5, .5, .42, dir, this.cream);
+    housing.position.set(dx * .78, y + .51, dz * .78);
+    const cap = this.orientedBox(.61, .1, .53, dir, this.wood);
+    cap.position.set(dx * .78, y + .81, dz * .78);
+    const doorway = this.orientedBox(.25, .31, .025, dir, this.dark);
+    doorway.position.set(dx * .555, y + .43, dz * .555);
+    group.add(landing, housing, cap, doorway);
   }
 
   private addRoofCourt(group: THREE.Group, y: number, feature: RoofCourtFeature) {
@@ -1032,12 +1436,6 @@ export class CityRenderer {
     const smoke = new THREE.Group();
     smoke.name = 'smoke-source';
     smoke.position.set(x, y + .78, z);
-    for (let index = 0; index < 3; index++) {
-      const material = new THREE.MeshStandardMaterial({ color: 0xd8d1c4, transparent: true, opacity: 0, roughness: 1, depthWrite: false });
-      const puff = new THREE.Mesh(new THREE.SphereGeometry(.12 + index * .025, 7, 5), material);
-      puff.castShadow = false;
-      smoke.add(puff);
-    }
     group.add(smoke);
   }
 
@@ -1045,7 +1443,7 @@ export class CityRenderer {
     const pole = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, 1.05, 6), this.metal));
     pole.position.y = y + .45;
     group.add(pole);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(.56, .3), new THREE.MeshStandardMaterial({ color: 0xf3cc62, side: THREE.DoubleSide }));
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(.56, .3), this.flagMaterial);
     flag.name = 'flag';
     flag.position.set(.28, y + .72, 0);
     group.add(flag);
@@ -1064,6 +1462,8 @@ export class CityRenderer {
   }
 
   private addBirdNest(group: THREE.Group, y: number) {
+    const nestGroup = new THREE.Group();
+    nestGroup.name = 'time-bird-nest';
     const nest = shadow(new THREE.Mesh(new THREE.TorusGeometry(.22, .055, 5, 12), this.wood), false);
     nest.name = 'bird-nest';
     nest.position.set(.42, y, .2);
@@ -1071,7 +1471,9 @@ export class CityRenderer {
     const egg = shadow(new THREE.Mesh(new THREE.SphereGeometry(.055, 7, 5), this.cream), false);
     egg.scale.y = 1.35;
     egg.position.set(.42, y + .05, .2);
-    group.add(nest, egg);
+    nestGroup.add(nest, egg);
+    group.add(nestGroup);
+    return nestGroup;
   }
 
   private addClockFaces(group: THREE.Group, y: number) {
@@ -1139,8 +1541,6 @@ export class CityRenderer {
   }
 
   private syncNightLights() {
-    this.nightLightRoot.clear();
-    this.nightLights.length = 0;
     const lightCells = [...this.businesses.values()].slice(0, 5).map((business) => business.cellKey);
     if (this.discoveries.has('lantern-finale')) {
       for (const cell of this.cells.values()) {
@@ -1148,15 +1548,17 @@ export class CityRenderer {
         if (hash(this.seed, cell.x, cell.z, 1950) > .72) lightCells.push(keyOf(cell.x, cell.z));
       }
     }
+    const positions: number[] = [];
     for (const cellKey of new Set(lightCells)) {
       const [x, z] = cellKey.split(',').map(Number);
       const cell = this.get(x, z);
       if (!cell) continue;
-      const light = new THREE.PointLight(0xffaa58, 0, 5.4, 2);
-      light.position.set(x * CELL, Math.min(2.4, .9 + cell.height * .65), z * CELL);
-      this.nightLightRoot.add(light);
-      this.nightLights.push(light);
+      positions.push(x * CELL, Math.min(2.4, .9 + cell.height * .65), z * CELL);
     }
+    this.nightGlowGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    this.nightGlowGeometry.computeBoundingSphere();
+    this.nightGlowCount = positions.length / 3;
+    this.nightGlows.visible = this.nightGlowCount > 0 && this.nightGlowMaterial.opacity > .01;
   }
 
   private emptyFeature(x: number, z: number): string | null {
@@ -1198,7 +1600,7 @@ export class CityRenderer {
     if (x === anchor.x && z === anchor.z) {
       const basin = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.5, .58, .18, 16), this.stoneDark));
       basin.position.set(CELL / 2, .27, CELL / 2);
-      const water = new THREE.Mesh(new THREE.CylinderGeometry(.42, .42, .025, 16), new THREE.MeshStandardMaterial({ color: 0x69a7a3, roughness: .35 }));
+      const water = new THREE.Mesh(new THREE.CylinderGeometry(.42, .42, .025, 16), this.featureWaterMaterial);
       water.position.set(CELL / 2, .375, CELL / 2);
       const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.07, .1, .65, 9), this.stone));
       post.position.set(CELL / 2, .62, CELL / 2);
@@ -1241,6 +1643,16 @@ export class CityRenderer {
       bench.position.set(side * .8, .34, .18);
       group.add(bench);
     }
+    const shadeSeats = new THREE.Group();
+    shadeSeats.name = 'shade-seating';
+    for (const zOffset of [-.62, .62]) {
+      const stool = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.17, .2, .2, 8), this.wood), false);
+      stool.position.set(.28, .3, zOffset);
+      shadeSeats.add(stool);
+    }
+    shadeSeats.visible = false;
+    group.add(shadeSeats);
+    group.userData.shadeSeats = shadeSeats;
     if (feature !== 'courtyard garden') {
       for (const xOffset of [-.72, .72]) for (const zOffset of [-.72, .72]) {
         const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.045, .06, 1.25, 7), this.wood), false);
@@ -1276,7 +1688,7 @@ export class CityRenderer {
     const covered = feature === 'covered skybridge' || feature === 'lantern gate';
     const grand = feature === 'lantern gate';
     const y = high ? FLOOR * 2.28 : FLOOR * 1.42;
-    const walls = new THREE.MeshStandardMaterial({ color: pick(WALL_COLORS, hash(this.seed, x, z, 500)), roughness: .9 });
+    const walls = this.cachedMaterial(this.wallMaterials, pick(WALL_COLORS, hash(this.seed, x, z, 500)), .9);
     const span = shadow(new THREE.Mesh(new RoundedBoxGeometry(northSouth ? 1.25 : CELL * 1.08, .58, northSouth ? CELL * 1.08 : 1.25, 4, .16), walls));
     span.position.y = y;
     group.add(span);

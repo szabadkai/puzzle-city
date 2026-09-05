@@ -1,6 +1,7 @@
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenKind, type CitizenSave, type JournalEntry, type JournalIllustration, keyOf } from './types';
 import { analyzeWaterTopology } from './water';
 import { findPlazaAnchors } from './topology';
+import type { MemoryMetric, TownMemorySnapshot } from './memory';
 
 export type TopologyFeature = 'courtyard' | 'arch' | 'bridge' | 'tower' | 'plaza';
 export type GridPoint = Readonly<{ x: number; z: number }>;
@@ -17,6 +18,7 @@ export type WorldSnapshot = Readonly<{
   relationshipCount: number;
   water: Readonly<{ dockCount: number; canalCount: number; shelteredCount: number }>;
   priorDiscoveries: readonly string[];
+  memory: TownMemorySnapshot;
 }>;
 
 export type DiscoveryCondition =
@@ -36,6 +38,7 @@ export type DiscoveryCondition =
   | { kind: 'adjacency'; businessType: BusinessType; feature: TopologyFeature; within?: number }
   | { kind: 'citizen'; occupation?: string; trait?: string; ageGroup?: CitizenAgeGroup; residentKind?: CitizenKind; atLeast: number }
   | { kind: 'water'; feature: 'dock' | 'canal' | 'sheltered'; atLeast: number }
+  | { kind: 'memory'; metric: MemoryMetric; atLeast: number }
   | { kind: 'discovered'; eventId: string };
 
 export type DiscoveryFocus =
@@ -90,6 +93,7 @@ type SnapshotInput = {
   day: number;
   timeOfDay: number;
   priorDiscoveries: string[];
+  memory?: TownMemorySnapshot;
 };
 
 const BUSINESS_TYPES: readonly BusinessType[] = [
@@ -138,6 +142,11 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
     relationshipPairs.add([citizen.id, friendId].sort().join('|'));
   }
   const waterTopology = analyzeWaterTopology(cells, input.seed);
+  const memory = input.memory ?? Object.freeze({
+    patinaCells: 0, growingTrees: 0, matureTrees: 0, oldestTreeHours: 0,
+    oldestBuildingHours: 0, catPopulation: 0, catCapacity: 0, kittenCount: 0,
+    migratingCats: 0, rainIntensity: 0, raining: false,
+  });
 
   return Object.freeze({
     cells: Object.freeze(cells),
@@ -161,6 +170,7 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
       shelteredCount: waterTopology.sheltered.length,
     }),
     priorDiscoveries: Object.freeze([...input.priorDiscoveries]),
+    memory: Object.freeze({ ...memory }),
   });
 }
 
@@ -216,6 +226,7 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
           : snapshot.water.shelteredCount;
       return count >= condition.atLeast;
     }
+    case 'memory': return snapshot.memory[condition.metric] >= condition.atLeast;
     case 'discovered': return snapshot.priorDiscoveries.includes(condition.eventId);
     case 'time': {
       const { after, before } = condition;
@@ -325,6 +336,17 @@ function conditionProgress(condition: DiscoveryCondition, snapshot: WorldSnapsho
         sheltered: 'Enclose a calm pocket of water without sealing it away.',
       } as const;
       return { value: ratio(current, condition.atLeast), hint: hints[condition.feature] };
+    }
+    case 'memory': {
+      const current = snapshot.memory[condition.metric];
+      const hints: Record<MemoryMetric, string> = {
+        patinaCells: 'Let the harbor weather a wall in its own way.',
+        matureTrees: 'Give a sheltered courtyard tree three days to fill its canopy.',
+        catPopulation: 'Give the harbor cats time and enough welcoming habitat.',
+        oldestBuildingHours: 'Let the oldest walls remain standing as the tides pass.',
+        rainIntensity: 'Wait for a passing harbor shower.',
+      };
+      return { value: ratio(current, condition.atLeast), hint: hints[condition.metric] };
     }
     case 'discovered': return { value: snapshot.priorDiscoveries.includes(condition.eventId) ? 1 : 0, hint: 'Another observation must reveal itself first.' };
   }
@@ -474,6 +496,24 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: standardEffects('The first stone rises above the tide.', 'stone', 'watching the first walls settle'),
   },
   {
+    id: 'first-patina', repeatable: false, title: 'What the Tide Leaves', illustration: 'foundation',
+    note: 'The wall had not changed all at once. Salt, rain, and shelter had simply begun writing in the margins.',
+    condition: all(discovered('first-foundation'), { kind: 'memory', metric: 'patinaCells', atLeast: 1 }), focus: { kind: 'town' },
+    effects: standardEffects('The first wall has begun to remember the weather.', 'stone', 'noticing the tide marks on an old wall'),
+  },
+  {
+    id: 'oldest-house', repeatable: false, title: 'Five Days Standing', illustration: 'street',
+    note: 'Five days of doors, footsteps, salt air, and lamplight had made the oldest house look as though it had always been there.',
+    condition: all(discovered('first-patina'), { kind: 'memory', metric: 'oldestBuildingHours', atLeast: 120 }), focus: { kind: 'town' },
+    effects: standardEffects('The oldest house has become part of the harbor’s memory.', 'warm', 'remembering the first house'),
+  },
+  {
+    id: 'first-rain', repeatable: false, title: 'Rain on Warm Stone', illustration: 'rain',
+    note: 'The shower polished every roof and step, tucked the laundry away, and left the harbor reflecting itself.',
+    condition: all(discovered('first-foundation'), { kind: 'memory', metric: 'rainIntensity', atLeast: .18 }), focus: { kind: 'town' },
+    effects: standardEffects('A passing shower darkens the harbor stones.', 'water', 'sheltering together from the rain'),
+  },
+  {
     id: 'first-dock', repeatable: false, title: 'A Place to Tie Up', illustration: 'fish',
     note: 'A few timbers reached beyond the quay. The water suddenly felt less like an edge and more like a road.',
     condition: all(discovered('first-foundation'), { kind: 'water', feature: 'dock', atLeast: 1 }), focus: { kind: 'town' },
@@ -535,6 +575,12 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
       { kind: 'citizens', action: 'gather', activity: 'gathering around the newly planted courtyard tree' },
       reveal('A sheltered garden has taken root.', 'green'),
     ],
+  },
+  {
+    id: 'mature-courtyard-tree', repeatable: false, title: 'A Room Made of Shade', illustration: 'garden',
+    note: 'The sapling had become a canopy. People began giving directions by it, as if the tree had been part of the town before the walls.',
+    condition: all(discovered('sheltered-courtyard'), { kind: 'memory', metric: 'matureTrees', atLeast: 1 }), focus: { kind: 'topology', feature: 'courtyard' },
+    effects: standardEffects('A courtyard tree has grown broad enough to gather beneath.', 'green', 'resting in the tree’s new shade'),
   },
   {
     id: 'harbor-plaza', repeatable: false, title: 'Room to Linger', illustration: 'street',
@@ -616,6 +662,16 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
       { kind: 'wildlife', action: 'reveal', animal: 'cats' },
       { kind: 'citizens', action: 'notice', activity: 'meeting the harbor cats outside the fishmonger' },
       reveal('Patient customers wait outside the fishmonger.', 'people'),
+    ],
+  },
+  {
+    id: 'first-kitten', repeatable: false, title: 'Four Pawprints Become Eight', illustration: 'inn',
+    note: 'A smaller face appeared beneath the fishmonger’s step, wearing an old coat pattern in a new arrangement.',
+    condition: all(discovered('harbor-cats'), { kind: 'memory', metric: 'catPopulation', atLeast: 4 }), focus: { kind: 'business', businessType: 'fishmonger' },
+    effects: [
+      { kind: 'wildlife', action: 'gather', animal: 'cats' },
+      { kind: 'citizens', action: 'notice', activity: 'meeting the harbor’s first kitten' },
+      reveal('The harbor-cat family has welcomed its first kitten.', 'people'),
     ],
   },
   {

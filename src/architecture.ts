@@ -1,4 +1,5 @@
 import { CARDINALS, type Cell, keyOf } from './types';
+import { hash } from './random';
 
 export type EmptyArchitectureFeature = 'narrow canal' | 'sea arch' | 'high bridge' | 'covered skybridge' | 'lantern gate';
 export type ArcadeFeature = 'arcade row' | 'roof promenade';
@@ -71,6 +72,53 @@ export function roofCourtFeature(cell: Cell, cells: CellMap): RoofCourtFeature |
   if (cell.height >= 4) return 'hanging roof garden';
   if (cell.height >= 3) return 'rooftop pavilion';
   return 'rooftop court';
+}
+
+/** True when the generated roof is a deck rather than a pitched cap or tower roof. */
+export function isWalkableRoof(cell: Cell, cells: CellMap) {
+  const heights = cardinalHeights(cell.x, cell.z, cells);
+  const neighborCount = heights.filter((height) => height > 0).length;
+  const diagonalCount = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
+    .filter(([dx, dz]) => cells.has(keyOf(cell.x + dx, cell.z + dz))).length;
+  if (cell.height >= 3 && neighborCount <= 1) return false;
+  if (roofCourtAnchor(cell, cells) || steppedTerrace(cell, cells) || arcadeFeature(cell, cells) === 'roof promenade') return true;
+  return neighborCount > 2 || diagonalCount >= 3;
+}
+
+/** Picks one exposed wall for a roof access hatch, matching the deterministic architecture. */
+export function roofAccessDirection(cell: Cell, cells: CellMap, seed: number): GridDirection | null {
+  const exposed = CARDINALS
+    .map((_, direction) => direction as GridDirection)
+    .filter((direction) => {
+      const [dx, dz] = CARDINALS[direction];
+      return !cells.has(keyOf(cell.x + dx, cell.z + dz));
+    });
+  if (!exposed.length) return null;
+  return exposed[Math.floor(hash(seed, cell.x, cell.z, 2802) * exposed.length) % exposed.length];
+}
+
+/** One hatch serves each connected, equal-height roof deck instead of cluttering every cell. */
+export function isRoofAccessCell(cell: Cell, cells: CellMap, seed: number) {
+  if (!isWalkableRoof(cell, cells)) return false;
+  const pending = [cell];
+  const visited = new Set<string>();
+  const candidates: Cell[] = [];
+  while (pending.length) {
+    const current = pending.pop()!;
+    const currentKey = keyOf(current.x, current.z);
+    if (visited.has(currentKey)) continue;
+    visited.add(currentKey);
+    if (roofAccessDirection(current, cells, seed) !== null) candidates.push(current);
+    for (const [dx, dz] of CARDINALS) {
+      const neighbor = cells.get(keyOf(current.x + dx, current.z + dz));
+      if (neighbor?.height === cell.height && isWalkableRoof(neighbor, cells)) pending.push(neighbor);
+    }
+  }
+  candidates.sort((a, b) => {
+    const score = hash(seed, a.x, a.z, 2801) - hash(seed, b.x, b.z, 2801);
+    return score || a.z - b.z || a.x - b.x;
+  });
+  return candidates[0]?.x === cell.x && candidates[0]?.z === cell.z;
 }
 
 export function courtyardFeature(x: number, z: number, cells: CellMap): CourtyardFeature | null {

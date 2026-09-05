@@ -324,6 +324,20 @@ function resetPointerGesture() {
   renderer.domElement.classList.remove('dragging');
 }
 
+function cancelCameraGesture() {
+  for (const pointerId of [...activePointers]) {
+    renderer.domElement.dispatchEvent(new PointerEvent('pointercancel', { pointerId }));
+  }
+  activePointers.clear();
+  resetPointerGesture();
+  hover.visible = false;
+  hoveredCell = null;
+
+  // Preserve the current view while forcing OrbitControls back to its idle state.
+  controls.saveState();
+  controls.reset();
+}
+
 function updateHover(clientX: number, clientY: number) {
   pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
@@ -927,6 +941,7 @@ window.addEventListener('keydown', (event) => {
     updateGrowInspector();
   }
   if (event.key === 'Escape') {
+    cancelCameraGesture();
     setJournalOpen(false);
     setTouchGuideOpen(false);
   }

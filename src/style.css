@@ -189,7 +189,10 @@ canvas.dragging { cursor: grabbing; }
 .top-actions { position: absolute; right: 24px; top: 22px; display: flex; gap: 8px; pointer-events: auto; }
 .mobile-about-label { display: none; }
 .mobile-observe-label { display: none; }
-#journal-open span {
+.mobile-journal-label,
+.mobile-reset-label,
+.mobile-clock { display: none; }
+#journal-count {
   display: inline-grid;
   place-items: center;
   min-width: 17px;
@@ -593,27 +596,53 @@ button:active { transform: translateY(1px); }
   .guide-done:hover { color: #fff5da; background: #5e7b75; }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (hover: none) and (pointer: coarse) {
   .hud { padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
-  .brand { top: max(18px, env(safe-area-inset-top)); left: max(18px, env(safe-area-inset-left)); }
-  .brand h1 { font-size: 21px; }
-  .brand p { display: none; }
-  .time-widget { top: 72px; left: 18px; }
-  .speed-controls button { min-width: 34px; height: 34px; }
-  .music-toggle { width: 34px; height: 34px; }
-  .perf-panel { top: 112px; left: 18px; }
-  .grow-inspector { top: 142px; left: 18px; width: calc(100vw - 36px); max-height: 45vh; }
+  .brand { display: none; }
+  .time-widget {
+    top: max(10px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    gap: 5px;
+    height: 40px;
+    padding: 4px 5px 4px 8px;
+    white-space: nowrap;
+  }
+  .desktop-clock { display: none; }
+  .mobile-clock { display: inline; font-size: 9px; letter-spacing: 0; }
+  .speed-controls { gap: 2px; }
+  .speed-controls button { min-width: 30px; width: 30px; height: 32px; padding: 0; }
+  .music-toggle { width: 30px; height: 32px; }
+  .perf-panel { top: 58px; left: max(8px, env(safe-area-inset-left)); }
+  .grow-inspector { top: 88px; left: 18px; width: calc(100vw - 36px); max-height: 45vh; }
   .citizen-card, .memory-card { left: max(12px, env(safe-area-inset-left)); bottom: calc(max(10px, env(safe-area-inset-bottom)) + 72px); width: min(250px, calc(100vw - 24px)); }
   .tide-thread { right: max(12px, env(safe-area-inset-right)); bottom: calc(max(10px, env(safe-area-inset-bottom)) + 72px); width: min(285px, calc(100vw - 24px)); }
   .citizen-card.show + .tide-thread { opacity: 0; visibility: hidden; pointer-events: none; }
   .hint { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 75px); width: max-content; max-width: calc(100vw - 24px); justify-content: center; gap: 10px; font-size: 10px; text-align: center; }
   .touch-hint { white-space: normal !important; }
-  .top-actions { top: max(15px, env(safe-area-inset-top)); right: max(15px, env(safe-area-inset-right)); }
-  .top-actions button { min-height: 42px; }
-  #about-open { width: 42px; padding: 0; }
-  #observe-toggle { width: 42px; padding: 0; }
+  .top-actions {
+    top: max(10px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+  .top-actions button { flex: 0 0 40px; width: 40px; min-width: 0; min-height: 40px; padding: 0; white-space: nowrap; }
+  #journal-open { position: relative; }
+  #journal-open span#journal-count {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 14px;
+    height: 14px;
+    margin: 0;
+    padding: 0 3px;
+    font-size: 8px;
+  }
+  .desktop-journal-label,
+  .desktop-reset-label,
   .desktop-about-label { display: none; }
   .desktop-observe-label { display: none; }
+  .mobile-journal-label,
+  .mobile-reset-label { display: inline; font: 500 18px/1 'DM Sans', sans-serif; }
   .mobile-about-label { display: inline; font-family: 'Fraunces', serif; font-size: 14px; font-style: italic; }
   .mobile-observe-label { display: inline; font: 600 18px/1 'Fraunces', serif; }
   .about-panel { padding: 28px 24px 23px; }
@@ -624,6 +653,9 @@ button:active { transform: translateY(1px); }
   .clue-heading small { display: none; }
 }
 
-@media (max-width: 520px) {
-  .brand { display: none; }
+@media (max-width: 380px) {
+  .mobile-clock { display: none; }
+  .time-widget { padding-left: 5px; }
+  .top-actions { gap: 3px; }
+  .top-actions button { flex-basis: 38px; width: 38px; }
 }

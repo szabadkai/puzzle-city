@@ -19,7 +19,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="hud">
     <div class="brand"><h1>Little Tides</h1><p>潮町 · a town from the sea</p></div>
     <div class="time-widget" aria-label="Time and simulation speed">
-      <span id="clock-display">Day 1 · 07:30</span>
+      <span id="clock-display" class="desktop-clock">Day 1 · 07:30</span>
+      <span id="mobile-clock-display" class="mobile-clock" aria-hidden="true">D1 · 07:30</span>
       <div class="speed-controls">
         <button data-speed="0" aria-label="Pause simulation">Ⅱ</button>
         <button data-speed="1" class="active" aria-label="Normal simulation speed">1×</button>
@@ -28,10 +29,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button id="music-toggle" class="music-toggle" aria-label="Turn music off" aria-pressed="true"><span aria-hidden="true">♫</span></button>
     </div>
     <div class="top-actions">
-      <button id="journal-open" aria-label="Open observation journal">Journal <span id="journal-count">0</span></button>
+      <button id="journal-open" aria-label="Open observation journal"><span class="desktop-journal-label">Journal</span><span class="mobile-journal-label" aria-hidden="true">▤</span><span id="journal-count">0</span></button>
       <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
       <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
-      <button id="reset" aria-label="Start a new town">New tide</button>
+      <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
     </div>
     <div class="toast" id="toast"></div>
     <div class="perf-panel" id="perf-panel">Performance</div>
@@ -1311,7 +1312,9 @@ function daylightAt(hour: number) {
 function updateTimeDisplay() {
   const hours = Math.floor(timeOfDay);
   const minutes = Math.floor((timeOfDay - hours) * 60);
-  document.querySelector('#clock-display')!.textContent = `Day ${day} · ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')} · ${citizens.population()} ${citizens.population() === 1 ? 'resident' : 'residents'}`;
+  const time = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  document.querySelector('#clock-display')!.textContent = `Day ${day} · ${time} · ${citizens.population()} ${citizens.population() === 1 ? 'resident' : 'residents'}`;
+  document.querySelector('#mobile-clock-display')!.textContent = `D${day} · ${time}`;
   updateCitizenCard();
   const memory = selectedMemoryReader?.();
   if (memory) showMemoryCard(memory);

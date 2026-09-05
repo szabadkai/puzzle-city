@@ -4,12 +4,13 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { CityRenderer } from './city';
 import { CitizenSystem } from './citizens';
 import { BusinessSystem, type BusinessUpdate } from './businesses';
-import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
+import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryClue, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
 import { HarborAmbience } from './harbor';
 import type { JournalEntry, JournalIllustration, SavedTown } from './types';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
+const MUSIC_MUTED_KEY = 'little-tides-music-muted';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="hud">
@@ -21,10 +22,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button data-speed="1" class="active" aria-label="Normal simulation speed">1×</button>
         <button data-speed="3" aria-label="Triple simulation speed">3×</button>
       </div>
+      <button id="music-toggle" class="music-toggle" aria-label="Turn music off" aria-pressed="true"><span aria-hidden="true">♫</span></button>
     </div>
     <div class="top-actions">
       <button id="journal-open" aria-label="Open observation journal">Journal <span id="journal-count">0</span></button>
-      <button id="center" aria-label="Center camera">Center view</button>
+      <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
       <button id="reset" aria-label="Start a new town">New tide</button>
     </div>
     <div class="toast" id="toast"></div>
@@ -42,6 +44,13 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div><dt>Going</dt><dd id="citizen-destination"></dd></div>
       </dl>
       <p class="card-relationship" id="citizen-relationship"></p>
+    </aside>
+    <aside class="tide-thread" id="tide-thread" aria-live="polite">
+      <button class="thread-close" id="thread-close" aria-label="Stop following this thread">×</button>
+      <span>Following a thread</span>
+      <strong id="thread-title"></strong>
+      <p id="thread-hint"></p>
+      <div class="thread-progress" role="progressbar" aria-label="Discovery progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="thread-progress-fill"></i></div>
     </aside>
     <div class="hint" id="hint">
       <span class="desktop-hint"><i class="mouse"></i> click to build</span>
@@ -87,6 +96,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="journal-list" id="journal-list"></div>
       </aside>
     </div>
+    <div class="about-scrim" id="about-scrim" aria-hidden="true">
+      <section class="about-panel" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <button class="about-close" id="about-close" aria-label="Close About">×</button>
+        <span class="about-kicker">A town from the sea</span>
+        <h2 id="about-title">Little Tides</h2>
+        <p>Build without pressure and watch a tiny harbor find its own routines, friendships, and quiet surprises.</p>
+        <p class="creator-credit">Made by <a href="https://szabadkai.com" target="_blank" rel="noreferrer">Levente Szabadkai</a>.</p>
+        <p class="music-credit">Music: <a href="https://opengameart.org/content/caketown-cuteplayful" target="_blank" rel="noreferrer">“Caketown - Cute/playful”</a> by Matthew Pablo, licensed <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.</p>
+      </section>
+    </div>
   </div>
 `;
 
@@ -94,6 +113,11 @@ const saved = loadTown();
 const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
 let timeOfDay = saved?.timeOfDay ?? 7.5;
 let day = saved?.day ?? 1;
+const restoredCatEntry = saved?.journal?.find((entry) => entry.eventId === 'harbor-cats');
+let catColonyFoundedAt = saved?.catColonyFoundedAt
+  ?? (saved?.discoveries?.includes('harbor-cats')
+    ? restoredCatEntry ? restoredCatEntry.day * 24 + restoredCatEntry.timeOfDay : day * 24 + timeOfDay
+    : undefined);
 let simulationSpeed = 1;
 const committedEffects: string[] = [];
 let navDebugVisible = false;
@@ -204,7 +228,7 @@ scene.add(seabed);
 
 const city = new CityRenderer(seed);
 scene.add(city.root);
-if (saved) city.load(saved.cells);
+if (saved) city.load(saved.cells, day * 24 + timeOfDay);
 const citizens = new CitizenSystem(seed, city.cells, saved?.citizens ?? []);
 scene.add(citizens.root);
 const businesses = new BusinessSystem(seed, saved?.businesses ?? []);
@@ -246,8 +270,14 @@ let dragged = false;
 let toastTimer = 0;
 let saveTimer = 0;
 let audioContext: AudioContext | null = null;
+let musicMuted = localStorage.getItem(MUSIC_MUTED_KEY) === 'true';
+const backgroundMusic = new Audio(`${import.meta.env.BASE_URL}audio/caketown.mp3`);
+backgroundMusic.loop = true;
+backgroundMusic.preload = 'auto';
+backgroundMusic.volume = .18;
 let selectedCitizenId: string | null = null;
 let touchMode: 'build' | 'remove' = 'build';
+let followedThreadId: string | null = saved?.followedDiscoveryId ?? null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   activePointers.add(event.pointerId);
@@ -401,13 +431,11 @@ function hideCitizenCard() {
 }
 
 function build(x: number, z: number) {
-  const before = city.topologyLabel(x, z);
-  if (!city.place(x, z)) {
+  if (!city.place(x, z, day * 24 + timeOfDay)) {
     showToast(city.get(x, z) ? 'That tower is tall enough.' : 'The water is too deep to build there.');
     softTone(150, .05);
     return;
   }
-  const after = city.topologyLabel(x, z);
   citizens.rebuild(city.cells);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
@@ -418,12 +446,11 @@ function build(x: number, z: number) {
   popSound();
   persistSoon();
   document.querySelector('#hint')?.classList.add('hidden');
-  if (before !== after || after === 'tower') showToast(`The stones settle into a ${after}.`);
   evaluateDiscoveries();
 }
 
 function demolish(x: number, z: number) {
-  if (!city.remove(x, z)) return;
+  if (!city.remove(x, z, day * 24 + timeOfDay)) return;
   citizens.rebuild(city.cells);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
@@ -444,7 +471,7 @@ function persistSoon() {
 
 function saveTown() {
   const data: SavedTown = {
-    version: 5,
+    version: 6,
     seed,
     cells: city.serialize(),
     timeOfDay,
@@ -454,6 +481,8 @@ function saveTown() {
     discoveries: grow.discoveredIds(),
     journal: grow.entries(),
     eventLastTriggeredAt: grow.recurringTriggerTimes(),
+    followedDiscoveryId: followedThreadId ?? undefined,
+    catColonyFoundedAt,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
@@ -461,7 +490,7 @@ function saveTown() {
 function loadTown(): SavedTown | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedTown | null;
-    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 || parsed?.version === 5 ? parsed : null;
+    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 || parsed?.version === 5 || parsed?.version === 6 ? parsed : null;
   } catch {
     return null;
   }
@@ -488,7 +517,9 @@ function currentSnapshot() {
 }
 
 function evaluateDiscoveries() {
-  const triggered = grow.evaluate(currentSnapshot());
+  const snapshot = currentSnapshot();
+  const triggered = grow.evaluate(snapshot);
+  updateThreadStatus(snapshot);
   if (!triggered.length) return;
   city.setDiscoveryState(grow.discoveredIds());
   citizens.setDiscoveries(grow.discoveredIds());
@@ -523,6 +554,7 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
     return;
   }
   if (effect.kind === 'wildlife') {
+    if (effect.animal === 'cats' && catColonyFoundedAt === undefined) catColonyFoundedAt = day * 24 + timeOfDay;
     ambience.wildlifeEffect(effect.action, effect.animal, focus);
     return;
   }
@@ -550,6 +582,10 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
 function updateGrowInspector() {
   const panel = document.querySelector<HTMLElement>('#grow-inspector')!;
   if (!panel.classList.contains('show')) return;
+  // Replacing an open native select closes its popup before the user can make
+  // a choice. The inspector refreshes on a timer, so leave its controls alone
+  // while the event picker has focus and resume refreshing after it blurs.
+  if (panel.querySelector('select') === document.activeElement) return;
   const snapshot = currentSnapshot();
   const events = grow.inspect(snapshot);
   const eligible = events.filter((event) => event.eligible && !event.discovered);
@@ -604,8 +640,24 @@ function updateGrowInspector() {
 function renderJournal() {
   const list = document.querySelector<HTMLDivElement>('#journal-list')!;
   const entries = grow.entries().reverse();
+  const clues = grow.clues(currentSnapshot());
   document.querySelector('#journal-count')!.textContent = String(entries.length);
   list.replaceChildren();
+  const clueSection = document.createElement('section');
+  clueSection.className = 'journal-clues';
+  const clueHeading = document.createElement('div');
+  clueHeading.className = 'clue-heading';
+  clueHeading.innerHTML = '<span>Whispers on the tide</span><small>Choose one thread to follow</small>';
+  clueSection.append(clueHeading);
+  if (clues.length) {
+    for (const clue of clues) clueSection.append(createClueCard(clue));
+  } else {
+    const quiet = document.createElement('p');
+    quiet.className = 'clue-quiet';
+    quiet.textContent = 'For now, the harbor has told all the stories it knows.';
+    clueSection.append(quiet);
+  }
+  list.append(clueSection);
   if (!entries.length) {
     const empty = document.createElement('p');
     empty.className = 'journal-empty';
@@ -614,6 +666,72 @@ function renderJournal() {
     return;
   }
   for (const entry of entries) list.append(createJournalEntry(entry));
+}
+
+function createClueCard(clue: DiscoveryClue) {
+  const button = document.createElement('button');
+  const percent = Math.round(clue.progress * 100);
+  button.className = 'clue-card';
+  button.dataset.threadId = clue.eventId;
+  button.classList.toggle('active', followedThreadId === clue.eventId);
+  button.setAttribute('aria-pressed', String(followedThreadId === clue.eventId));
+  button.innerHTML = `<span class="clue-mark" aria-hidden="true">◇</span><span class="clue-copy"><strong>${clue.title}</strong><small>${clue.hint}</small><span class="clue-progress"><i style="width:${percent}%"></i></span></span><span class="clue-action">${followedThreadId === clue.eventId ? 'Following' : 'Follow'}</span>`;
+  return button;
+}
+
+function updateThreadStatus(snapshot = currentSnapshot()) {
+  const panel = document.querySelector<HTMLElement>('#tide-thread')!;
+  if (!followedThreadId || grow.discoveredIds().includes(followedThreadId)) {
+    followedThreadId = null;
+    panel.classList.remove('show');
+    return;
+  }
+  const clue = grow.clues(snapshot, DISCOVERY_EVENTS.length).find((candidate) => candidate.eventId === followedThreadId);
+  if (!clue) {
+    panel.classList.remove('show');
+    return;
+  }
+  const percent = Math.round(clue.progress * 100);
+  document.querySelector('#thread-title')!.textContent = clue.title;
+  document.querySelector('#thread-hint')!.textContent = clue.hint;
+  document.querySelector<HTMLElement>('#thread-progress-fill')!.style.width = `${percent}%`;
+  const progress = panel.querySelector<HTMLElement>('[role="progressbar"]')!;
+  progress.setAttribute('aria-valuenow', String(percent));
+  panel.classList.add('show');
+}
+
+function followThread(eventId: string) {
+  followedThreadId = followedThreadId === eventId ? null : eventId;
+  const snapshot = currentSnapshot();
+  updateThreadStatus(snapshot);
+  renderJournal();
+  persistSoon();
+  if (!followedThreadId) return;
+  const clue = grow.clues(snapshot, DISCOVERY_EVENTS.length).find((candidate) => candidate.eventId === followedThreadId);
+  if (clue?.focus) controls.target.lerp(city.worldPosition(clue.focus.x, clue.focus.z).setY(1), .4);
+  setJournalOpen(false);
+  showToast(`Following “${clue?.title ?? 'a new thread'}”.`);
+}
+
+function revisitDiscovery(eventId: string) {
+  const event = DISCOVERY_EVENTS.find((candidate) => candidate.id === eventId);
+  if (!event) return;
+  const snapshot = currentSnapshot();
+  const focus = resolveFocus(event.focus, snapshot);
+  if (focus) {
+    controls.target.lerp(city.worldPosition(focus.x, focus.z).setY(1), .55);
+    city.celebrateAt(focus.x, focus.z);
+    citizens.gatherAt(focus.x, focus.z, `remembering ${event.title.toLowerCase()}`);
+  } else {
+    citizens.noticeDiscovery(`remembering ${event.title.toLowerCase()}`);
+  }
+  for (const effect of event.effects) {
+    if (effect.kind === 'wildlife') ambience.wildlifeEffect('gather', effect.animal, focus);
+  }
+  setJournalOpen(false);
+  showToast(`The town remembers: ${event.title}.`);
+  softTone(390, .16);
+  softTone(590, .23, .08);
 }
 
 const JOURNAL_SKETCHES: Record<JournalIllustration, string> = {
@@ -737,17 +855,40 @@ function createJournalEntry(entry: JournalEntry) {
   time.textContent = `Day ${entry.day} · ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
   const note = document.createElement('p');
   note.textContent = entry.note;
-  copy.append(time, title, note);
+  const revisit = document.createElement('button');
+  revisit.className = 'journal-revisit';
+  revisit.dataset.revisitId = entry.eventId;
+  revisit.textContent = 'Revisit in town';
+  copy.append(time, title, note, revisit);
   article.append(illustration, copy);
   return article;
 }
 
 renderJournal();
+updateThreadStatus();
 
 function setJournalOpen(open: boolean) {
   const scrim = document.querySelector('#journal-scrim')!;
+  if (open) {
+    renderJournal();
+    document.querySelector<HTMLDivElement>('#journal-list')!.scrollTop = 0;
+  }
   scrim.classList.toggle('show', open);
   scrim.setAttribute('aria-hidden', String(!open));
+}
+
+function setAboutOpen(open: boolean) {
+  const scrim = document.querySelector<HTMLElement>('#about-scrim')!;
+  const openButton = document.querySelector<HTMLButtonElement>('#about-open')!;
+  scrim.classList.toggle('show', open);
+  scrim.setAttribute('aria-hidden', String(!open));
+  if (open) {
+    setJournalOpen(false);
+    setTouchGuideOpen(false);
+    window.setTimeout(() => document.querySelector<HTMLButtonElement>('#about-close')!.focus(), 50);
+  } else if (scrim.contains(document.activeElement)) {
+    openButton.focus();
+  }
 }
 
 function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
@@ -830,13 +971,42 @@ function popSound() {
   softTone(430, .13, .045);
 }
 
+function updateMusicButton() {
+  const button = document.querySelector<HTMLButtonElement>('#music-toggle')!;
+  button.classList.toggle('muted', musicMuted);
+  button.setAttribute('aria-pressed', String(!musicMuted));
+  button.setAttribute('aria-label', musicMuted ? 'Turn music on' : 'Turn music off');
+  button.querySelector('span')!.textContent = musicMuted ? '♩' : '♫';
+}
+
+async function startBackgroundMusic() {
+  if (musicMuted || !backgroundMusic.paused) return;
+  try {
+    await backgroundMusic.play();
+  } catch {
+    // Autoplay policies vary; the next explicit music-button press will retry.
+  }
+}
+
+function toggleBackgroundMusic() {
+  musicMuted = !musicMuted;
+  localStorage.setItem(MUSIC_MUTED_KEY, String(musicMuted));
+  if (musicMuted) backgroundMusic.pause();
+  else void startBackgroundMusic();
+  updateMusicButton();
+}
+
+updateMusicButton();
+window.addEventListener('pointerdown', () => { void startBackgroundMusic(); }, { capture: true, once: true });
+window.addEventListener('keydown', () => { void startBackgroundMusic(); }, { capture: true, once: true });
+
 function centerView() {
   controls.target.set(0, 1.3, 0);
   camera.position.set(18, 19, 20);
   controls.update();
 }
 
-document.querySelector('#center')!.addEventListener('click', centerView);
+document.querySelector('#music-toggle')!.addEventListener('click', toggleBackgroundMusic);
 document.querySelector('#touch-center')!.addEventListener('click', () => {
   centerView();
   showToast('The harbor drifts back into view.');
@@ -884,10 +1054,27 @@ document.querySelector('#reset')!.addEventListener('click', () => {
 });
 
 document.querySelector('#card-close')!.addEventListener('click', hideCitizenCard);
+document.querySelector('#thread-close')!.addEventListener('click', () => {
+  followedThreadId = null;
+  updateThreadStatus();
+  persistSoon();
+});
 document.querySelector('#journal-open')!.addEventListener('click', () => setJournalOpen(true));
 document.querySelector('#journal-close')!.addEventListener('click', () => setJournalOpen(false));
 document.querySelector('#journal-scrim')!.addEventListener('click', (event) => {
   if (event.target === event.currentTarget) setJournalOpen(false);
+});
+document.querySelector('#journal-list')!.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement;
+  const thread = target.closest<HTMLButtonElement>('[data-thread-id]');
+  if (thread?.dataset.threadId) followThread(thread.dataset.threadId);
+  const revisit = target.closest<HTMLButtonElement>('[data-revisit-id]');
+  if (revisit?.dataset.revisitId) revisitDiscovery(revisit.dataset.revisitId);
+});
+document.querySelector('#about-open')!.addEventListener('click', () => setAboutOpen(true));
+document.querySelector('#about-close')!.addEventListener('click', () => setAboutOpen(false));
+document.querySelector('#about-scrim')!.addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) setAboutOpen(false);
 });
 document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) => {
   button.addEventListener('click', () => {
@@ -944,6 +1131,7 @@ window.addEventListener('keydown', (event) => {
     cancelCameraGesture();
     setJournalOpen(false);
     setTouchGuideOpen(false);
+    setAboutOpen(false);
   }
 });
 
@@ -1037,7 +1225,7 @@ function animate() {
   renderer.toneMappingExposure = .72 + daylight * .36;
   waterUniforms.uTime.value = time;
   waterUniforms.uDay.value = daylight;
-  city.update(time);
+  city.update(time, absoluteHours);
   city.setDaylight(daylight);
   citizens.update(delta * simulationSpeed, timeOfDay, absoluteHours, time);
   if (businessCheckElapsed > .5) {
@@ -1059,7 +1247,7 @@ function animate() {
     updateGrowInspector();
     inspectorElapsed = 0;
   }
-  ambience.update(time, daylight, timeOfDay, absoluteHours);
+  ambience.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt);
   clockUpdate += delta;
   autosaveElapsed += delta;
   if (clockUpdate > .25) {

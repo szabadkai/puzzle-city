@@ -4,10 +4,14 @@ export type Cell = {
   height: number;
   color: number;
   placedAt: number;
+  /** Simulated hour when this foundation first rose from the water. */
+  foundedAt?: number;
+  /** Simulated hour of the most recent height change. */
+  renovatedAt?: number;
 };
 
 export type SavedTown = {
-  version: 1 | 2 | 3 | 4 | 5;
+  version: 1 | 2 | 3 | 4 | 5 | 6;
   seed: number;
   cells: Cell[];
   timeOfDay?: number;
@@ -17,6 +21,8 @@ export type SavedTown = {
   discoveries?: string[];
   journal?: JournalEntry[];
   eventLastTriggeredAt?: Record<string, number>;
+  followedDiscoveryId?: string;
+  catColonyFoundedAt?: number;
 };
 
 export type JournalIllustration =

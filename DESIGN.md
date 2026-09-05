@@ -23,8 +23,11 @@ Only the edited cell and its immediate three-by-three neighborhood are rebuilt a
 - An isolated stack of three or more levels becomes a flagged tower.
 - Three or four buildings around an empty cell shelter a planted courtyard.
 - Six or more buildings around a two-by-two opening form a paved harbor plaza with a central fountain.
-- Two opposing two-storey buildings form a sea arch over an empty cell.
-- Raising both sides to three storeys transforms that crossing into a high pedestrian bridge.
+- Opposing buildings across one water tile grow through a canal → sea arch → high bridge → covered skybridge → lantern gate sequence as both sides rise from one to five storeys.
+- Three buildings in a straight run become a sheltered arcade at two storeys and a lantern-lined roof promenade at three.
+- Three buildings in a 1–2–3 height progression form an exterior stepped terrace; lifting the full sequence to 2–3–4 adds gardens, and 3–4–5 adds lanterns.
+- Four equal-height buildings share a rooftop court at two storeys, a roofed pavilion at three, and a hanging garden from four storeys upward.
+- A courtyard enclosed by three or four homes grows from a planted garden into a cloister at two storeys and a roofed courtyard pavilion at three.
 - Shoreline edges deterministically gain docks, water stairs, and other tiny details from the saved seed.
 
 Large form is entirely topology-driven. Cardinal heights determine exposed façades and connections, while diagonal crowding changes roofs from individual caps into shared-looking decks and gardens. Decorative variation uses a coordinate hash, so loading the same seed and grid recreates the same town.
@@ -37,7 +40,13 @@ Static meshes are consolidated by material within each cell, while animated deta
 
 Water topology is derived from exposed cell edges and shared by architecture, discoveries, harbor ambience, and fauna. It identifies deterministic docks, narrow canals, and sheltered water. Rowboats, fishing boats, merchant boats, and ferries follow separate deterministic, collision-safe water lanes around the changing town envelope; the working fleet changes as docks, occupations, businesses, and discoveries develop. A deterministic fauna layer derives habitat anchors from that same topology and from businesses: gulls fly, feed, perch, and scatter; fish school in sheltered water; crabs patrol docks; cats wander around fishmongers and inns; and butterflies stay near courtyards, plazas, and flower shops. Wildlife state comes from the saved seed, town, discoveries, and clock rather than a separate save payload. Relationship work uses spatial buckets and a fixed comparison ceiling rather than an unbounded all-pairs scan. Three-storey homes can support a second household member; age roles, favorite-shop visit histories, shop popularity, employees, and visitors are additive fields on the existing citizen and business saves.
 
-The current version-5 save contains the grid, RNG seed, simulation state, discovered event IDs, journal entries, and recurring-event cooldown timestamps. Versions 1–4 remain loadable, and writes are debounced into `localStorage` after every edit or discovery.
+The current version-6 save contains the grid, RNG seed, simulation state, discovered event IDs, journal entries, recurring-event cooldown timestamps, building foundation/renovation times, and the founding time of the harbor-cat colony. Versions 1–5 remain loadable, and writes are debounced into `localStorage` after every edit or discovery.
+
+## Town memory
+
+Time adds history rather than upkeep. Courtyard trees grow continuously from young saplings into full canopies over roughly three simulated days. Their age is derived from the foundations that enclosed the courtyard, so reshaping upper floors does not erase the tree's history. Exposed façades accumulate deterministic, context-sensitive patina: salt on open waterfront walls, moss in sheltered clusters, soot around working food and craft businesses, and occasional rust streaks on taller buildings. Changing a building's height partially refreshes its surface, after which the patina gradually returns.
+
+Once harbor cats are discovered, three founding cats establish a colony. A new kitten appears about every two simulated days and grows to adult size over the following two days. Fishmongers, inns, and up to two gardens determine the colony's carrying capacity, keeping reproduction legible and bounded. Coat colors and markings are inherited deterministically from the town seed. All aging uses the running simulation clock; closing the game never advances or punishes the player.
 
 ## Discovery/event system
 

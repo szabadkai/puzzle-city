@@ -5,6 +5,10 @@ import { CARDINALS, type BusinessSave, type BusinessType, type Cell, keyOf } fro
 import { hash, pick } from './random';
 import { plazaAnchorAt } from './topology';
 import { hasDock, hasWaterStairs } from './water';
+import {
+  arcadeFeature, courtyardFeature, emptyCrossingFeature, roofCourtAnchor, roofCourtFeature, steppedTerrace,
+  type CourtyardFeature, type EmptyArchitectureFeature, type RoofCourtFeature, type TerraceFeature,
+} from './architecture';
 
 const CELL = 2.45;
 const FLOOR = 1.42;
@@ -54,6 +58,10 @@ export class CityRenderer {
   private readonly warmLight = new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 });
   private readonly blossom = new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 });
   private readonly silverLeaf = new THREE.MeshStandardMaterial({ color: 0x9ab7a1, roughness: .82, emissive: 0x315b51, emissiveIntensity: .12 });
+  private readonly saltPatina = new THREE.MeshStandardMaterial({ color: 0xd8d0b3, transparent: true, opacity: .42, roughness: 1, depthWrite: false, side: THREE.DoubleSide });
+  private readonly mossPatina = new THREE.MeshStandardMaterial({ color: 0x526c45, transparent: true, opacity: .5, roughness: 1, depthWrite: false, side: THREE.DoubleSide });
+  private readonly sootPatina = new THREE.MeshStandardMaterial({ color: 0x443f3b, transparent: true, opacity: .38, roughness: 1, depthWrite: false, side: THREE.DoubleSide });
+  private readonly rustPatina = new THREE.MeshStandardMaterial({ color: 0x985a3f, transparent: true, opacity: .46, roughness: 1, depthWrite: false, side: THREE.DoubleSide });
 
   constructor(seed: number) {
     this.seed = seed;
@@ -64,8 +72,17 @@ export class CityRenderer {
 
   static cellSize() { return CELL; }
 
-  load(cells: Cell[]) {
-    for (const cell of cells) this.cells.set(keyOf(cell.x, cell.z), { ...cell });
+  load(cells: Cell[], absoluteHours = 0) {
+    for (const cell of cells) {
+      // Older saves did not remember construction time. Give their buildings a
+      // deterministic history so an established town does not reload pristine.
+      const inheritedAge = 30 + hash(this.seed, cell.x, cell.z, 6060) * 66;
+      this.cells.set(keyOf(cell.x, cell.z), {
+        ...cell,
+        foundedAt: cell.foundedAt ?? Math.max(0, absoluteHours - inheritedAge),
+        renovatedAt: cell.renovatedAt ?? cell.foundedAt ?? Math.max(0, absoluteHours - inheritedAge),
+      });
+    }
     this.rebuildAll(false);
   }
 
@@ -128,7 +145,7 @@ export class CityRenderer {
     return Math.hypot(x, z) <= 8.8;
   }
 
-  place(x: number, z: number) {
+  place(x: number, z: number, absoluteHours = 0) {
     const key = keyOf(x, z);
     const existing = this.cells.get(key);
     if (!existing && !this.isBuildable(x, z)) return false;
@@ -136,23 +153,27 @@ export class CityRenderer {
       if (existing.height >= 5) return false;
       existing.height += 1;
       existing.placedAt = performance.now();
+      existing.renovatedAt = absoluteHours;
     } else {
       this.cells.set(key, {
         x, z, height: 1,
         color: Math.floor(hash(this.seed, x, z, 91) * WALL_COLORS.length),
         placedAt: performance.now(),
+        foundedAt: absoluteHours,
+        renovatedAt: absoluteHours,
       });
     }
     this.rebuildAround(x, z);
     return true;
   }
 
-  remove(x: number, z: number) {
+  remove(x: number, z: number, absoluteHours = 0) {
     const cell = this.get(x, z);
     if (!cell) return false;
     if (cell.height > 1) {
       cell.height -= 1;
       cell.placedAt = performance.now();
+      cell.renovatedAt = absoluteHours;
     } else {
       this.cells.delete(keyOf(x, z));
     }
@@ -162,7 +183,7 @@ export class CityRenderer {
 
   serialize() { return [...this.cells.values()].map((cell) => ({ ...cell, placedAt: 0 })); }
 
-  update(time: number) {
+  update(time: number, absoluteHours = 0) {
     if (this.discoveryGlow) {
       const age = (performance.now() - this.discoveryGlow.startedAt) / 1000;
       const scale = 1 + age * 1.35;
@@ -193,6 +214,30 @@ export class CityRenderer {
       }
       const tree = group.userData.tree as THREE.Object3D | undefined;
       if (tree) tree.rotation.z = Math.sin(time * 1.35 + group.position.x) * .025;
+      const growingTree = group.userData.growingTree as THREE.Object3D | undefined;
+      if (growingTree) {
+        const age = Math.max(0, absoluteHours - ((group.userData.treeBornAt as number | undefined) ?? absoluteHours));
+        const progress = THREE.MathUtils.smoothstep(age, 0, 72);
+        const scale = .24 + progress * .76;
+        growingTree.scale.set(scale, .32 + progress * .68, scale);
+      }
+      const patina = group.userData.patina as THREE.Object3D[] | undefined;
+      if (patina?.length) {
+        const foundedAt = (group.userData.foundedAt as number | undefined) ?? absoluteHours;
+        const renovatedAt = (group.userData.renovatedAt as number | undefined) ?? foundedAt;
+        const age = Math.max(0, absoluteHours - foundedAt);
+        const sinceRenovation = Math.max(0, absoluteHours - renovatedAt);
+        const renovationRecovery = .3 + THREE.MathUtils.clamp(sinceRenovation / 28, 0, 1) * .7;
+        for (const stain of patina) {
+          const threshold = stain.userData.ageThreshold as number;
+          const span = stain.userData.ageSpan as number;
+          const strength = THREE.MathUtils.smoothstep(age, threshold, threshold + span) * renovationRecovery;
+          stain.visible = strength > .015;
+          const width = stain.userData.patinaWidth as number;
+          const height = stain.userData.patinaHeight as number;
+          stain.scale.set(width * (.25 + strength * .75), height * (.05 + strength * .95), 1);
+        }
+      }
       const flag = group.userData.flag as THREE.Object3D | undefined;
       if (flag) flag.rotation.y = Math.sin(time * 3 + group.position.z) * .15;
       const laundry = group.userData.laundry as THREE.Object3D[] | undefined;
@@ -219,6 +264,12 @@ export class CityRenderer {
     if (!cell) return this.emptyFeature(x, z) ?? 'open water';
     const neighbors = CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz));
     const count = neighbors.filter(Boolean).length;
+    const court = roofCourtFeature(cell, this.cells);
+    const terrace = steppedTerrace(cell, this.cells);
+    const arcade = arcadeFeature(cell, this.cells);
+    if (court) return court;
+    if (terrace) return terrace.feature;
+    if (arcade) return arcade;
     if (cell.height >= 3 && count <= 1) return 'tower';
     if (count === 2 && ((neighbors[0] && neighbors[1]) || (neighbors[1] && neighbors[2]) || (neighbors[2] && neighbors[3]) || (neighbors[3] && neighbors[0]))) return 'corner house';
     if (count === 2) return 'connected row';
@@ -287,7 +338,7 @@ export class CityRenderer {
   private consolidateStaticMeshes(group: THREE.Group) {
     const buckets = new Map<string, THREE.Mesh[]>();
     for (const child of [...group.children]) {
-      if (!(child instanceof THREE.Mesh) || child.name === 'flag' || child.name.startsWith('laundry-')) continue;
+      if (!(child instanceof THREE.Mesh) || child.name === 'flag' || child.name.startsWith('laundry-') || child.name.startsWith('patina-')) continue;
       if (Array.isArray(child.material)) continue;
       const key = `${child.material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
       const bucket = buckets.get(key) ?? [];
@@ -331,6 +382,12 @@ export class CityRenderer {
     const walls = this.cachedMaterial(this.wallMaterials, wallColor, .92);
     const roofColor = pick(ROOF_COLORS, hash(this.seed, cell.x, cell.z, 13));
     const roof = this.cachedMaterial(this.roofMaterials, roofColor, .82);
+    const courtAnchor = roofCourtAnchor(cell, this.cells);
+    const courtFeature = roofCourtFeature(cell, this.cells);
+    const terrace = steppedTerrace(cell, this.cells);
+    const arcade = arcadeFeature(cell, this.cells);
+    group.userData.foundedAt = cell.foundedAt ?? 0;
+    group.userData.renovatedAt = cell.renovatedAt ?? cell.foundedAt ?? 0;
 
     const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .97, .34, CELL * .97, 3, .12), this.stone));
     foundation.position.y = BASE_Y;
@@ -360,7 +417,7 @@ export class CityRenderer {
       if (this.discoveries.has('tower-bell')) this.addTowerBell(group, topY + .18);
       if (this.discoveries.has('birds-nest')) this.addBirdNest(group, topY + 1.18);
       if (this.discoveries.has('clock-tower')) this.addClockFaces(group, topY - .22);
-    } else if (count <= 2 && diagonalCount < 3) {
+    } else if (!courtAnchor && !terrace && arcade !== 'roof promenade' && count <= 2 && diagonalCount < 3) {
       const cap = shadow(new THREE.Mesh(new THREE.ConeGeometry(CELL * .82, .88, 4), roof));
       cap.position.y = topY + .43;
       cap.rotation.y = Math.PI / 4;
@@ -382,13 +439,60 @@ export class CityRenderer {
       else if (cell.height >= 2 && hash(this.seed, cell.x, cell.z, 146) > .5) this.addWaterTank(group, topY + .18);
     }
 
+    if (courtAnchor && courtFeature && courtAnchor.x === cell.x && courtAnchor.z === cell.z) this.addRoofCourt(group, topY, courtFeature);
+    if (terrace) this.addSteppedTerrace(group, terrace.direction, topY, terrace.feature);
+    if (arcade) this.addArcadeRow(group, neighborHeights, topY, arcade === 'roof promenade');
     if ((count === 2 && this.isCorner(neighborHeights)) || (cell.height >= 2 && count <= 1)) this.addBalcony(group, cell, topY);
     if (this.discoveries.has('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
     if (this.discoveries.has('festival-ribbons') && hash(this.seed, cell.x, cell.z, 1920) > .55) this.addFestivalRibbon(group, cell, topY);
     if (this.discoveries.has('lantern-finale') && count > 0 && hash(this.seed, cell.x, cell.z, 1930) > .46) this.addFinaleLanterns(group, cell, topY);
+    this.addPatina(group, cell, neighborHeights, count);
     this.addWaterEdges(group, cell, neighborHeights);
     const business = this.businesses.get(keyOf(cell.x, cell.z));
     if (business) this.addBusinessFacade(group, cell, business);
+  }
+
+  private addPatina(group: THREE.Group, cell: Cell, neighborHeights: number[], neighborCount: number) {
+    const stains: THREE.Object3D[] = [];
+    const business = this.businesses.get(keyOf(cell.x, cell.z));
+    const workingBuilding = business?.type === 'bakery' || business?.type === 'workshop' || business?.type === 'restaurant';
+    for (let dir = 0; dir < 4; dir++) {
+      if (neighborHeights[dir] > 0) continue;
+      const direction = dir as Direction;
+      const [dx, dz] = CARDINALS[direction];
+      const lateral = new THREE.Vector3(dz, 0, -dx);
+      const [px, pz] = this.edgePosition(direction, CELL * .514);
+      const variation = hash(this.seed, cell.x, cell.z, 6200 + dir);
+
+      const addStain = (kind: string, material: THREE.Material, width: number, height: number, y: number, side: number, threshold: number, span: number) => {
+        const stain = new THREE.Mesh(new THREE.CircleGeometry(.5, 7), material);
+        stain.name = `patina-${kind}`;
+        stain.position.set(px + dx * .012 + lateral.x * side, y, pz + dz * .012 + lateral.z * side);
+        stain.rotation.y = direction % 2 ? Math.PI / 2 : 0;
+        stain.scale.set(width * .25, height * .05, 1);
+        stain.renderOrder = 1;
+        stain.userData.ageThreshold = threshold;
+        stain.userData.ageSpan = span;
+        stain.userData.patinaWidth = width;
+        stain.userData.patinaHeight = height;
+        group.add(stain);
+        stains.push(stain);
+      };
+
+      // Sea-facing ground floors bloom pale with salt. Sheltered corners green
+      // instead, while working buildings slowly smoke-darken above their doors.
+      if (neighborCount >= 2 && variation > .24) {
+        addStain('moss', this.mossPatina, .55 + variation * .28, .38, .52, (variation - .5) * .9, 22, 54);
+      } else if (variation > .12) {
+        addStain('salt', this.saltPatina, .72 + variation * .36, .42, .48, (variation - .5) * .58, 14, 42);
+      }
+      if (workingBuilding && dir === this.doorDirection(cell)) {
+        addStain('soot', this.sootPatina, .44, .78, Math.max(1.45, cell.height * FLOOR - .12), -.48, 9, 34);
+      } else if (cell.height >= 2 && variation > .73) {
+        addStain('rust', this.rustPatina, .22, .82, 1.65, .58, 34, 62);
+      }
+    }
+    group.userData.patina = stains;
   }
 
   private addFacade(group: THREE.Group, cell: Cell, dir: Direction, level: number, neighborCount: number) {
@@ -722,7 +826,7 @@ export class CityRenderer {
       const dir = index as Direction;
       const [dx, dz] = CARDINALS[dir];
       const adjacentFeature = this.emptyFeature(cell.x + dx, cell.z + dz);
-      if (adjacentFeature === 'courtyard garden' || adjacentFeature === 'harbor plaza') return;
+      if (adjacentFeature?.includes('courtyard') || adjacentFeature === 'cloister garden' || adjacentFeature === 'harbor plaza') return;
       const [px, pz] = this.edgePosition(dir, CELL * .51);
       const quay = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .24 : CELL * .98, .68, dir % 2 ? CELL * .98 : .24), this.stoneDark));
       quay.position.set(px, -.17, pz);
@@ -805,6 +909,119 @@ export class CityRenderer {
       const leg = shadow(new THREE.Mesh(new THREE.BoxGeometry(.05, .25, .05), this.dark));
       leg.position.set(x, y + .1, -.25);
       group.add(leg);
+    }
+  }
+
+  private addRoofCourt(group: THREE.Group, y: number, feature: RoofCourtFeature) {
+    const center = CELL / 2;
+    const postHeight = .9;
+    for (const x of [center - .7, center + .7]) for (const z of [center - .7, center + .7]) {
+      const post = shadow(new THREE.Mesh(new THREE.BoxGeometry(.075, postHeight, .075), this.wood), false);
+      post.position.set(x, y + postHeight / 2 + .18, z);
+      group.add(post);
+    }
+    if (feature === 'rooftop court') {
+      for (let index = -3; index <= 3; index++) {
+        const slat = shadow(new THREE.Mesh(new THREE.BoxGeometry(1.72, .07, .1), this.wood), false);
+        slat.position.set(center, y + 1.1, center + index * .23);
+        group.add(slat);
+      }
+    } else {
+      const pavilionRoof = shadow(new THREE.Mesh(new THREE.ConeGeometry(1.28, .55, 4), this.cream));
+      pavilionRoof.position.set(center, y + 1.35, center);
+      pavilionRoof.rotation.y = Math.PI / 4;
+      group.add(pavilionRoof);
+      for (const side of [-.6, .6]) {
+        const lantern = new THREE.Mesh(new THREE.SphereGeometry(.09, 8, 6), this.warmLight);
+        lantern.scale.y = 1.3;
+        lantern.position.set(center + side, y + .92, center + .62);
+        group.add(lantern);
+      }
+    }
+    const planter = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.35, .42, .25, 10), this.stone));
+    planter.position.set(center, y + .27, center);
+    const shrub = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.37, 1), this.green), false);
+    shrub.position.set(center, y + .65, center);
+    group.add(planter, shrub);
+    if (feature === 'hanging roof garden') {
+      for (let index = 0; index < 8; index++) {
+        const angle = index / 8 * Math.PI * 2;
+        const vine = new THREE.Mesh(new THREE.SphereGeometry(.14 + index % 2 * .04, 7, 5), index % 3 ? this.green : this.blossom);
+        vine.position.set(center + Math.cos(angle) * .88, y + .72 + index % 2 * .22, center + Math.sin(angle) * .88);
+        group.add(vine);
+      }
+    }
+  }
+
+  private addSteppedTerrace(group: THREE.Group, dir: Direction, y: number, feature: TerraceFeature) {
+    const [dx, dz] = CARDINALS[dir];
+    const lateral = new THREE.Vector3(dz, 0, -dx);
+    for (let index = 0; index < 6; index++) {
+      const step = this.orientedBox(.82, .12, .34, dir, this.stone);
+      const outward = .48 + index * .25;
+      step.position.set(dx * outward, y - index * .21, dz * outward);
+      group.add(step);
+    }
+    for (const side of [-.58, .58]) {
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(.1, .14, .2, 7), this.wood);
+      pot.position.set(dx * .45 + lateral.x * side, y + .27, dz * .45 + lateral.z * side);
+      const plant = new THREE.Mesh(new THREE.IcosahedronGeometry(.14, 0), this.green);
+      plant.position.set(pot.position.x, y + .46, pot.position.z);
+      group.add(pot, plant);
+    }
+    if (feature !== 'stepped terrace') {
+      for (let index = 1; index < 6; index += 2) {
+        const outward = .48 + index * .25;
+        const planter = new THREE.Mesh(new THREE.CylinderGeometry(.08, .11, .16, 7), this.wood);
+        planter.position.set(dx * outward + lateral.x * .34, y - index * .21 + .14, dz * outward + lateral.z * .34);
+        const flower = new THREE.Mesh(new THREE.IcosahedronGeometry(.12, 0), index % 4 ? this.green : this.blossom);
+        flower.position.copy(planter.position).setY(planter.position.y + .17);
+        group.add(planter, flower);
+      }
+    }
+    if (feature === 'lantern stair') {
+      for (const side of [-.5, .5]) {
+        const pole = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, .72, 6), this.metal), false);
+        pole.position.set(dx * .72 + lateral.x * side, y + .42, dz * .72 + lateral.z * side);
+        const lantern = new THREE.Mesh(new THREE.SphereGeometry(.1, 8, 6), this.warmLight);
+        lantern.scale.y = 1.35;
+        lantern.position.copy(pole.position).setY(y + .78);
+        group.add(pole, lantern);
+      }
+    }
+  }
+
+  private addArcadeRow(group: THREE.Group, heights: number[], y: number, promenade: boolean) {
+    const rowRunsNorthSouth = heights[0] >= 2 && heights[2] >= 2;
+    const facades: Direction[] = rowRunsNorthSouth ? [1, 3] : [0, 2];
+    for (const dir of facades) {
+      if (heights[dir] > 0) continue;
+      const [dx, dz] = CARDINALS[dir];
+      const lateral = new THREE.Vector3(dz, 0, -dx);
+      const [px, pz] = this.edgePosition(dir, CELL * .55);
+      for (const side of [-.64, .64]) {
+        const column = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.075, .095, 1.25, 8), this.cream));
+        column.position.set(px + lateral.x * side, .96, pz + lateral.z * side);
+        group.add(column);
+      }
+      const arch = shadow(new THREE.Mesh(new THREE.TorusGeometry(.64, .075, 6, 16, Math.PI), this.cream), false);
+      arch.position.set(px + dx * .025, 1.25, pz + dz * .025);
+      arch.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      group.add(arch);
+      const canopy = this.orientedBox(1.55, .09, .42, dir, this.wood);
+      canopy.position.set(px + dx * .22, 1.5, pz + dz * .22);
+      group.add(canopy);
+      if (promenade) {
+        const rail = this.orientedBox(1.48, .3, .07, dir, this.metal);
+        rail.position.set(dx * CELL * .42, y + .3, dz * CELL * .42);
+        group.add(rail);
+        for (const side of [-.55, .55]) {
+          const lantern = new THREE.Mesh(new THREE.SphereGeometry(.085, 8, 6), this.warmLight);
+          lantern.scale.y = 1.25;
+          lantern.position.set(dx * CELL * .39 + lateral.x * side, y + .5, dz * CELL * .39 + lateral.z * side);
+          group.add(lantern);
+        }
+      }
     }
   }
 
@@ -944,24 +1161,17 @@ export class CityRenderer {
 
   private emptyFeature(x: number, z: number): string | null {
     if (plazaAnchorAt(x, z, this.cells)) return 'harbor plaza';
-    const h = CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz)?.height ?? 0);
-    const count = h.filter((value) => value > 0).length;
-    if (count >= 3) return 'courtyard garden';
-    if (h[0] >= 3 && h[2] >= 3 && h[1] === 0 && h[3] === 0) return 'high bridge';
-    if (h[1] >= 3 && h[3] >= 3 && h[0] === 0 && h[2] === 0) return 'high bridge';
-    if (h[0] >= 2 && h[2] >= 2 && h[1] === 0 && h[3] === 0) return 'sea arch';
-    if (h[1] >= 2 && h[3] >= 2 && h[0] === 0 && h[2] === 0) return 'sea arch';
-    if (h[0] >= 1 && h[2] >= 1 && h[1] === 0 && h[3] === 0) return 'narrow canal';
-    if (h[1] >= 1 && h[3] >= 1 && h[0] === 0 && h[2] === 0) return 'narrow canal';
-    return null;
+    const courtyard = courtyardFeature(x, z, this.cells);
+    if (courtyard) return courtyard;
+    return emptyCrossingFeature(x, z, this.cells);
   }
 
   private buildFeature(group: THREE.Group, x: number, z: number) {
     const feature = this.emptyFeature(x, z);
     if (feature === 'harbor plaza') this.buildPlaza(group, x, z);
-    else if (feature === 'courtyard garden') this.buildCourtyard(group, x, z);
+    else if (feature?.includes('courtyard') || feature === 'cloister garden') this.buildCourtyard(group, x, z, feature as CourtyardFeature);
     else if (feature === 'narrow canal') this.buildCanal(group, x, z);
-    else if (feature) this.buildCrossing(group, x, z, feature === 'high bridge');
+    else if (feature) this.buildCrossing(group, x, z, feature as EmptyArchitectureFeature);
   }
 
   private buildCanal(group: THREE.Group, x: number, z: number) {
@@ -996,13 +1206,15 @@ export class CityRenderer {
     }
   }
 
-  private buildCourtyard(group: THREE.Group, x: number, z: number) {
+  private buildCourtyard(group: THREE.Group, x: number, z: number, feature: CourtyardFeature) {
     const platform = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .83, .2, CELL * .83, 4, .18), this.stone));
     platform.position.y = .05;
     group.add(platform);
     const patch = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.72, .78, .12, 12), this.green));
     patch.position.y = .18;
     group.add(patch);
+    const treeGrowth = new THREE.Group();
+    treeGrowth.name = 'growing-courtyard-tree';
     const trunk = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.1, .15, 1.25, 7), this.wood));
     trunk.position.y = .83;
     const canopy = new THREE.Group();
@@ -1019,18 +1231,50 @@ export class CityRenderer {
         canopy.add(blooms);
       }
     }
-    group.add(trunk, canopy);
+    treeGrowth.add(trunk, canopy);
+    group.add(treeGrowth);
     group.userData.tree = canopy;
+    group.userData.growingTree = treeGrowth;
+    group.userData.treeBornAt = Math.max(0, ...CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz)?.foundedAt ?? 0));
     for (const side of [-1, 1]) {
       const bench = shadow(new THREE.Mesh(new THREE.BoxGeometry(.68, .12, .22), this.wood));
       bench.position.set(side * .8, .34, .18);
       group.add(bench);
     }
+    if (feature !== 'courtyard garden') {
+      for (const xOffset of [-.72, .72]) for (const zOffset of [-.72, .72]) {
+        const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.045, .06, 1.25, 7), this.wood), false);
+        post.position.set(xOffset, .88, zOffset);
+        group.add(post);
+      }
+      for (const offset of [-.76, .76]) {
+        const beamX = shadow(new THREE.Mesh(new THREE.BoxGeometry(1.62, .09, .16), this.cream), false);
+        beamX.position.set(0, 1.52, offset);
+        const beamZ = shadow(new THREE.Mesh(new THREE.BoxGeometry(.16, .09, 1.62), this.cream), false);
+        beamZ.position.set(offset, 1.52, 0);
+        group.add(beamX, beamZ);
+      }
+    }
+    if (feature === 'courtyard pavilion') {
+      const roof = shadow(new THREE.Mesh(new THREE.ConeGeometry(1.18, .52, 4), this.cream));
+      roof.position.y = 2.2;
+      roof.rotation.y = Math.PI / 4;
+      group.add(roof);
+      for (const side of [-.58, .58]) {
+        const lantern = new THREE.Mesh(new THREE.SphereGeometry(.095, 8, 6), this.warmLight);
+        lantern.scale.y = 1.3;
+        lantern.position.set(side, 1.72, .64);
+        group.add(lantern);
+      }
+    }
   }
 
-  private buildCrossing(group: THREE.Group, x: number, z: number, high: boolean) {
+  private buildCrossing(group: THREE.Group, x: number, z: number, feature: EmptyArchitectureFeature) {
     const h = CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz)?.height ?? 0);
     const northSouth = h[0] > 0 && h[2] > 0;
+    const high = feature !== 'sea arch';
+    const covered = feature === 'covered skybridge' || feature === 'lantern gate';
+    const grand = feature === 'lantern gate';
     const y = high ? FLOOR * 2.28 : FLOOR * 1.42;
     const walls = new THREE.MeshStandardMaterial({ color: pick(WALL_COLORS, hash(this.seed, x, z, 500)), roughness: .9 });
     const span = shadow(new THREE.Mesh(new RoundedBoxGeometry(northSouth ? 1.25 : CELL * 1.08, .58, northSouth ? CELL * 1.08 : 1.25, 4, .16), walls));
@@ -1070,6 +1314,31 @@ export class CityRenderer {
             northSouth ? end * (CELL - (CELL / 2 + .24)) : 0,
           );
           group.add(step);
+        }
+      }
+      if (covered) {
+        for (const end of [-.82, .82]) for (const side of [-.48, .48]) {
+          const post = shadow(new THREE.Mesh(new THREE.BoxGeometry(.065, .9, .065), this.wood), false);
+          post.position.set(northSouth ? side : end, y + .85, northSouth ? end : side);
+          group.add(post);
+        }
+        const roof = shadow(new THREE.Mesh(new THREE.ConeGeometry(1.05, .52, 4), this.cream));
+        roof.position.y = y + 1.48;
+        roof.rotation.y = Math.PI / 4;
+        roof.scale.set(northSouth ? .72 : 1.32, 1, northSouth ? 1.32 : .72);
+        group.add(roof);
+        for (const end of [-.72, .72]) {
+          const lantern = new THREE.Mesh(new THREE.SphereGeometry(.095, 9, 7), this.warmLight);
+          lantern.scale.y = 1.3;
+          lantern.position.set(northSouth ? .42 : end, y + .82, northSouth ? end : .42);
+          group.add(lantern);
+        }
+        if (grand) {
+          for (const end of [-.72, .72]) {
+            const finial = shadow(new THREE.Mesh(new THREE.ConeGeometry(.12, .5, 6), this.metal), false);
+            finial.position.set(northSouth ? 0 : end, y + 1.82, northSouth ? end : 0);
+            group.add(finial);
+          }
         }
       }
     }

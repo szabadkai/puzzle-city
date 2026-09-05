@@ -102,7 +102,7 @@ export class HarborAmbience {
 
   scatterWildlife(x: number, z: number) { this.fauna.scatterAt(x, z); }
 
-  update(time: number, daylight: number, timeOfDay: number, absoluteHours: number) {
+  update(time: number, daylight: number, timeOfDay: number, absoluteHours: number, catColonyFoundedAt?: number) {
     for (const boat of this.fleet) {
       if (!boat.model.visible) continue;
       const progress = (time * boat.speed + boat.phase) % 1;
@@ -115,7 +115,7 @@ export class HarborAmbience {
       boat.model.rotation.y = Math.atan2(tangent.x, tangent.z) - Math.PI / 2;
       boat.model.rotation.z = Math.sin(time * boat.bobSpeed * .78 + boat.phase * 5) * .028;
     }
-    this.fauna.update(time, daylight, timeOfDay, absoluteHours);
+    this.fauna.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt);
     this.clouds.position.x = Math.sin(time * .018) * 2.5;
     this.cloudMaterial.opacity = .12 + daylight * .32;
     this.starMaterial.opacity = Math.pow(1 - daylight, 2) * (.62 + Math.sin(time * .7) * .08);

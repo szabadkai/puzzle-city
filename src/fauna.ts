@@ -43,6 +43,8 @@ export class FaunaSystem {
   private gardenAnchors: THREE.Vector3[] = [];
   private towerAnchors: THREE.Vector3[] = [];
   private catAnchors: THREE.Vector3[] = [];
+  private catCapacity = 0;
+  private visibleCatCount = 0;
   private townCenter = new THREE.Vector3();
   private lastRealTime = 0;
   private scatterUntil = 0;
@@ -95,12 +97,16 @@ export class FaunaSystem {
       return this.exteriorAnchor(cell.x, cell.z, occupied, .66);
     });
     this.gardenAnchors = [...courtyardAnchors, ...plazaAnchors, ...flowerAnchors];
-    this.catAnchors = this.businesses
+    const workingCatAnchors = this.businesses
       .filter((business) => business.type === 'fishmonger' || business.type === 'inn')
       .map((business) => {
         const cell = parseCellKey(business.cellKey);
         return this.exteriorAnchor(cell.x, cell.z, occupied, .62);
       });
+    this.catAnchors = [...workingCatAnchors, ...this.gardenAnchors.slice(0, 2).map((anchor) => anchor.clone().setY(.28))];
+    const fishmongers = this.businesses.filter((business) => business.type === 'fishmonger').length;
+    const inns = this.businesses.filter((business) => business.type === 'inn').length;
+    this.catCapacity = Math.min(this.cats.length, fishmongers * 3 + inns * 2 + Math.min(2, this.gardenAnchors.length));
     if (this.cells.length) {
       this.townCenter.set(
         this.cells.reduce((sum, cell) => sum + cell.x * CELL, 0) / this.cells.length,
@@ -145,13 +151,13 @@ export class FaunaSystem {
     this.scatterUntil = this.lastRealTime + 4.5;
   }
 
-  update(time: number, daylight: number, timeOfDay: number, absoluteHours: number) {
+  update(time: number, daylight: number, timeOfDay: number, absoluteHours: number, catColonyFoundedAt?: number) {
     this.lastRealTime = time;
     this.updateAmbientBirds(time);
     this.updateGulls(time, daylight, timeOfDay, absoluteHours);
     this.updateFish(time);
     this.updateCrabs(time);
-    this.updateCats(time);
+    this.updateCats(time, absoluteHours, catColonyFoundedAt);
     this.updateButterflies(time, daylight);
   }
 
@@ -166,7 +172,7 @@ export class FaunaSystem {
       gullModes: modes,
       fish: this.fishRoot.visible && this.waterAnchors.length ? this.fishSchools.length * 5 : 0,
       crabs: this.crabRoot.visible ? Math.min(this.crabs.length, this.dockAnchors.length) : 0,
-      cats: this.catRoot.visible ? Math.min(this.cats.length, this.catAnchors.length) : 0,
+      cats: this.catRoot.visible ? this.visibleCatCount : 0,
       butterflies: this.butterflyRoot.visible ? Math.min(this.butterflies.length, Math.max(0, this.gardenAnchors.length * 3)) : 0,
     };
   }
@@ -264,8 +270,10 @@ export class FaunaSystem {
 
   private createCats() {
     const coats = [0xc58b51, 0x4b4a4c, 0xe1c6a0];
-    for (let index = 0; index < 3; index++) {
-      const coat = new THREE.MeshStandardMaterial({ color: coats[index], roughness: .94 });
+    for (let index = 0; index < 12; index++) {
+      // Later kittens deterministically inherit one of the founding coats.
+      const family = index < 3 ? index : Math.floor(hash(this.seed, index, 0, 2840) * 3);
+      const coat = new THREE.MeshStandardMaterial({ color: coats[family], roughness: .94 });
       const cat = new THREE.Group();
       const body = new THREE.Mesh(new THREE.CapsuleGeometry(.09, .25, 3, 7), coat);
       body.rotation.z = Math.PI / 2;
@@ -278,9 +286,16 @@ export class FaunaSystem {
         cat.add(ear);
       }
       const tail = new THREE.Mesh(new THREE.TorusGeometry(.16, .025, 5, 10, Math.PI * 1.35), coat);
+      tail.name = 'cat-tail';
       tail.rotation.x = Math.PI / 2;
       tail.position.set(-.25, .18, 0);
       cat.add(body, head, tail);
+      if (index >= 3 && hash(this.seed, index, family, 2841) > .42) {
+        const marking = new THREE.Mesh(new THREE.SphereGeometry(.061, 7, 5), new THREE.MeshStandardMaterial({ color: 0xeee0c2, roughness: .96 }));
+        marking.scale.set(1.15, .45, .8);
+        marking.position.set(.205, .215, .085);
+        cat.add(marking);
+      }
       cat.scale.setScalar(.9);
       this.catRoot.add(cat);
       this.cats.push(cat);
@@ -379,15 +394,25 @@ export class FaunaSystem {
     });
   }
 
-  private updateCats(time: number) {
+  private updateCats(time: number, absoluteHours: number, catColonyFoundedAt?: number) {
+    const colonyAge = catColonyFoundedAt === undefined ? 0 : Math.max(0, absoluteHours - catColonyFoundedAt);
+    const familySize = catColonyFoundedAt === undefined ? 0 : Math.min(this.catCapacity, 3 + Math.floor(colonyAge / 48));
+    this.visibleCatCount = this.catRoot.visible ? familySize : 0;
     this.cats.forEach((cat, index) => {
       const anchor = time < this.catGatherUntil && this.catGatherFocus ? this.catGatherFocus : this.catAnchors[index % Math.max(1, this.catAnchors.length)];
-      cat.visible = this.catRoot.visible && Boolean(anchor);
+      cat.visible = this.catRoot.visible && index < familySize && Boolean(anchor);
       if (!anchor) return;
       const angle = time * (.16 + index * .03) + index * 2.5;
       cat.position.set(anchor.x + Math.cos(angle) * (.32 + index * .06), anchor.y, anchor.z + Math.sin(angle) * (.25 + index * .05));
       cat.rotation.y = -angle - Math.PI / 2;
-      cat.children.at(-1)!.rotation.z = Math.sin(time * 2.4 + index) * .18;
+      const tail = cat.getObjectByName('cat-tail');
+      if (tail) tail.rotation.z = Math.sin(time * 2.4 + index) * .18;
+      if (index < 3) cat.scale.setScalar(.9);
+      else {
+        const bornAt = (index - 2) * 48;
+        const kittenAge = Math.max(0, colonyAge - bornAt);
+        cat.scale.setScalar(.5 + THREE.MathUtils.clamp(kittenAge / 48, 0, 1) * .4);
+      }
     });
   }
 

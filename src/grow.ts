@@ -73,6 +73,15 @@ export type TriggeredDiscovery = Readonly<{
   snapshot: WorldSnapshot;
 }>;
 
+export type DiscoveryClue = Readonly<{
+  eventId: string;
+  title: string;
+  illustration: JournalIllustration;
+  progress: number;
+  hint: string;
+  focus: GridPoint | null;
+}>;
+
 type SnapshotInput = {
   cells: Iterable<Cell>;
   citizens: CitizenSave[];
@@ -217,6 +226,118 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
   }
 }
 
+type ConditionProgress = { value: number; hint: string };
+
+const BUSINESS_LABELS: Record<BusinessType, string> = {
+  bakery: 'bakery', cafe: 'café', 'flower-shop': 'flower shop', workshop: 'workshop', bookstore: 'bookstore',
+  fishmonger: 'fishmonger', restaurant: 'restaurant', 'tea-house': 'tea house', inn: 'inn', pottery: 'pottery studio',
+};
+
+function countBusinesses(condition: Extract<DiscoveryCondition, { kind: 'business' }>, snapshot: WorldSnapshot) {
+  return snapshot.businesses.filter((business) =>
+    (!condition.businessType || business.type === condition.businessType)
+    && (!condition.visitsAtLeast || (business.visitCount ?? 0) >= condition.visitsAtLeast),
+  ).length;
+}
+
+function formatHour(hour: number) {
+  return `${String(Math.floor(hour) % 24).padStart(2, '0')}:00`;
+}
+
+function conditionProgress(condition: DiscoveryCondition, snapshot: WorldSnapshot): ConditionProgress {
+  const ratio = (current: number, target: number) => Math.min(1, current / Math.max(1, target));
+  switch (condition.kind) {
+    case 'all': {
+      const parts = condition.conditions.map((candidate) => conditionProgress(candidate, snapshot));
+      const incomplete = parts.filter((part) => part.value < 1).sort((a, b) => a.value - b.value);
+      return { value: parts.reduce((sum, part) => sum + part.value, 0) / Math.max(1, parts.length), hint: incomplete[0]?.hint ?? 'Listen for the town to answer.' };
+    }
+    case 'any': {
+      const best = condition.conditions.map((candidate) => conditionProgress(candidate, snapshot)).sort((a, b) => b.value - a.value)[0];
+      return best ?? { value: 0, hint: 'Try another shape for the harbor.' };
+    }
+    case 'not': return evaluateCondition(condition, snapshot)
+      ? { value: 1, hint: 'The ground floor is still waiting.' }
+      : { value: 0, hint: 'The harbor has already answered this thread.' };
+    case 'cells': {
+      const current = snapshot.cells.length;
+      return { value: ratio(current, condition.atLeast), hint: `Raise ${Math.max(0, condition.atLeast - current)} more ${condition.atLeast - current === 1 ? 'foundation' : 'foundations'} from the tide.` };
+    }
+    case 'height': {
+      const current = snapshot.cells.filter((cell) => cell.height >= condition.atLeast).length;
+      return { value: ratio(current, condition.cellsAtLeast), hint: `Let ${Math.max(0, condition.cellsAtLeast - current)} more ${condition.cellsAtLeast - current === 1 ? 'home' : 'homes'} reach ${condition.atLeast} storeys.` };
+    }
+    case 'population': {
+      const remaining = Math.max(0, condition.atLeast - snapshot.population);
+      return { value: ratio(snapshot.population, condition.atLeast), hint: `Make room for ${remaining} more ${remaining === 1 ? 'resident' : 'residents'}.` };
+    }
+    case 'relationships': {
+      const remaining = Math.max(0, condition.atLeast - snapshot.relationshipCount);
+      return { value: ratio(snapshot.relationshipCount, condition.atLeast), hint: `Let ${remaining} more ${remaining === 1 ? 'friendship' : 'friendships'} take root.` };
+    }
+    case 'day': return { value: ratio(snapshot.day, condition.atLeast), hint: `Let the town settle until day ${condition.atLeast}.` };
+    case 'time': return evaluateCondition(condition, snapshot)
+      ? { value: 1, hint: 'The hour is right. Watch the harbor closely.' }
+      : { value: .72, hint: `Return between ${formatHour(condition.after)} and ${formatHour(condition.before)}.` };
+    case 'topology': {
+      const current = snapshot.topology[condition.feature].length;
+      const hints: Record<TopologyFeature, string> = {
+        courtyard: 'Shelter an empty space with three neighboring homes.',
+        arch: 'Raise two opposing homes to two storeys across one water tile.',
+        bridge: 'Raise both sides of a sea arch to three storeys.',
+        tower: 'Let a quiet, lightly connected home reach three storeys.',
+        plaza: 'Leave a two-by-two opening inside a dense ring of homes.',
+      };
+      return { value: ratio(current, condition.atLeast), hint: hints[condition.feature] };
+    }
+    case 'business': {
+      const current = countBusinesses(condition, snapshot);
+      const label = condition.businessType ? BUSINESS_LABELS[condition.businessType] : 'shop';
+      const visitHint = condition.visitsAtLeast ? ` until it has welcomed ${condition.visitsAtLeast} visits` : '';
+      return { value: ratio(current, condition.atLeast), hint: `Give the ${label} time${visitHint}.` };
+    }
+    case 'regular-at': {
+      const matching = new Set(snapshot.businesses.filter((business) => business.type === condition.businessType).map((business) => business.id));
+      const current = snapshot.citizens.filter((citizen) => citizen.favoriteBusinessId && matching.has(citizen.favoriteBusinessId)).length;
+      return { value: ratio(current, condition.atLeast), hint: `Let neighbors return often enough to favor the ${BUSINESS_LABELS[condition.businessType]}.` };
+    }
+    case 'business-site': return evaluateCondition(condition, snapshot)
+      ? { value: 1, hint: `An exposed ground floor is ready for a ${BUSINESS_LABELS[condition.businessType]}.` }
+      : { value: 0, hint: `Leave an accessible ground floor facing the water for a ${BUSINESS_LABELS[condition.businessType]}.` };
+    case 'adjacency': return evaluateCondition(condition, snapshot)
+      ? { value: 1, hint: 'The neighbors are in place.' }
+      : { value: 0, hint: `Grow a ${BUSINESS_LABELS[condition.businessType]} close to a ${condition.feature}.` };
+    case 'citizen': {
+      const current = snapshot.citizens.filter((citizen) =>
+        (!condition.occupation || citizen.occupation === condition.occupation)
+        && (!condition.trait || citizen.traits.includes(condition.trait))
+        && (!condition.ageGroup || citizen.ageGroup === condition.ageGroup)
+        && (!condition.residentKind || citizen.residentKind === condition.residentKind),
+      ).length;
+      const kind = condition.occupation?.toLowerCase() ?? condition.ageGroup ?? condition.trait ?? 'neighbor';
+      return { value: ratio(current, condition.atLeast), hint: `The town is waiting for ${condition.atLeast} ${kind} ${condition.atLeast === 1 ? 'resident' : 'residents'}.` };
+    }
+    case 'water': {
+      const current = condition.feature === 'dock' ? snapshot.water.dockCount : condition.feature === 'canal' ? snapshot.water.canalCount : snapshot.water.shelteredCount;
+      const hints = {
+        dock: 'Shape more exposed shoreline where a little dock can reach the tide.',
+        canal: 'Leave a narrow blue lane between two banks of homes.',
+        sheltered: 'Enclose a calm pocket of water without sealing it away.',
+      } as const;
+      return { value: ratio(current, condition.atLeast), hint: hints[condition.feature] };
+    }
+    case 'discovered': return { value: snapshot.priorDiscoveries.includes(condition.eventId) ? 1 : 0, hint: 'Another observation must reveal itself first.' };
+  }
+}
+
+function prerequisitesMet(condition: DiscoveryCondition, snapshot: WorldSnapshot): boolean {
+  if (condition.kind === 'discovered') return snapshot.priorDiscoveries.includes(condition.eventId);
+  if (condition.kind === 'all') return condition.conditions.every((candidate) => prerequisitesMet(candidate, snapshot));
+  if (condition.kind === 'any') return condition.conditions.some((candidate) => prerequisitesMet(candidate, snapshot));
+  if (condition.kind === 'not') return prerequisitesMet(condition.condition, snapshot);
+  return true;
+}
+
 export class GrowSystem {
   private readonly discovered: Set<string>;
   private readonly journal: JournalEntry[];
@@ -311,6 +432,22 @@ export class GrowSystem {
       coolingDown: this.isCoolingDown(event, snapshot),
       eligible: evaluateCondition(event.condition, snapshot) && !this.isCoolingDown(event, snapshot),
     }));
+  }
+
+  clues(snapshot: WorldSnapshot, limit = 3): DiscoveryClue[] {
+    return this.events
+      .map((event, order) => ({ event, order, progress: conditionProgress(event.condition, snapshot) }))
+      .filter(({ event }) => !event.repeatable && !this.discovered.has(event.id) && prerequisitesMet(event.condition, snapshot))
+      .sort((a, b) => b.progress.value - a.progress.value || a.order - b.order)
+      .slice(0, limit)
+      .map(({ event, progress }) => ({
+        eventId: event.id,
+        title: event.title,
+        illustration: event.illustration,
+        progress: progress.value,
+        hint: progress.hint,
+        focus: resolveFocus(event.focus, snapshot),
+      }));
   }
 }
 

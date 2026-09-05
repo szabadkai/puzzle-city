@@ -207,6 +207,13 @@ button:active { transform: translateY(1px); }
 .grow-inspector strong { color: #ffd994; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; }
 .grow-inspector span { display: block; margin-top: 10px; color: #e5aa72; text-transform: uppercase; letter-spacing: .6px; }
 .grow-inspector p { margin: 4px 0 0; white-space: pre-line; color: rgba(224,238,221,.78); }
+.grow-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 10px 0 4px; }
+.grow-tools button, .grow-tools select {
+  min-width: 0; padding: 7px 8px; border: 1px solid rgba(255,217,148,.25); border-radius: 7px;
+  background: rgba(255,255,255,.08); color: #f3e7cb; font: inherit;
+}
+.grow-tools select { grid-column: span 2; }
+.grow-tools button:hover { background: rgba(255,217,148,.16); }
 
 .recipe-note {
   position: absolute;

@@ -26,6 +26,8 @@ export class HarborAmbience {
   private readonly clouds = new THREE.Group();
   private readonly petals: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly fireflies: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+  private readonly floatingLanterns: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+  private readonly fireworks: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
   private readonly starMaterial = new THREE.PointsMaterial({ color: 0xffe4a3, size: .13, transparent: true, opacity: 0, depthWrite: false });
   private readonly sunDisc: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
@@ -50,6 +52,14 @@ export class HarborAmbience {
     this.fireflies.name = 'evening-fireflies';
     this.fireflies.visible = false;
     this.root.add(this.fireflies);
+    this.floatingLanterns = this.createWaterLanterns();
+    this.floatingLanterns.name = 'floating-finale-lanterns';
+    this.floatingLanterns.visible = false;
+    this.root.add(this.floatingLanterns);
+    this.fireworks = this.createFireworks();
+    this.fireworks.name = 'finale-fireworks';
+    this.fireworks.visible = false;
+    this.root.add(this.fireworks);
     this.sunDisc = new THREE.Mesh(
       new THREE.CircleGeometry(2.2, 32),
       new THREE.MeshBasicMaterial({ color: 0xffc36f, transparent: true, opacity: .65, depthWrite: false }),
@@ -73,6 +83,8 @@ export class HarborAmbience {
     this.gulls.visible = this.discoveries.has('gulls-return');
     this.petals.visible = this.discoveries.has('blossom-tide');
     this.fireflies.visible = this.discoveries.has('evening-chorus');
+    this.floatingLanterns.visible = this.discoveries.has('lantern-finale');
+    this.fireworks.visible = this.discoveries.has('lantern-finale');
     this.refreshFleetVisibility();
   }
 
@@ -107,6 +119,12 @@ export class HarborAmbience {
     this.petals.material.opacity = .2 + daylight * .65;
     this.fireflies.rotation.y = -time * .018;
     this.fireflies.material.opacity = Math.pow(1 - daylight, 1.6) * (.55 + Math.sin(time * 1.7) * .2);
+    this.floatingLanterns.position.y = -.08 + Math.sin(time * .8) * .025;
+    this.floatingLanterns.rotation.y = time * .008;
+    this.floatingLanterns.material.opacity = Math.pow(1 - daylight, 1.3) * .92;
+    this.fireworks.rotation.y = time * .025;
+    this.fireworks.material.opacity = Math.pow(1 - daylight, 2) * (.38 + Math.pow(Math.max(0, Math.sin(time * 1.35)), 5) * .62);
+    this.fireworks.material.size = .11 + (Math.sin(time * 1.35) * .5 + .5) * .11;
   }
 
   private createFleet() {
@@ -277,5 +295,32 @@ export class HarborAmbience {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     return new THREE.Points(geometry, new THREE.PointsMaterial({ color, size, transparent: true, opacity: 0, depthWrite: false }));
+  }
+
+  private createWaterLanterns() {
+    const positions: number[] = [];
+    for (let index = 0; index < 56; index++) {
+      const angle = hash(this.seed, index, 0, 1880) * Math.PI * 2;
+      const radius = 6 + hash(this.seed, index, 1, 1880) * 10;
+      positions.push(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xffbd62, size: .2, transparent: true, opacity: 0, depthWrite: false }));
+  }
+
+  private createFireworks() {
+    const positions: number[] = [];
+    const centers = [[-7, 8, -5], [6, 10, -8], [1, 7, -13]] as const;
+    centers.forEach(([cx, cy, cz], burst) => {
+      for (let index = 0; index < 28; index++) {
+        const angle = index / 28 * Math.PI * 2;
+        const radius = .8 + hash(this.seed, burst, index, 1890) * 1.7;
+        positions.push(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius, cz + Math.sin(angle * 3) * .42);
+      }
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xffbf70, size: .16, transparent: true, opacity: 0, depthWrite: false }));
   }
 }

@@ -88,8 +88,7 @@ export function analyzeWaterTopology(cells: Iterable<Cell>, seed: number): Water
 
 export function createShorelineRoute(cells: Iterable<Cell>, seed: number, lane = 0) {
   const cellList = [...cells];
-  const topology = analyzeWaterTopology(cellList, seed);
-  if (!cellList.length || topology.shoreline.length < 4) {
+  if (!cellList.length) {
     const radius = 5.2 + lane * .75;
     return new THREE.CatmullRomCurve3(Array.from({ length: 16 }, (_, index) => {
       const angle = index / 16 * Math.PI * 2;
@@ -97,27 +96,32 @@ export function createShorelineRoute(cells: Iterable<Cell>, seed: number, lane =
     }), true, 'catmullrom', .35);
   }
 
-  const center = cellList.reduce((sum, cell) => {
-    sum.x += cell.x * WORLD_CELL_SIZE;
-    sum.y += cell.z * WORLD_CELL_SIZE;
-    return sum;
-  }, new THREE.Vector2()).multiplyScalar(1 / cellList.length);
-
-  const routePoints = topology.shoreline.map((edge, index) => {
-    const [dx, dz] = CARDINALS[edge.direction];
-    const clearance = WORLD_CELL_SIZE * (1.02 + lane * .2)
-      + (hash(seed, edge.land.x, edge.land.z, 1601 + index) - .5) * .18;
-    return new THREE.Vector3(
-      edge.land.x * WORLD_CELL_SIZE + dx * clearance,
-      -.12,
-      edge.land.z * WORLD_CELL_SIZE + dz * clearance,
-    );
-  }).sort((a, b) =>
-    Math.atan2(a.z - center.y, a.x - center.x) - Math.atan2(b.z - center.y, b.x - center.x),
-  );
-
-  // Keep the curve stable and inexpensive in dense towns while retaining the actual shoreline shape.
-  const stride = Math.max(1, Math.ceil(routePoints.length / 48));
-  const sampled = routePoints.filter((_, index) => index % stride === 0);
-  return new THREE.CatmullRomCurve3(sampled, true, 'catmullrom', .22);
+  // Follow a rounded water-cell envelope outside the town. Ordering exposed edges by angle can
+  // cut across land when the player builds several islands, while this lane remains collision-safe.
+  const clearance = WORLD_CELL_SIZE * (1.28 + lane * .2);
+  const left = Math.min(...cellList.map((cell) => cell.x * WORLD_CELL_SIZE)) - clearance;
+  const right = Math.max(...cellList.map((cell) => cell.x * WORLD_CELL_SIZE)) + clearance;
+  const top = Math.min(...cellList.map((cell) => cell.z * WORLD_CELL_SIZE)) - clearance;
+  const bottom = Math.max(...cellList.map((cell) => cell.z * WORLD_CELL_SIZE)) + clearance;
+  const horizontalSteps = Math.max(3, Math.ceil((right - left) / (WORLD_CELL_SIZE * .78)));
+  const verticalSteps = Math.max(3, Math.ceil((bottom - top) / (WORLD_CELL_SIZE * .78)));
+  const routePoints: THREE.Vector3[] = [];
+  const jitter = (index: number) => hash(seed, index, Math.round(lane * 100), 1601) * .18;
+  for (let index = 0; index < horizontalSteps; index++) {
+    const amount = index / horizontalSteps;
+    routePoints.push(new THREE.Vector3(THREE.MathUtils.lerp(left, right, amount), -.12, top - jitter(index)));
+  }
+  for (let index = 0; index < verticalSteps; index++) {
+    const amount = index / verticalSteps;
+    routePoints.push(new THREE.Vector3(right + jitter(horizontalSteps + index), -.12, THREE.MathUtils.lerp(top, bottom, amount)));
+  }
+  for (let index = 0; index < horizontalSteps; index++) {
+    const amount = index / horizontalSteps;
+    routePoints.push(new THREE.Vector3(THREE.MathUtils.lerp(right, left, amount), -.12, bottom + jitter(horizontalSteps + verticalSteps + index)));
+  }
+  for (let index = 0; index < verticalSteps; index++) {
+    const amount = index / verticalSteps;
+    routePoints.push(new THREE.Vector3(left - jitter(horizontalSteps * 2 + verticalSteps + index), -.12, THREE.MathUtils.lerp(bottom, top, amount)));
+  }
+  return new THREE.CatmullRomCurve3(routePoints, true, 'catmullrom', .18);
 }

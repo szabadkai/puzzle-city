@@ -6,12 +6,15 @@ type BusinessRecipe = {
   population: number;
   names: readonly string[];
   score: (citizen: CitizenSave, cell: Cell, cells: Map<string, Cell>) => number;
+  available?: (citizens: CitizenSave[], businesses: BusinessSave[]) => boolean;
+  automatic?: boolean;
 };
 
 export type BusinessUpdate = {
   changed: boolean;
   opened: BusinessSave[];
   closed: BusinessSave[];
+  hired: Array<{ business: BusinessSave; citizenId: string }>;
 };
 
 const RECIPES: readonly BusinessRecipe[] = [
@@ -45,6 +48,38 @@ const RECIPES: readonly BusinessRecipe[] = [
     names: ['Paper Moon Inn', 'Last Ferry House', 'The Quiet Lantern', 'Harbor Pillow'],
     score: (citizen, cell) => traitScore(citizen, ['sociable', 'patient', 'adventurous']) + occupationScore(citizen, ['Caretaker', 'Teacher']) + (cell.height >= 2 ? 3 : -5),
   },
+  {
+    type: 'flower-shop',
+    population: 8,
+    names: ['Courtyard Flowers', 'Silver Stem', 'Petal & Twine', 'The Green Window'],
+    score: (citizen, cell, cells) => traitScore(citizen, ['artistic', 'patient', 'dreamy']) + occupationScore(citizen, ['Gardener']) + nearbyCourtyardScore(cell, cells),
+  },
+  {
+    type: 'bookstore',
+    population: 9,
+    names: ['Tidebound Books', 'Small Atlas', 'The Paper Gull', 'Blue Shelf'],
+    score: (citizen) => traitScore(citizen, ['quiet', 'curious', 'dreamy']) + occupationScore(citizen, ['Teacher', 'Bookbinder', 'Cartographer']),
+  },
+  {
+    type: 'restaurant',
+    population: 10,
+    names: ['Lantern Supper', 'Red Bowl', 'The Long Table', 'Salt & Steam'],
+    score: (citizen, cell, cells) => traitScore(citizen, ['sociable', 'ambitious', 'industrious']) + occupationScore(citizen, ['Cook']) + waterEdges(cell, cells),
+    available: (citizens, businesses) => citizens.some((citizen) => citizen.occupation === 'Fisher') && businesses.some((business) => business.type === 'fishmonger'),
+    automatic: false,
+  },
+  {
+    type: 'tea-house',
+    population: 11,
+    names: ['Quiet Kettle', 'Three Leaves', 'Cloud Tea House', 'The Last Cup'],
+    score: (citizen, cell) => traitScore(citizen, ['patient', 'quiet', 'artistic']) + occupationScore(citizen, ['Tea keeper', 'Caretaker']) + (cell.height >= 2 ? 2 : 0),
+  },
+  {
+    type: 'pottery',
+    population: 12,
+    names: ['Harbor Clay', 'Little Kiln', 'Blue Glaze', 'Wheel & Tide'],
+    score: (citizen) => traitScore(citizen, ['artistic', 'patient', 'industrious']) + occupationScore(citizen, ['Artisan', 'Gardener']),
+  },
 ];
 
 function traitScore(citizen: CitizenSave, traits: string[]) {
@@ -59,25 +94,46 @@ function waterEdges(cell: Cell, cells: Map<string, Cell>) {
   return CARDINALS.filter(([dx, dz]) => !cells.has(keyOf(cell.x + dx, cell.z + dz))).length;
 }
 
+function nearbyCourtyardScore(cell: Cell, cells: Map<string, Cell>) {
+  let score = 0;
+  for (let x = cell.x - 2; x <= cell.x + 2; x++) for (let z = cell.z - 2; z <= cell.z + 2; z++) {
+    if (cells.has(keyOf(x, z))) continue;
+    const neighbors = CARDINALS.filter(([dx, dz]) => cells.has(keyOf(x + dx, z + dz))).length;
+    if (neighbors >= 3) score += 2;
+  }
+  return score;
+}
+
 export function businessOccupation(type: BusinessType) {
   return {
     bakery: 'Baker',
     cafe: 'Tea keeper',
+    'flower-shop': 'Florist',
     workshop: 'Artisan',
+    bookstore: 'Bookseller',
     fishmonger: 'Fishmonger',
+    restaurant: 'Restaurateur',
+    'tea-house': 'Tea master',
     inn: 'Innkeeper',
+    pottery: 'Potter',
   }[type];
 }
 
 export function businessLabel(type: BusinessType) {
-  return type === 'cafe' ? 'café' : type;
+  if (type === 'cafe') return 'café';
+  return type.replace('-', ' ');
 }
 
 export function isBusinessOpen(type: BusinessType, hour: number) {
   if (type === 'bakery') return hour >= 5.5 && hour < 15;
   if (type === 'cafe') return hour >= 8 && hour < 21;
+  if (type === 'flower-shop') return hour >= 8 && hour < 18;
   if (type === 'workshop') return hour >= 8.5 && hour < 18.5;
+  if (type === 'bookstore') return hour >= 9 && hour < 20;
   if (type === 'fishmonger') return hour >= 5 && hour < 14;
+  if (type === 'restaurant') return hour >= 11.5 && hour < 23;
+  if (type === 'tea-house') return hour >= 10 && hour < 21.5;
+  if (type === 'pottery') return hour >= 8 && hour < 18;
   return hour >= 6 || hour < 1;
 }
 
@@ -88,11 +144,16 @@ export class BusinessSystem {
 
   constructor(seed: number, saved: BusinessSave[]) {
     this.seed = seed;
-    this.businesses = saved.map((business) => ({ ...business }));
+    this.businesses = saved.map((business) => ({
+      ...business,
+      employeeIds: [...(business.employeeIds ?? [])],
+      visitCount: business.visitCount ?? 0,
+    }));
   }
 
   maintain(citizens: CitizenSave[], cells: Map<string, Cell>): BusinessUpdate {
     const citizenIds = new Set(citizens.map((citizen) => citizen.id));
+    const eligibleWorkers = citizens.filter((citizen) => citizen.ageGroup !== 'child' && citizen.residentKind !== 'visitor');
     const closed = this.businesses.filter((business) => {
       const cell = cells.get(business.cellKey);
       return !cell || waterEdges(cell, cells) === 0;
@@ -103,14 +164,19 @@ export class BusinessSystem {
     let changed = closed.length > 0;
     for (const business of this.businesses) {
       if (citizenIds.has(business.ownerId)) continue;
-      const replacement = citizens.find((citizen) => citizen.homeKey === business.cellKey && !usedOwners.has(citizen.id))
-        ?? citizens.find((citizen) => !usedOwners.has(citizen.id));
+      const replacement = eligibleWorkers.find((citizen) => citizen.homeKey === business.cellKey && !usedOwners.has(citizen.id))
+        ?? eligibleWorkers.find((citizen) => !usedOwners.has(citizen.id));
       if (!replacement) continue;
       business.ownerId = replacement.id;
       usedOwners.add(replacement.id);
       changed = true;
     }
-    return { changed, opened: [], closed };
+    for (const business of this.businesses) {
+      const employees = (business.employeeIds ?? []).filter((id) => citizenIds.has(id) && !usedOwners.has(id));
+      if (employees.length !== (business.employeeIds?.length ?? 0)) changed = true;
+      business.employeeIds = employees;
+    }
+    return { changed, opened: [], closed, hired: [] };
   }
 
   update(citizens: CitizenSave[], cells: Map<string, Cell>, absoluteHours: number): BusinessUpdate {
@@ -119,25 +185,54 @@ export class BusinessSystem {
     if (absoluteHours < this.nextOpeningAt) return result;
     this.nextOpeningAt = absoluteHours + .3;
 
-    const recipe = RECIPES.find((candidate) =>
-      citizens.length >= candidate.population && !this.businesses.some((business) => business.type === candidate.type),
+    const recipes = RECIPES.filter((candidate) =>
+      citizens.length >= candidate.population
+      && candidate.automatic !== false
+      && !this.businesses.some((business) => business.type === candidate.type)
+      && (!candidate.available || candidate.available(citizens, this.businesses)),
     );
-    if (!recipe) return result;
+    if (!recipes.length) return result;
 
+    for (const recipe of recipes) {
+      const business = this.tryOpenRecipe(recipe, citizens, cells, absoluteHours);
+      if (business) return { changed: true, opened: [business], closed: result.closed, hired: result.hired };
+    }
+    return result;
+  }
+
+  openType(type: BusinessType, citizens: CitizenSave[], cells: Map<string, Cell>, absoluteHours: number): BusinessUpdate {
+    const result = this.maintain(citizens, cells);
+    if (this.businesses.some((business) => business.type === type)) return result;
+    const recipe = RECIPES.find((candidate) => candidate.type === type);
+    if (!recipe || (recipe.available && !recipe.available(citizens, this.businesses))) return result;
+    const business = this.tryOpenRecipe(recipe, citizens, cells, absoluteHours);
+    return business
+      ? { changed: true, opened: [business], closed: result.closed, hired: result.hired }
+      : result;
+  }
+
+  private tryOpenRecipe(recipe: BusinessRecipe, citizens: CitizenSave[], cells: Map<string, Cell>, absoluteHours: number) {
     const occupiedCells = new Set(this.businesses.map((business) => business.cellKey));
     const occupiedOwners = new Set(this.businesses.map((business) => business.ownerId));
+    const occupiedEmployees = new Set(this.businesses.flatMap((business) => business.employeeIds ?? []));
+    const hasInn = this.businesses.some((business) => business.type === 'inn');
     const candidates = citizens
+      .filter((citizen) => citizen.ageGroup !== 'child' && citizen.residentKind !== 'visitor')
+      .filter((citizen) => citizen.occupation !== 'Fisher')
       .filter((citizen) => cells.has(citizen.homeKey) && !occupiedCells.has(citizen.homeKey) && !occupiedOwners.has(citizen.id))
       .map((citizen) => ({ citizen, cell: cells.get(citizen.homeKey)! }))
       .filter(({ cell }) => recipe.type !== 'inn' || cell.height >= 2)
       .sort((a, b) => {
-        const difference = recipe.score(b.citizen, b.cell, cells) - recipe.score(a.citizen, a.cell, cells);
+        const reserveA = !hasInn && recipe.type !== 'inn' && a.cell.height >= 2 ? -50 : 0;
+        const reserveB = !hasInn && recipe.type !== 'inn' && b.cell.height >= 2 ? -50 : 0;
+        const employeeA = occupiedEmployees.has(a.citizen.id) ? -20 : 0;
+        const employeeB = occupiedEmployees.has(b.citizen.id) ? -20 : 0;
+        const difference = recipe.score(b.citizen, b.cell, cells) + reserveB + employeeB - recipe.score(a.citizen, a.cell, cells) - reserveA - employeeA;
         if (difference !== 0) return difference;
         return hash(this.seed, b.cell.x, b.cell.z, recipe.population * 31) - hash(this.seed, a.cell.x, a.cell.z, recipe.population * 31);
       });
     const chosen = candidates[0];
-    if (!chosen) return result;
-
+    if (!chosen) return null;
     const name = pick(recipe.names, hash(this.seed, chosen.cell.x, chosen.cell.z, 1200 + recipe.population));
     const business: BusinessSave = {
       id: `business-${recipe.type}-${chosen.cell.x}-${chosen.cell.z}`,
@@ -146,12 +241,46 @@ export class BusinessSystem {
       ownerId: chosen.citizen.id,
       name,
       openedAt: absoluteHours,
+      employeeIds: [],
+      visitCount: 0,
     };
+    for (const existing of this.businesses) existing.employeeIds = (existing.employeeIds ?? []).filter((id) => id !== chosen.citizen.id);
     this.businesses.push(business);
-    return { changed: true, opened: [business], closed: result.closed };
+    return business;
+  }
+
+  recordVisits(visits: Array<{ businessId: string; citizenId: string }>, citizens: CitizenSave[]): BusinessUpdate {
+    if (!visits.length) return { changed: false, opened: [], closed: [], hired: [] };
+    const citizenById = new Map(citizens.map((citizen) => [citizen.id, citizen]));
+    const owned = new Set(this.businesses.map((business) => business.ownerId));
+    const employed = new Set(this.businesses.flatMap((business) => business.employeeIds ?? []));
+    const hired: Array<{ business: BusinessSave; citizenId: string }> = [];
+    let changed = false;
+    for (const visit of visits) {
+      const business = this.businesses.find((candidate) => candidate.id === visit.businessId);
+      const citizen = citizenById.get(visit.citizenId);
+      if (!business || !citizen) continue;
+      business.visitCount = (business.visitCount ?? 0) + 1;
+      changed = true;
+      if (citizen.residentKind === 'visitor') continue;
+      if ((business.employeeIds?.length ?? 0) >= 1 || (business.visitCount ?? 0) < 7) continue;
+      if (owned.has(citizen.id) || employed.has(citizen.id) || citizen.ageGroup === 'child') continue;
+      const [shopX, shopZ] = business.cellKey.split(',').map(Number);
+      const [homeX, homeZ] = citizen.homeKey.split(',').map(Number);
+      if (Math.abs(shopX - homeX) + Math.abs(shopZ - homeZ) > 4) continue;
+      business.employeeIds = [citizen.id];
+      employed.add(citizen.id);
+      hired.push({ business, citizenId: citizen.id });
+    }
+    return { changed, opened: [], closed: [], hired };
   }
 
   all() { return this.businesses; }
 
-  serialize() { return this.businesses.map((business) => ({ ...business })); }
+  serialize() {
+    return this.businesses.map((business) => ({
+      ...business,
+      employeeIds: [...(business.employeeIds ?? [])],
+    }));
+  }
 }

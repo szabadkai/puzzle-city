@@ -53,6 +53,7 @@ export class CityRenderer {
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
   private readonly warmLight = new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 });
   private readonly blossom = new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 });
+  private readonly silverLeaf = new THREE.MeshStandardMaterial({ color: 0x9ab7a1, roughness: .82, emissive: 0x315b51, emissiveIntensity: .12 });
 
   constructor(seed: number) {
     this.seed = seed;
@@ -177,11 +178,16 @@ export class CityRenderer {
     }
     for (const [key, group] of this.pieces) {
       const cell = this.cells.get(key);
-      if (cell && cell.placedAt > 0) {
-        const age = Math.min(1, (performance.now() - cell.placedAt) / 430);
+      const morphStartedAt = group.userData.morphStartedAt as number | undefined;
+      if (morphStartedAt !== undefined || (cell && cell.placedAt > 0)) {
+        const startedAt = morphStartedAt ?? cell!.placedAt;
+        const age = Math.min(1, (performance.now() - startedAt) / 430);
         const eased = 1 - Math.pow(1 - age, 3);
         group.scale.y = .04 + eased * .96;
-        if (age >= 1) cell.placedAt = 0;
+        if (age >= 1) {
+          if (cell) cell.placedAt = 0;
+          delete group.userData.morphStartedAt;
+        }
       } else {
         group.scale.y = 1;
       }
@@ -191,6 +197,13 @@ export class CityRenderer {
       if (flag) flag.rotation.y = Math.sin(time * 3 + group.position.z) * .15;
       const laundry = group.userData.laundry as THREE.Object3D[] | undefined;
       if (laundry) for (const cloth of laundry) cloth.rotation.z = Math.sin(time * 2.2 + cloth.id) * .045;
+      const smoke = group.getObjectByName('smoke-source');
+      smoke?.children.forEach((puff, index) => {
+        const phase = (time * .14 + index * .31 + hash(this.seed, group.position.x, group.position.z, index + 730)) % 1;
+        puff.position.set(Math.sin(time * .55 + index) * .11 * phase, phase * 1.35, Math.cos(time * .43 + index) * .08 * phase);
+        puff.scale.setScalar(.45 + phase * .95);
+        if (puff instanceof THREE.Mesh && puff.material instanceof THREE.MeshStandardMaterial) puff.material.opacity = Math.sin(phase * Math.PI) * .3;
+      });
     }
   }
 
@@ -239,7 +252,7 @@ export class CityRenderer {
         dispose(old);
         this.pieces.delete(key);
       }
-      if (this.get(px, pz) || this.emptyFeature(px, pz)) this.buildAt(px, pz);
+      if (this.get(px, pz) || this.emptyFeature(px, pz)) this.buildAt(px, pz, true);
     }
   }
 
@@ -251,14 +264,18 @@ export class CityRenderer {
       dispose(old);
       this.pieces.delete(key);
     }
-    if (this.get(x, z) || this.emptyFeature(x, z)) this.buildAt(x, z);
+    if (this.get(x, z) || this.emptyFeature(x, z)) this.buildAt(x, z, true);
   }
 
-  private buildAt(x: number, z: number) {
+  private buildAt(x: number, z: number, animate = false) {
     const group = new THREE.Group();
     group.position.set(x * CELL, 0, z * CELL);
     group.userData.cellX = x;
     group.userData.cellZ = z;
+    if (animate) {
+      group.userData.morphStartedAt = performance.now();
+      group.scale.y = .04;
+    }
     const cell = this.get(x, z);
     if (cell) this.buildCell(group, cell);
     else this.buildFeature(group, x, z);
@@ -306,7 +323,10 @@ export class CityRenderer {
 
   private buildCell(group: THREE.Group, cell: Cell) {
     const neighborHeights = CARDINALS.map((_, i) => this.neighborHeight(cell, i as Direction));
+    const diagonalHeights = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
+      .map(([dx, dz]) => this.get(cell.x + dx, cell.z + dz)?.height ?? 0);
     const count = neighborHeights.filter((height) => height > 0).length;
+    const diagonalCount = diagonalHeights.filter((height) => height > 0).length;
     const wallColor = WALL_COLORS[cell.color % WALL_COLORS.length];
     const walls = this.cachedMaterial(this.wallMaterials, wallColor, .92);
     const roofColor = pick(ROOF_COLORS, hash(this.seed, cell.x, cell.z, 13));
@@ -338,7 +358,9 @@ export class CityRenderer {
       this.addChimney(group, topY + .25, -.58, .38);
       this.addFlag(group, topY + 1.55);
       if (this.discoveries.has('tower-bell')) this.addTowerBell(group, topY + .18);
-    } else if (count <= 2) {
+      if (this.discoveries.has('birds-nest')) this.addBirdNest(group, topY + 1.18);
+      if (this.discoveries.has('clock-tower')) this.addClockFaces(group, topY - .22);
+    } else if (count <= 2 && diagonalCount < 3) {
       const cap = shadow(new THREE.Mesh(new THREE.ConeGeometry(CELL * .82, .88, 4), roof));
       cap.position.y = topY + .43;
       cap.rotation.y = Math.PI / 4;
@@ -356,7 +378,7 @@ export class CityRenderer {
         parapet.position.set(px, topY + .22, pz);
         group.add(parapet);
       }
-      if (count === 4) this.addRoofGarden(group, topY + .2, cell);
+      if (count === 4 || (count >= 2 && diagonalCount >= 3)) this.addRoofGarden(group, topY + .2, cell);
       else if (cell.height >= 2 && hash(this.seed, cell.x, cell.z, 146) > .5) this.addWaterTank(group, topY + .18);
     }
 
@@ -470,16 +492,26 @@ export class CityRenderer {
     const colors: Record<BusinessType, number> = {
       bakery: 0xb84b3e,
       cafe: 0x397c73,
+      'flower-shop': 0x668e55,
       workshop: 0xc18438,
+      bookstore: 0x59688c,
       fishmonger: 0x3d7185,
+      restaurant: 0xa54f3f,
+      'tea-house': 0x768653,
       inn: 0x914858,
+      pottery: 0xb36f4d,
     };
     const symbols: Record<BusinessType, string> = {
       bakery: 'パン',
       cafe: '茶',
+      'flower-shop': '花',
       workshop: '工',
+      bookstore: '本',
       fishmonger: '魚',
+      restaurant: '食',
+      'tea-house': '茶屋',
       inn: '宿',
+      pottery: '陶',
     };
     const accent = this.cachedMaterial(this.colorMaterials, colors[business.type], .88);
     accent.side = THREE.DoubleSide;
@@ -495,9 +527,14 @@ export class CityRenderer {
 
     if (business.type === 'bakery') this.addBakeryDetails(group, dir, dx, dz, lateral, accent);
     if (business.type === 'cafe') this.addCafeDetails(group, dx, dz, lateral, accent);
+    if (business.type === 'flower-shop') this.addFlowerShopDetails(group, dx, dz, lateral, accent);
     if (business.type === 'workshop') this.addWorkshopDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'bookstore') this.addBookstoreDetails(group, dir, dx, dz, lateral, accent);
     if (business.type === 'fishmonger') this.addFishmongerDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'restaurant') this.addRestaurantDetails(group, dx, dz, lateral, accent);
+    if (business.type === 'tea-house') this.addTeaHouseDetails(group, dx, dz, lateral, accent);
     if (business.type === 'inn') this.addInnDetails(group, dir, dx, dz, lateral, accent);
+    if (business.type === 'pottery') this.addPotteryDetails(group, dx, dz, lateral, accent);
   }
 
   private orientedBox(width: number, height: number, depth: number, dir: Direction, material: THREE.Material) {
@@ -535,6 +572,28 @@ export class CityRenderer {
       const cup = new THREE.Mesh(new THREE.CylinderGeometry(.045, .04, .08, 8), this.cream);
       this.detailPosition(cup, dx, dz, lateral, side, 1.48, .47);
       group.add(cup);
+    }
+  }
+
+  private addFlowerShopDetails(group: THREE.Group, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (let index = 0; index < 5; index++) {
+      const side = -.72 + index * .35;
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(.09, .12, .18, 7), accent);
+      this.detailPosition(pot, dx, dz, lateral, side, 1.42, .16);
+      const flower = new THREE.Mesh(new THREE.IcosahedronGeometry(.1 + index % 2 * .025, 1), index % 2 ? this.blossom : this.silverLeaf);
+      this.detailPosition(flower, dx, dz, lateral, side, 1.42, .38 + index % 2 * .06);
+      group.add(pot, flower);
+    }
+  }
+
+  private addBookstoreDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    const shelf = this.orientedBox(1.1, .62, .18, dir, this.wood);
+    this.detailPosition(shelf, dx, dz, lateral, .48, 1.36, .38);
+    group.add(shelf);
+    for (let index = 0; index < 6; index++) {
+      const book = this.orientedBox(.1, .25 + index % 3 * .035, .08, dir, index % 2 ? accent : this.cream);
+      this.detailPosition(book, dx, dz, lateral, .1 + index * .15, 1.47, .45);
+      group.add(book);
     }
   }
 
@@ -579,6 +638,42 @@ export class CityRenderer {
     const bench = this.orientedBox(.82, .13, .26, dir, this.wood);
     this.detailPosition(bench, dx, dz, lateral, .65, 1.4, .25);
     group.add(bench);
+  }
+
+  private addRestaurantDetails(group: THREE.Group, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (const side of [-.62, .62]) {
+      const table = new THREE.Mesh(new THREE.CylinderGeometry(.24, .27, .1, 10), this.wood);
+      this.detailPosition(table, dx, dz, lateral, side, 1.48, .36);
+      const bowl = new THREE.Mesh(new THREE.TorusGeometry(.075, .025, 5, 10), accent);
+      this.detailPosition(bowl, dx, dz, lateral, side, 1.48, .46);
+      bowl.rotation.x = Math.PI / 2;
+      group.add(table, bowl);
+    }
+  }
+
+  private addTeaHouseDetails(group: THREE.Group, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    const table = new THREE.Mesh(new THREE.CylinderGeometry(.34, .38, .12, 12), this.wood);
+    this.detailPosition(table, dx, dz, lateral, .48, 1.48, .28);
+    const kettle = new THREE.Mesh(new THREE.SphereGeometry(.13, 9, 7), accent);
+    kettle.scale.y = .78;
+    this.detailPosition(kettle, dx, dz, lateral, .48, 1.48, .43);
+    group.add(table, kettle);
+    for (const side of [-.68, -.42, -.16]) {
+      const cup = new THREE.Mesh(new THREE.CylinderGeometry(.045, .04, .07, 8), this.cream);
+      this.detailPosition(cup, dx, dz, lateral, side, 1.42, .12);
+      group.add(cup);
+    }
+  }
+
+  private addPotteryDetails(group: THREE.Group, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (let index = 0; index < 4; index++) {
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(.08 + index * .018, .13 + index * .012, .2 + index * .05, 9), index % 2 ? accent : this.cream);
+      this.detailPosition(pot, dx, dz, lateral, -.65 + index * .37, 1.4, .14 + index * .03);
+      group.add(pot);
+    }
+    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(.25, .25, .07, 12), this.wood);
+    this.detailPosition(wheel, dx, dz, lateral, .64, 1.46, .18);
+    group.add(wheel);
   }
 
   private addAirConditioner(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, y: number) {
@@ -720,6 +815,12 @@ export class CityRenderer {
     const smoke = new THREE.Group();
     smoke.name = 'smoke-source';
     smoke.position.set(x, y + .78, z);
+    for (let index = 0; index < 3; index++) {
+      const material = new THREE.MeshStandardMaterial({ color: 0xd8d1c4, transparent: true, opacity: 0, roughness: 1, depthWrite: false });
+      const puff = new THREE.Mesh(new THREE.SphereGeometry(.12 + index * .025, 7, 5), material);
+      puff.castShadow = false;
+      smoke.add(puff);
+    }
     group.add(smoke);
   }
 
@@ -743,6 +844,31 @@ export class CityRenderer {
     const clapper = shadow(new THREE.Mesh(new THREE.SphereGeometry(.055, 7, 5), this.dark), false);
     clapper.position.set(0, y + .45, .76);
     group.add(frame, bell, clapper);
+  }
+
+  private addBirdNest(group: THREE.Group, y: number) {
+    const nest = shadow(new THREE.Mesh(new THREE.TorusGeometry(.22, .055, 5, 12), this.wood), false);
+    nest.name = 'bird-nest';
+    nest.position.set(.42, y, .2);
+    nest.rotation.x = Math.PI / 2;
+    const egg = shadow(new THREE.Mesh(new THREE.SphereGeometry(.055, 7, 5), this.cream), false);
+    egg.scale.y = 1.35;
+    egg.position.set(.42, y + .05, .2);
+    group.add(nest, egg);
+  }
+
+  private addClockFaces(group: THREE.Group, y: number) {
+    for (const [x, z, rotationY] of [[0, 1.24, 0], [1.24, 0, Math.PI / 2]] as const) {
+      const face = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.34, .34, .055, 20), this.cream), false);
+      face.name = 'clock-face';
+      face.position.set(x, y, z);
+      face.rotation.x = Math.PI / 2;
+      face.rotation.z = rotationY;
+      const hand = shadow(new THREE.Mesh(new THREE.BoxGeometry(.035, .26, .035), this.dark), false);
+      hand.position.set(x + (rotationY ? .03 : 0), y + .04, z + (rotationY ? 0 : .03));
+      hand.rotation.z = -.45;
+      group.add(face, hand);
+    }
   }
 
   private addRoofGarden(group: THREE.Group, y: number, cell: Cell) {
@@ -883,11 +1009,11 @@ export class CityRenderer {
     canopy.name = 'swaying-tree';
     canopy.position.y = 1.28;
     for (let i = 0; i < 5; i++) {
-      const crown = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.48 + (i % 2) * .1, 1), this.leaf));
+      const crown = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.48 + (i % 2) * .1, 1), this.discoveries.has('rare-tree') ? this.silverLeaf : this.leaf));
       const angle = i * Math.PI * .4 + hash(this.seed, x, z, 410) * 2;
       crown.position.set(Math.cos(angle) * .34, (i % 2) * .28, Math.sin(angle) * .34);
       canopy.add(crown);
-      if (this.discoveries.has('blossom-tide')) {
+      if (this.discoveries.has('blossom-tide') || this.discoveries.has('rare-tree')) {
         const blooms = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.19 + (i % 2) * .035, 1), this.blossom), false);
         blooms.position.copy(crown.position).add(new THREE.Vector3(i % 2 ? .18 : -.12, .16, i % 3 ? .1 : -.14));
         canopy.add(blooms);

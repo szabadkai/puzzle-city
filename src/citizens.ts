@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { businessLabel, businessOccupation, isBusinessOpen } from './businesses';
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenSave, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenSave, keyOf } from './types';
 import { hash, pick } from './random';
 import { findPlazaAnchors } from './topology';
 
@@ -10,7 +10,7 @@ const WALK_OUT = EDGE + .24;
 const WALK_Y = .27;
 const BRIDGE_Y = 1.42 * 2.28 + .34;
 const NAMES = ['Mei', 'Ren', 'Aiko', 'Hana', 'Jun', 'Mina', 'Sora', 'Tomo', 'Yuna', 'Bo', 'Kiko', 'Nori', 'Aya', 'Kenji', 'Momo', 'Lin', 'Haru', 'Emi'];
-const TRAITS = ['sociable', 'quiet', 'curious', 'artistic', 'industrious', 'dreamy', 'patient', 'adventurous'];
+const TRAITS = ['sociable', 'quiet', 'ambitious', 'curious', 'artistic', 'industrious', 'dreamy', 'patient', 'adventurous'];
 const OCCUPATIONS = ['Baker', 'Fisher', 'Gardener', 'Teacher', 'Bookbinder', 'Caretaker', 'Cartographer', 'Cook'];
 const CLOTHES = [0xc9564d, 0xd99a42, 0x457b78, 0x536c92, 0xa75e77, 0x718551];
 
@@ -38,8 +38,11 @@ export type CitizenCard = {
   home: string;
   likes: string;
   activity: string;
+  destination: string;
   relationship: string;
 };
+
+export type BusinessVisit = { businessId: string; citizenId: string };
 
 function nodeKey(x: number, z: number, y = WALK_Y) {
   return `${Math.round(x * 100)},${Math.round(y * 100)},${Math.round(z * 100)}`;
@@ -274,10 +277,25 @@ export class NavGraph {
     }
     return [];
   }
+
+  debugPositions() {
+    const values: number[] = [];
+    const visited = new Set<string>();
+    for (const node of this.nodes.values()) for (const link of node.links) {
+      const edge = [node.key, link].sort().join('|');
+      if (visited.has(edge)) continue;
+      visited.add(edge);
+      const other = this.nodes.get(link);
+      if (!other) continue;
+      values.push(...node.position.toArray(), ...other.position.toArray());
+    }
+    return values;
+  }
 }
 
 export class CitizenSystem {
   readonly root = new THREE.Group();
+  readonly debugRoot = new THREE.Group();
   private readonly seed: number;
   private readonly citizens: Citizen[] = [];
   private graph: NavGraph;
@@ -288,6 +306,8 @@ export class CitizenSystem {
   private relationshipAccumulator = 0;
   private currentHours = 0;
   private businesses: BusinessSave[] = [];
+  private discoveries = new Set<string>();
+  private pendingBusinessVisits: BusinessVisit[] = [];
   private readonly walkDirection = new THREE.Vector3();
   private readonly skinMaterial = new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 });
   private readonly darkMaterial = new THREE.MeshStandardMaterial({ color: 0x3f3432, roughness: 1 });
@@ -304,12 +324,16 @@ export class CitizenSystem {
     this.cells = cells;
     this.graph = new NavGraph(cells, seed);
     this.root.name = 'citizens';
+    this.debugRoot.name = 'citizen-navigation';
+    this.debugRoot.visible = false;
+    this.root.add(this.debugRoot);
     for (const data of saved) this.restoreCitizen(data);
     this.nextCitizen = this.citizens.reduce((largest, citizen) => {
       const index = Number(citizen.id.split('-').at(-1));
       return Number.isFinite(index) ? Math.max(largest, index) : largest;
     }, -1) + 1;
     this.reconcileHomes();
+    this.rebuildDebugGraph();
   }
 
   rebuild(cells: Map<string, Cell>) {
@@ -320,14 +344,35 @@ export class CitizenSystem {
       citizen.targetKey = null;
     }
     this.reconcileHomes();
+    this.rebuildDebugGraph();
   }
 
   setBusinesses(businesses: BusinessSave[]) {
-    this.businesses = businesses.map((business) => ({ ...business }));
+    const activeWorkers = new Set(businesses.flatMap((business) => [business.ownerId, ...(business.employeeIds ?? [])]));
+    for (const previous of this.businesses) {
+      for (const citizenId of [previous.ownerId, ...(previous.employeeIds ?? [])]) {
+        if (activeWorkers.has(citizenId)) continue;
+        const citizen = this.citizens.find((candidate) => candidate.id === citizenId);
+        if (!citizen || citizen.occupation === 'Fisher') continue;
+        citizen.occupation = pick(OCCUPATIONS, hash(this.seed, this.citizens.indexOf(citizen), previous.openedAt, 954));
+        citizen.activity = 'looking for a new use for the quiet ground floor';
+      }
+    }
+    this.businesses = businesses.map((business) => ({ ...business, employeeIds: [...(business.employeeIds ?? [])] }));
     for (const business of businesses) {
       const owner = this.citizens.find((citizen) => citizen.id === business.ownerId);
-      if (owner) owner.occupation = businessOccupation(business.type);
+      if (owner && owner.occupation !== 'Fisher') owner.occupation = businessOccupation(business.type);
+      for (const employeeId of business.employeeIds ?? []) {
+        const employee = this.citizens.find((citizen) => citizen.id === employeeId);
+        if (employee && employee.occupation !== 'Fisher') employee.occupation = `${businessOccupation(business.type)}’s helper`;
+      }
     }
+  }
+
+  setDiscoveries(discoveries: readonly string[]) {
+    this.discoveries = new Set(discoveries);
+    if (this.discoveries.has('fishing-boat') && !this.citizens.some((citizen) => citizen.occupation === 'Fisher')) this.assignOccupation('Fisher');
+    if (this.discoveries.has('fishing-crew') && this.citizens.filter((citizen) => citizen.occupation === 'Fisher').length < 2) this.assignOccupation('Fisher', true);
   }
 
   private validHomes() {
@@ -341,23 +386,49 @@ export class CitizenSystem {
     const valid = new Set(homes);
     for (const citizen of [...this.citizens]) {
       if (valid.has(citizen.homeKey)) continue;
-      const freeHome = homes.find((home) => !this.citizens.some((other) => other !== citizen && other.homeKey === home));
+      const freeHome = homes.find((home) => this.residentCount(home, citizen) < this.homeCapacity(home));
       if (freeHome) {
         citizen.homeKey = freeHome;
+        citizen.householdId = `household-${freeHome}`;
         const entrance = this.graph.entrance(freeHome);
         if (entrance) citizen.model.position.copy(entrance.position);
-      } else {
+      } else if (citizen.residentKind !== 'visitor') {
         this.removeCitizen(citizen);
       }
     }
 
-    const occupied = new Set(this.citizens.map((citizen) => citizen.homeKey));
     for (const home of homes) {
-      if (!occupied.has(home)) this.spawnCitizen(home);
+      const residents = this.citizens
+        .filter((citizen) => citizen.residentKind !== 'visitor' && citizen.homeKey === home)
+        .sort((a, b) => (a.ageGroup === 'child' ? -1 : 1) - (b.ageGroup === 'child' ? -1 : 1));
+      while (residents.length > this.homeCapacity(home)) {
+        const citizen = residents.shift()!;
+        const nextHome = homes.find((candidate) => candidate !== home && this.residentCount(candidate) < this.homeCapacity(candidate));
+        if (!nextHome) {
+          this.removeCitizen(citizen);
+          continue;
+        }
+        citizen.homeKey = nextHome;
+        citizen.householdId = `household-${nextHome}`;
+        const entrance = this.graph.entrance(nextHome);
+        if (entrance) citizen.model.position.copy(entrance.position);
+      }
+    }
+
+    for (const home of homes) {
+      while (this.residentCount(home) < this.homeCapacity(home)) this.spawnCitizen(home, this.residentCount(home) ? 'child' : undefined);
     }
   }
 
-  private spawnCitizen(homeKey: string) {
+  private homeCapacity(homeKey: string) {
+    return (this.cells.get(homeKey)?.height ?? 0) >= 3 ? 2 : 1;
+  }
+
+  private residentCount(homeKey: string, excluding?: Citizen) {
+    return this.citizens.filter((citizen) => citizen !== excluding && citizen.residentKind !== 'visitor' && citizen.homeKey === homeKey).length;
+  }
+
+  private spawnCitizen(homeKey: string, forcedAge?: CitizenAgeGroup) {
     const index = this.nextCitizen++;
     const cell = parseCellKey(homeKey);
     const nameOffset = Math.floor(hash(this.seed, cell.x, cell.z, 901) * NAMES.length);
@@ -366,28 +437,41 @@ export class CitizenSystem {
     const traitA = pick(TRAITS, hash(this.seed, cell.x, cell.z, 902));
     const traitB = pick(TRAITS.filter((trait) => trait !== traitA), hash(this.seed, cell.x, cell.z, 903));
     const entrance = this.graph.entrance(homeKey)?.position ?? new THREE.Vector3(cell.x * CELL, WALK_Y, cell.z * CELL);
+    const ageRoll = hash(this.seed, cell.x, cell.z, 907 + index);
+    const ageGroup: CitizenAgeGroup = forcedAge ?? (ageRoll < .16 ? 'elder' : 'adult');
     const data: CitizenSave = {
       id: `citizen-${this.seed}-${index}`,
       name,
       homeKey,
       position: [entrance.x, entrance.z],
-      occupation: pick(OCCUPATIONS, hash(this.seed, cell.x, cell.z, 904)),
+      occupation: ageGroup === 'child' ? 'Student' : ageGroup === 'elder' ? 'Retired' : pick(OCCUPATIONS, hash(this.seed, cell.x, cell.z, 904)),
       traits: [traitA, traitB],
       relationships: [],
       color: Math.floor(hash(this.seed, cell.x, cell.z, 905) * CLOTHES.length),
+      ageGroup,
+      householdId: `household-${homeKey}`,
+      businessVisits: {},
+      residentKind: 'resident',
     };
     this.restoreCitizen(data, true);
   }
 
   private restoreCitizen(data: CitizenSave, movingIn = false) {
-    const model = this.createModel(data);
+    const normalized: CitizenSave = {
+      ...data,
+      ageGroup: data.ageGroup ?? 'adult',
+      householdId: data.householdId ?? `household-${data.homeKey}`,
+      businessVisits: { ...(data.businessVisits ?? {}) },
+      residentKind: data.residentKind ?? 'resident',
+    };
+    const model = this.createModel(normalized);
     model.position.set(data.position[0], data.elevation ?? WALK_Y, data.position[1]);
     if (movingIn) model.scale.setScalar(.01);
     this.root.add(model);
     this.citizens.push({
-      ...data,
-      traits: [...data.traits],
-      relationships: [...data.relationships],
+      ...normalized,
+      traits: [...normalized.traits],
+      relationships: [...normalized.relationships],
       model,
       leftLeg: model.userData.leftLeg as THREE.Object3D,
       rightLeg: model.userData.rightLeg as THREE.Object3D,
@@ -431,6 +515,9 @@ export class CitizenSystem {
     group.add(body, head, hair);
     group.userData.leftLeg = legs[0];
     group.userData.rightLeg = legs[1];
+    const targetScale = data.ageGroup === 'child' ? .76 : data.ageGroup === 'elder' ? .94 : 1;
+    group.userData.targetScale = targetScale;
+    group.scale.setScalar(targetScale);
     group.traverse((object) => { object.userData.citizenId = data.id; });
     return group;
   }
@@ -438,8 +525,9 @@ export class CitizenSystem {
   update(deltaSeconds: number, timeOfDay: number, absoluteHours: number, realTime: number) {
     this.currentHours = absoluteHours;
     for (const citizen of this.citizens) {
-      if (citizen.model.scale.x < .99) {
-        const scale = Math.min(1, citizen.model.scale.x + deltaSeconds * 1.8);
+      const targetScale = citizen.model.userData.targetScale as number ?? 1;
+      if (citizen.model.scale.x < targetScale - .01) {
+        const scale = Math.min(targetScale, citizen.model.scale.x + deltaSeconds * 1.8);
         citizen.model.scale.setScalar(scale);
       }
       if (!citizen.path.length && absoluteHours >= citizen.nextDecisionAt) this.chooseRoutine(citizen, timeOfDay, absoluteHours);
@@ -459,11 +547,18 @@ export class CitizenSystem {
     let target = home;
     const choice = hash(this.seed, Math.floor(absoluteHours * 4), this.citizens.indexOf(citizen), 1001);
     const businessVisit = this.chooseBusinessVisit(citizen, hour, choice, from.key);
-    if (hour < 6 || hour >= 22) {
+    if (hour < 4.5 || (hour < 6 && citizen.occupation !== 'Fisher') || hour >= 22) {
       citizen.activity = 'sleeping at home';
     } else if (businessVisit?.owned) {
       citizen.activity = this.ownerActivity(businessVisit.business.type);
       target = businessVisit.target;
+    } else if (citizen.ageGroup === 'child' && hour < 15) {
+      const plaza = this.discoveries.has('birds-nest') ? this.graph.plazaNode(choice, from.key) : undefined;
+      citizen.activity = plaza ? 'feeding the birds in the plaza after lessons' : this.discoveries.has('birds-nest') ? 'looking up at the tower nest after lessons' : 'walking to lessons with a neighbor';
+      target = plaza ?? this.graph.randomNode(choice, from.key);
+    } else if (citizen.ageGroup === 'elder' && hour >= 14 && hour < 18) {
+      citizen.activity = 'resting by the water and greeting passersby';
+      target = this.graph.randomNode(choice, from.key, (node) => Math.hypot(node.position.x, node.position.z) > 3);
     } else if (hour < 9) {
       if (businessVisit) {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
@@ -489,8 +584,9 @@ export class CitizenSystem {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
         target = businessVisit.target;
       } else {
-        citizen.activity = citizen.traits.includes('quiet') ? 'watching the harbor' : 'visiting a neighbor';
-        target = this.graph.randomNode(choice, from.key);
+        const friendVisit = citizen.traits.includes('quiet') ? null : this.chooseFriendVisit(citizen, choice, from.key);
+        citizen.activity = friendVisit ? `visiting ${friendVisit.friend.name} at home` : citizen.traits.includes('quiet') ? 'watching the harbor' : 'walking past the neighbors’ doors';
+        target = friendVisit?.target ?? this.graph.randomNode(choice, from.key);
       }
     } else if (hour < 21) {
       if (businessVisit) {
@@ -504,6 +600,7 @@ export class CitizenSystem {
       citizen.activity = 'walking home beneath the lanterns';
     }
     if (!target) return;
+    if (businessVisit && !businessVisit.owned) this.recordBusinessVisit(citizen, businessVisit.business);
     citizen.targetKey = target.key;
     citizen.path = this.graph.path(from.key, target.key);
     citizen.nextDecisionAt = absoluteHours + .35 + choice * .65;
@@ -513,33 +610,65 @@ export class CitizenSystem {
     const open = this.businesses.filter((business) => isBusinessOpen(business.type, hour));
     const owned = open.find((business) => business.ownerId === citizen.id);
     const preferredTypes: BusinessType[] = hour < 9
-      ? ['bakery', 'fishmonger']
+      ? ['bakery', 'fishmonger', 'flower-shop']
       : hour < 15
-        ? ['cafe', 'bakery', 'fishmonger', 'workshop']
+        ? ['cafe', 'tea-house', 'bakery', 'flower-shop', 'bookstore', 'fishmonger', 'workshop', 'pottery', 'restaurant']
         : hour < 19
-          ? ['workshop', 'cafe', 'inn']
-          : ['cafe', 'inn'];
+          ? ['workshop', 'pottery', 'flower-shop', 'bookstore', 'cafe', 'tea-house', 'restaurant', 'inn']
+          : ['restaurant', 'tea-house', 'cafe', 'bookstore', 'inn'];
     const reachable = (business: BusinessSave) => {
       const entrance = this.graph.entrance(business.cellKey);
       return entrance && this.graph.canReach(from, entrance.key);
     };
+    const favorite = open.find((business) => business.id === citizen.favoriteBusinessId && reachable(business));
+    const employedAt = open.find((business) => business.employeeIds?.includes(citizen.id) && reachable(business));
     const options = owned && reachable(owned)
       ? [owned]
+      : employedAt
+        ? [employedAt]
+        : favorite && choice > .25
+          ? [favorite]
       : open.filter((business) => preferredTypes.includes(business.type) && reachable(business));
     const business = options[Math.floor(choice * options.length) % options.length];
     if (!business) return null;
     const target = this.graph.entrance(business.cellKey);
     if (!target) return null;
-    return { business, target, owned: business.ownerId === citizen.id };
+    return { business, target, owned: business.ownerId === citizen.id || business.employeeIds?.includes(citizen.id) === true };
+  }
+
+  private recordBusinessVisit(citizen: Citizen, business: BusinessSave) {
+    citizen.businessVisits ??= {};
+    citizen.businessVisits[business.id] = (citizen.businessVisits[business.id] ?? 0) + 1;
+    if ((citizen.businessVisits[business.id] ?? 0) >= 3) citizen.favoriteBusinessId = business.id;
+    this.pendingBusinessVisits.push({ businessId: business.id, citizenId: citizen.id });
+  }
+
+  private chooseFriendVisit(citizen: Citizen, choice: number, from: string) {
+    const friends = citizen.relationships
+      .map((id) => this.citizens.find((candidate) => candidate.id === id))
+      .filter((friend): friend is Citizen => Boolean(friend));
+    if (!friends.length) return null;
+    const start = Math.floor(choice * friends.length) % friends.length;
+    for (let offset = 0; offset < friends.length; offset++) {
+      const friend = friends[(start + offset) % friends.length];
+      const target = this.graph.entrance(friend.homeKey);
+      if (target && this.graph.canReach(from, target.key)) return { friend, target };
+    }
+    return null;
   }
 
   private ownerActivity(type: BusinessType) {
     return {
       bakery: 'setting warm bread in the window',
       cafe: 'brewing tea for the morning tables',
+      'flower-shop': 'tying fresh stems into little bundles',
       workshop: 'working with the door propped open',
+      bookstore: 'stacking new arrivals by the window',
       fishmonger: 'arranging the morning catch',
+      restaurant: 'preparing the long table for supper',
+      'tea-house': 'warming the kettle for afternoon guests',
       inn: 'welcoming travelers from the quay',
+      pottery: 'turning a small bowl at the wheel',
     }[type];
   }
 
@@ -547,9 +676,14 @@ export class CitizenSystem {
     return {
       bakery: 'buying a warm bun',
       cafe: 'lingering over a cup of tea',
+      'flower-shop': 'choosing flowers for a neighbor',
       workshop: 'watching the artisan work',
+      bookstore: 'browsing the shelf by the window',
       fishmonger: 'choosing fish for supper',
+      restaurant: 'joining the evening supper table',
+      'tea-house': 'sharing a quiet pot of tea',
       inn: 'listening to stories at the inn',
+      pottery: 'turning a glazed cup in the light',
     }[type] ?? `visiting the ${businessLabel(type)}`;
   }
 
@@ -644,16 +778,36 @@ export class CitizenSystem {
     }
   }
 
-  assignOccupation(occupation: string) {
+  beginMoment(activity: string, filter: { occupation?: string; ageGroup?: CitizenAgeGroup; favoriteBusinessType?: BusinessType }) {
+    const favoriteBusinesses = filter.favoriteBusinessType
+      ? new Set(this.businesses.filter((business) => business.type === filter.favoriteBusinessType).map((business) => business.id))
+      : null;
+    const participants = this.citizens.filter((citizen) =>
+      (!filter.occupation || citizen.occupation === filter.occupation)
+      && (!filter.ageGroup || citizen.ageGroup === filter.ageGroup)
+      && (!favoriteBusinesses || Boolean(citizen.favoriteBusinessId && favoriteBusinesses.has(citizen.favoriteBusinessId))),
+    );
+    for (const citizen of participants.slice(0, 5)) {
+      citizen.activity = activity;
+      citizen.nextDecisionAt = Math.max(citizen.nextDecisionAt, this.currentHours + .4);
+    }
+    return participants.length;
+  }
+
+  assignOccupation(occupation: string, additional = false) {
     const existing = this.citizens.find((citizen) => citizen.occupation === occupation);
-    if (existing) {
+    if (existing && !additional) {
       existing.activity = `preparing to work as a ${occupation.toLowerCase()}`;
       return existing.id;
     }
     const businessOwners = new Set(this.businesses.map((business) => business.ownerId));
-    const citizen = this.citizens
-      .filter((candidate) => !businessOwners.has(candidate.id))
+    const businessEmployees = new Set(this.businesses.flatMap((business) => business.employeeIds ?? []));
+    const eligible = this.citizens
+      .filter((candidate) => !businessOwners.has(candidate.id) && candidate.occupation !== occupation && candidate.ageGroup !== 'child' && candidate.residentKind !== 'visitor');
+    const citizen = eligible
       .sort((a, b) => {
+        const employeeDifference = Number(businessEmployees.has(a.id)) - Number(businessEmployees.has(b.id));
+        if (employeeDifference !== 0) return employeeDifference;
         const waterEdges = (candidate: Citizen) => {
           const home = parseCellKey(candidate.homeKey);
           return CARDINALS.filter(([dx, dz]) => !this.cells.has(keyOf(home.x + dx, home.z + dz))).length;
@@ -673,6 +827,95 @@ export class CitizenSystem {
     return citizen.id;
   }
 
+  spawnVisitor(name = 'Mara', occupation = 'Traveler') {
+    const existing = this.citizens.find((citizen) => citizen.residentKind === 'visitor' && citizen.name === name);
+    if (existing) {
+      existing.activity = 'sharing a story from beyond the harbor';
+      return existing.id;
+    }
+    const inn = this.businesses.find((business) => business.type === 'inn');
+    const homeKey = inn?.cellKey ?? this.validHomes()[0];
+    if (!homeKey) return null;
+    const entrance = this.graph.entrance(homeKey)?.position ?? new THREE.Vector3();
+    const index = this.nextCitizen++;
+    const data: CitizenSave = {
+      id: `citizen-${this.seed}-${index}`,
+      name,
+      homeKey,
+      position: [entrance.x, entrance.z],
+      elevation: entrance.y,
+      occupation,
+      traits: ['adventurous', 'curious'],
+      relationships: [],
+      color: Math.floor(hash(this.seed, index, 0, 1480) * CLOTHES.length),
+      ageGroup: 'adult',
+      householdId: `visitor-${index}`,
+      businessVisits: {},
+      residentKind: 'visitor',
+    };
+    this.restoreCitizen(data, true);
+    return data.id;
+  }
+
+  gatherAt(x: number, z: number, activity: string) {
+    const focus = new THREE.Vector3(x * CELL, WALK_Y, z * CELL);
+    const center = this.graph.closest(focus);
+    if (!center) return;
+    this.citizens.forEach((citizen, index) => {
+      const from = this.graph.closest(citizen.model.position);
+      if (!from || !this.graph.canReach(from.key, center.key)) return;
+      const target = this.graph.randomNode((index * .173) % 1, from.key, (node) => node.position.distanceToSquared(center.position) < 5.5) ?? center;
+      citizen.path = this.graph.path(from.key, target.key);
+      citizen.targetKey = target.key;
+      citizen.activity = activity;
+      citizen.nextDecisionAt = this.currentHours + 1.2;
+    });
+  }
+
+  drainBusinessVisits() {
+    const visits = this.pendingBusinessVisits;
+    this.pendingBusinessVisits = [];
+    return visits;
+  }
+
+  debugSpawnCitizen() {
+    const home = this.validHomes()
+      .filter((candidate) => this.residentCount(candidate) < this.homeCapacity(candidate))
+      .sort((a, b) => this.residentCount(a) - this.residentCount(b))[0];
+    if (!home) return this.spawnVisitor(`Newcomer ${this.nextCitizen + 1}`, 'Newcomer');
+    this.spawnCitizen(home, this.residentCount(home) ? 'child' : 'adult');
+    return this.citizens.at(-1)?.id ?? null;
+  }
+
+  setNavDebugVisible(visible: boolean) { this.debugRoot.visible = visible; }
+
+  navStats() {
+    return { nodes: this.graph.nodes.size, links: this.graph.debugPositions().length / 6 };
+  }
+
+  walkingCount() { return this.citizens.filter((citizen) => citizen.path.length > 0).length; }
+
+  private rebuildDebugGraph() {
+    const wasVisible = this.debugRoot.visible;
+    this.debugRoot.traverse((object) => {
+      if (object instanceof THREE.LineSegments) {
+        object.geometry.dispose();
+        if (object.material instanceof THREE.Material) object.material.dispose();
+      }
+    });
+    this.debugRoot.clear();
+    const positions = this.graph.debugPositions();
+    if (positions.length) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      const material = new THREE.LineBasicMaterial({ color: 0xff4fd8, transparent: true, opacity: .8, depthTest: false });
+      const lines = new THREE.LineSegments(geometry, material);
+      lines.renderOrder = 12;
+      this.debugRoot.add(lines);
+    }
+    this.debugRoot.visible = wasVisible;
+  }
+
   card(id: string): CitizenCard | null {
     const citizen = this.citizens.find((item) => item.id === id);
     if (!citizen) return null;
@@ -684,11 +927,30 @@ export class CitizenSystem {
       id,
       name: citizen.name,
       occupation: citizen.occupation,
-      home: `Lives by quay ${home.x + 10}–${home.z + 10}`,
-      likes: citizen.traits.join(', '),
+      home: citizen.residentKind === 'visitor'
+        ? `Staying at ${this.businesses.find((business) => business.cellKey === citizen.homeKey)?.name ?? 'the harbor'}`
+        : `${citizen.ageGroup === 'child' ? 'Child' : citizen.ageGroup === 'elder' ? 'Elder' : 'Adult'} in household ${home.x + 10}–${home.z + 10}`,
+      likes: `${citizen.traits.join(', ')}${citizen.favoriteBusinessId ? ` · regular at ${this.businesses.find((business) => business.id === citizen.favoriteBusinessId)?.name ?? 'a local shop'}` : ''}`,
       activity: citizen.activity,
+      destination: this.destinationLabel(citizen),
       relationship: friends.length ? `Friends with ${friends.join(', ')}` : 'Still getting to know the neighbors',
     };
+  }
+
+  private destinationLabel(citizen: Citizen) {
+    if (!citizen.targetKey) return 'Staying here';
+    if (this.graph.entrance(citizen.homeKey)?.key === citizen.targetKey) {
+      return citizen.residentKind === 'visitor' ? 'Lodgings' : 'Home';
+    }
+    const business = this.businesses.find((candidate) => this.graph.entrance(candidate.cellKey)?.key === citizen.targetKey);
+    if (business) return business.name;
+    if (this.graph.plazas.includes(citizen.targetKey)) return 'Harbor plaza';
+    const friend = this.citizens.find((candidate) => candidate.id !== citizen.id
+      && citizen.relationships.includes(candidate.id)
+      && this.graph.entrance(candidate.homeKey)?.key === citizen.targetKey);
+    if (friend) return `${friend.name}’s home`;
+    if (/water|tide|harbor|boat|quay/.test(citizen.activity)) return 'Waterfront';
+    return citizen.path.length ? 'A nearby street' : 'Staying here';
   }
 
   population() { return this.citizens.length; }
@@ -706,6 +968,11 @@ export class CitizenSystem {
       traits: [...citizen.traits],
       relationships: [...citizen.relationships],
       color: citizen.color,
+      ageGroup: citizen.ageGroup,
+      householdId: citizen.householdId,
+      favoriteBusinessId: citizen.favoriteBusinessId,
+      businessVisits: { ...(citizen.businessVisits ?? {}) },
+      residentKind: citizen.residentKind,
     }));
   }
 }

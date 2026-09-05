@@ -39,6 +39,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <dl>
         <div><dt>Likes</dt><dd id="citizen-likes"></dd></div>
         <div><dt>Now</dt><dd id="citizen-activity"></dd></div>
+        <div><dt>Going</dt><dd id="citizen-destination"></dd></div>
       </dl>
       <p class="card-relationship" id="citizen-relationship"></p>
     </aside>
@@ -46,8 +47,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="hint" id="hint">
       <span class="desktop-hint"><i class="mouse"></i> click to build</span>
       <span class="desktop-hint">right-click to remove</span>
-      <span class="desktop-hint">drag to orbit · scroll to zoom</span>
-      <span class="touch-hint">Tap the water to build · drag to orbit · pinch to zoom</span>
+      <span class="desktop-hint">drag to move · right-drag to orbit · scroll to zoom</span>
+      <span class="touch-hint">Tap the water to build · drag to move · pinch to zoom</span>
     </div>
     <nav class="mobile-controls" aria-label="Touch controls">
       <button class="touch-action active" data-touch-mode="build" aria-pressed="true">
@@ -70,7 +71,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <h2 id="touch-guide-title">Shape the harbor by touch</h2>
         <div class="gesture-list">
           <div><span class="gesture-icon" aria-hidden="true">☝</span><p><strong>Tap</strong> the water to build. Tap a resident to meet them.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to orbit around your town.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to move around your town.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Pinch</strong> with two fingers to zoom and move the view.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">−</span><p>Choose <strong>Remove</strong>, then tap a building to take down one floor.</p></div>
         </div>
@@ -96,12 +97,15 @@ let timeOfDay = saved?.timeOfDay ?? 7.5;
 let day = saved?.day ?? 1;
 let simulationSpeed = 1;
 const committedEffects: string[] = [];
+let navDebugVisible = false;
+let forcedEventSelection = DISCOVERY_EVENTS[0]?.id ?? '';
+let lastChimedHour = Math.floor(timeOfDay);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x91c7c1);
 scene.fog = new THREE.FogExp2(0x91c7c1, .0135);
 
-const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, .1, 150);
+const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, .1, 300);
 camera.position.set(18, 19, 20);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -124,13 +128,15 @@ controls.dampingFactor = .07;
 controls.enablePan = true;
 controls.screenSpacePanning = false;
 controls.minDistance = 12;
-controls.maxDistance = 46;
+controls.maxDistance = 120;
 controls.minPolarAngle = .42;
 controls.maxPolarAngle = 1.18;
 controls.target.set(0, 1.3, 0);
-controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
 controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+controls.touches.ONE = THREE.TOUCH.PAN;
+controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
 
 const hemi = new THREE.HemisphereLight(0xffe8bd, 0x315f63, 2.25);
 scene.add(hemi);
@@ -183,7 +189,7 @@ const waterMaterial = new THREE.ShaderMaterial({
     }
   `,
 });
-const water = new THREE.Mesh(new THREE.PlaneGeometry(100, 100, 100, 100), waterMaterial);
+const water = new THREE.Mesh(new THREE.PlaneGeometry(240, 240, 120, 120), waterMaterial);
 water.rotation.x = -Math.PI / 2;
 water.position.y = -.31;
 water.receiveShadow = true;
@@ -210,6 +216,7 @@ const grow = new GrowSystem(DISCOVERY_EVENTS, saved?.discoveries ?? [], saved?.j
 const lastJournalEntry = grow.entries().at(-1);
 if (lastJournalEntry) setNote(lastJournalEntry.note);
 city.setDiscoveryState(grow.discoveredIds());
+citizens.setDiscoveries(grow.discoveredIds());
 
 const previewHeight = 1.28;
 const hoverGeometry = new RoundedBoxGeometry(CityRenderer.cellSize() * .9, previewHeight, CityRenderer.cellSize() * .9, 4, .12);
@@ -347,8 +354,9 @@ function updateHover(clientX: number, clientY: number) {
 function inspectCitizen(clientX: number, clientY: number) {
   pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const intersection = raycaster.intersectObject(citizens.root, true)[0];
-  const citizenId = citizens.citizenIdFrom(intersection?.object ?? null);
+  const citizenId = raycaster.intersectObject(citizens.root, true)
+    .map((intersection) => citizens.citizenIdFrom(intersection.object))
+    .find((id) => id !== null) ?? null;
   if (!citizenId) return false;
   selectedCitizenId = citizenId;
   updateCitizenCard();
@@ -365,6 +373,7 @@ function updateCitizenCard() {
   document.querySelector('#citizen-home')!.textContent = card.home;
   document.querySelector('#citizen-likes')!.textContent = card.likes;
   document.querySelector('#citizen-activity')!.textContent = card.activity;
+  document.querySelector('#citizen-destination')!.textContent = card.destination;
   document.querySelector('#citizen-relationship')!.textContent = card.relationship;
   document.querySelector('#citizen-card')!.classList.add('show');
 }
@@ -465,6 +474,9 @@ function currentSnapshot() {
 function evaluateDiscoveries() {
   const triggered = grow.evaluate(currentSnapshot());
   if (!triggered.length) return;
+  city.setDiscoveryState(grow.discoveredIds());
+  citizens.setDiscoveries(grow.discoveredIds());
+  refreshAmbience();
   renderJournal();
   persistSoon();
 }
@@ -475,16 +487,28 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
   const focus = resolveFocus(discovery.event.focus, discovery.snapshot);
   if (effect.kind === 'city') {
     if (focus) city.celebrateAt(focus.x, focus.z);
-    if (effect.action === 'decorate') city.setDiscoveryState(grow.discoveredIds());
+    if (effect.action === 'decorate') {
+      city.setDiscoveryState(grow.discoveredIds());
+      citizens.setDiscoveries(grow.discoveredIds());
+    }
+    return;
+  }
+  if (effect.kind === 'business') {
+    const update = businesses.openType(effect.businessType, citizens.residents(), city.cells, day * 24 + timeOfDay);
+    applyBusinessUpdate(update, false);
     return;
   }
   if (effect.kind === 'citizens') {
     if (effect.action === 'notice') citizens.noticeDiscovery(effect.activity);
-    else citizens.assignOccupation(effect.occupation);
+    else if (effect.action === 'moment') citizens.beginMoment(effect.activity, effect);
+    else if (effect.action === 'assign-occupation') citizens.assignOccupation(effect.occupation, effect.additional);
+    else if (effect.action === 'spawn-visitor') citizens.spawnVisitor(effect.name, effect.occupation);
+    else if (focus) citizens.gatherAt(focus.x, focus.z, effect.activity);
     return;
   }
   if (effect.kind === 'ambience') {
     refreshAmbience();
+    if (effect.action === 'celebrate') playCue('celebration');
     return;
   }
   showToast(effect.caption);
@@ -500,6 +524,8 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
   const [low, high] = tones[effect.tone];
   softTone(low, .17);
   softTone(high, .22, .09);
+  if (discovery.event.id.includes('bell') || discovery.event.id === 'clock-tower') playCue('bell');
+  if (discovery.event.id.includes('ferry') || discovery.event.id.includes('merchant')) playCue('horn');
 }
 
 function updateGrowInspector() {
@@ -508,22 +534,51 @@ function updateGrowInspector() {
   const snapshot = currentSnapshot();
   const events = grow.inspect(snapshot);
   const eligible = events.filter((event) => event.eligible && !event.discovered);
-  const complete = events.filter((event) => event.discovered).length;
+  const oneShotEvents = events.filter((event) => !event.repeatable);
+  const repeatableEvents = events.filter((event) => event.repeatable);
+  const complete = oneShotEvents.filter((event) => event.discovered).length;
   panel.replaceChildren();
   const heading = document.createElement('strong');
   heading.textContent = 'GROW inspector';
   const summary = document.createElement('p');
   const fleet = ambience.activeFleet();
-  summary.textContent = `${snapshot.cells.length} cells · ${snapshot.population} residents · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · fleet: ${fleet.join(', ') || 'none'} · ${complete}/${events.length} discoveries`;
+  const selected = hoveredCell ? `${hoveredCell.x},${hoveredCell.z}: ${city.topologyLabel(hoveredCell.x, hoveredCell.z)}` : 'none';
+  const nav = citizens.navStats();
+  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · fleet: ${fleet.join(', ') || 'none'} · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
   const eligibleTitle = document.createElement('span');
   eligibleTitle.textContent = 'Eligible next';
   const eligibleList = document.createElement('p');
   eligibleList.textContent = eligible.length ? eligible.map((event) => event.id).join('\n') : 'none';
+  const citizensTitle = document.createElement('span');
+  citizensTitle.textContent = 'Citizens';
+  const citizenList = document.createElement('p');
+  citizenList.textContent = snapshot.citizens.map((citizen) => `${citizen.name} · ${citizen.ageGroup ?? 'adult'} · ${citizen.occupation}${citizen.residentKind === 'visitor' ? ' · visitor' : ''}`).join('\n') || 'none';
+  const businessesTitle = document.createElement('span');
+  businessesTitle.textContent = 'Businesses';
+  const businessList = document.createElement('p');
+  businessList.textContent = snapshot.businesses.map((business) => `${business.name} · ${business.visitCount ?? 0} visits · ${(business.employeeIds ?? []).length} helpers`).join('\n') || 'none';
   const effectsTitle = document.createElement('span');
   effectsTitle.textContent = 'Recent committed effects';
   const effects = document.createElement('p');
   effects.textContent = committedEffects.length ? committedEffects.join('\n') : 'none this session';
-  panel.append(heading, summary, eligibleTitle, eligibleList, effectsTitle, effects);
+  const controls = document.createElement('div');
+  controls.className = 'grow-tools';
+  controls.innerHTML = `<button data-grow-action="nav">${navDebugVisible ? 'Hide' : 'Show'} nav</button><button data-grow-action="spawn">Spawn citizen</button><button data-grow-action="hour">+1 hour</button>`;
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', 'Discovery to force');
+  for (const event of events) {
+    const option = document.createElement('option');
+    option.value = event.id;
+    option.textContent = `${event.discovered ? '✓ ' : ''}${event.id}`;
+    select.append(option);
+  }
+  if (events.some((event) => event.id === forcedEventSelection)) select.value = forcedEventSelection;
+  select.addEventListener('change', () => { forcedEventSelection = select.value; });
+  const force = document.createElement('button');
+  force.dataset.growAction = 'force';
+  force.textContent = 'Force event';
+  controls.append(select, force);
+  panel.append(heading, summary, controls, eligibleTitle, eligibleList, citizensTitle, citizenList, businessesTitle, businessList, effectsTitle, effects);
 }
 
 function renderJournal() {
@@ -678,13 +733,23 @@ function setJournalOpen(open: boolean) {
 function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
   if (!update.changed) return;
   const current = businesses.all();
-  city.setBusinesses(current);
-  citizens.setBusinesses(current);
-  refreshAmbience();
-  renderer.shadowMap.needsUpdate = true;
+  const visibleChange = update.opened.length > 0 || update.closed.length > 0 || update.hired.length > 0;
+  if (visibleChange) {
+    city.setBusinesses(current);
+    citizens.setBusinesses(current);
+    refreshAmbience();
+    renderer.shadowMap.needsUpdate = true;
+  }
   if (announce && update.closed[0]) {
     showToast(`${update.closed[0].name} has quietly closed its shutters.`);
     setNote(`The sign at ${update.closed[0].name} has come down. Perhaps another door will open elsewhere.`);
+  }
+  if (announce && update.hired[0]) {
+    const hire = update.hired[0];
+    const citizen = citizens.card(hire.citizenId);
+    showToast(`${citizen?.name ?? 'A neighbor'} has begun helping at ${hire.business.name}.`);
+    setNote(`A familiar customer crossed the threshold at ${hire.business.name} and stayed to help.`);
+    playCue('door');
   }
   persistSoon();
   if (update.opened.length) evaluateDiscoveries();
@@ -712,11 +777,33 @@ function softTone(frequency: number, duration: number, delay = 0, volume = .055,
 
 function playHarborAmbience(daylight: number) {
   if (!audioContext || audioContext.state !== 'running') return;
-  softTone(105 + daylight * 38, .7, 0, .009, 'sine');
-  if (daylight < .32) softTone(620, .45, .24, .008, 'triangle');
+  playCue('water', daylight);
+  if (citizens.walkingCount() > 0) playCue('footsteps');
+  if (citizens.population() > 3 && daylight > .28) playCue('chatter');
+  if (grow.discoveredIds().includes('gulls-return') && daylight > .4) playCue('gulls');
+  if (daylight < .32) playCue('insects');
+  if (ambience.activeFleet().some((kind) => kind === 'ferry' || kind === 'merchant boat')) playCue('horn');
   if (grow.discoveredIds().includes('lantern-finale')) {
     softTone(760, .38, .5, .01, 'sine');
     softTone(910, .42, .78, .008, 'sine');
+  }
+}
+
+type SoundCue = 'water' | 'gulls' | 'footsteps' | 'door' | 'chatter' | 'bell' | 'horn' | 'insects' | 'celebration';
+
+function playCue(cue: SoundCue, daylight = 1) {
+  if (audioContext && audioContext.state !== 'running') return;
+  if (cue === 'water') softTone(105 + daylight * 38, .7, 0, .009, 'sine');
+  if (cue === 'gulls') { softTone(1120, .11, .12, .009, 'triangle'); softTone(870, .14, .25, .007, 'triangle'); }
+  if (cue === 'footsteps') { softTone(155, .035, 0, .006, 'square'); softTone(145, .035, .16, .005, 'square'); }
+  if (cue === 'door') softTone(220, .09, 0, .018, 'triangle');
+  if (cue === 'chatter') { softTone(330, .08, .06, .005, 'sine'); softTone(410, .07, .2, .004, 'sine'); }
+  if (cue === 'bell') { softTone(690, .72, 0, .035, 'sine'); softTone(1035, .85, .04, .018, 'sine'); }
+  if (cue === 'horn') softTone(132, .62, .14, .02, 'sine');
+  if (cue === 'insects') { softTone(1320, .08, .2, .004, 'triangle'); softTone(1480, .06, .34, .003, 'triangle'); }
+  if (cue === 'celebration') {
+    playCue('bell');
+    [520, 660, 790, 1040].forEach((frequency, index) => softTone(frequency, .24, .18 + index * .11, .018, 'triangle'));
   }
 }
 
@@ -793,6 +880,37 @@ document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((button) =>
   });
 });
 
+document.querySelector('#grow-inspector')!.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-grow-action]');
+  if (!button) return;
+  const action = button.dataset.growAction;
+  if (action === 'nav') {
+    navDebugVisible = !navDebugVisible;
+    citizens.setNavDebugVisible(navDebugVisible);
+  } else if (action === 'spawn') {
+    const id = citizens.debugSpawnCitizen();
+    showToast(id ? 'A developer-spawned citizen has arrived.' : 'Build a home before spawning a citizen.');
+    refreshAmbience();
+    persistSoon();
+  } else if (action === 'hour') {
+    timeOfDay += 1;
+    if (timeOfDay >= 24) { timeOfDay %= 24; day += 1; }
+    evaluateDiscoveries();
+    persistSoon();
+  } else if (action === 'force') {
+    const discovery = grow.force(forcedEventSelection, currentSnapshot());
+    if (discovery) {
+      city.setDiscoveryState(grow.discoveredIds());
+      citizens.setDiscoveries(grow.discoveredIds());
+      refreshAmbience();
+      renderJournal();
+      showToast(`Forced: ${discovery.event.title}`);
+      persistSoon();
+    }
+  }
+  updateGrowInspector();
+});
+
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'p') document.querySelector('#perf-panel')!.classList.toggle('show');
   if (event.key.toLowerCase() === 'j') setJournalOpen(!document.querySelector('#journal-scrim')!.classList.contains('show'));
@@ -814,6 +932,7 @@ scene.add(ambience.root);
 function refreshAmbience() {
   ambience.setTown(city.cells.values(), businesses.all(), citizens.residents());
   ambience.setDiscoveryState(grow.discoveredIds());
+  citizens.setDiscoveries(grow.discoveredIds());
 }
 
 const clock = new THREE.Clock();
@@ -869,6 +988,11 @@ function animate() {
     setNote('Another day has folded itself into the harbor. The routines remain, but never quite repeat.');
   }
   const absoluteHours = day * 24 + timeOfDay;
+  const currentHour = Math.floor(absoluteHours);
+  if (currentHour !== lastChimedHour) {
+    lastChimedHour = currentHour;
+    if (grow.discoveredIds().includes('clock-tower')) playCue('bell');
+  }
   const daylight = daylightAt(timeOfDay);
   const nextNightMode = daylight < .24;
   if (nextNightMode !== nightMode) {
@@ -895,7 +1019,9 @@ function animate() {
   city.setDaylight(daylight);
   citizens.update(delta * simulationSpeed, timeOfDay, absoluteHours, time);
   if (businessCheckElapsed > .5) {
-    const businessUpdate = businesses.update(citizens.residents(), city.cells, absoluteHours);
+    const residentState = citizens.residents();
+    applyBusinessUpdate(businesses.recordVisits(citizens.drainBusinessVisits(), residentState), true);
+    const businessUpdate = businesses.update(residentState, city.cells, absoluteHours);
     applyBusinessUpdate(businessUpdate, true);
     businessCheckElapsed = 0;
   }

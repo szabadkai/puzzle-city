@@ -9,23 +9,24 @@ This repository is complete through **Milestone 5**, the final milestone in the 
    - Topology-driven houses, rows, corners, towers, courtyards, plazas, canals, arches, bridges, quays, docks, and water stairs.
    - Animated sea, construction feedback, ambient boat and birds, constrained orbit camera, and deterministic saves.
 2. **Living town**
-   - One persistent resident per accessible home.
+   - One persistent resident per accessible home, with a second household member in taller homes; adults, children, elders, and visitors have distinct roles.
    - Topology-derived navigation graph, A* walking across courtyards, plazas, and elevated bridges, daily routines, relationships, and inspectable citizen cards.
    - Eight-minute day/night cycle with pause, 1x, and 3x simulation speeds.
 3. **Businesses**
-   - Bakery, café, workshop, fishmonger, and inn emerge from population, resident traits, occupation, and site suitability.
-   - Persistent owners, names, opening hours, procedural storefronts, owner routines, and visitor destinations.
+   - Bakery, café, flower shop, workshop, bookstore, fishmonger, restaurant, tea house, inn, and pottery studio emerge from population, resident traits, occupation, and site suitability.
+   - Persistent owners, names, opening hours, procedural storefronts, owner routines, visitor destinations, favorite-shop histories, popularity counts, and neighbor employees.
    - Businesses close or are reassigned when edits invalidate their site or owner.
 4. **GROW discoveries**
    - Pure declarative condition trees evaluate cloned, read-only snapshots of topology, population, time, businesses, relationships, and prior discoveries.
-   - Thirty stable, chained one-shot event IDs commit through narrow city, citizen, ambience, and presentation effects.
+   - Forty-three stable, chained one-shot event IDs commit through narrow city, business, citizen, ambience, and presentation effects.
+   - Five recurring, cooldown-backed observations turn regular customers, dawn fishing crews, bird-feeding children, waterfront elders, and familiar restaurant tables into persistent daily patterns.
    - Discoveries add a restrained world glimmer, resident reaction, caption and sound, then persist an illustrated observation in the harbor journal.
 5. **Polish and quiet finale**
    - A rowboat, fishing boat, merchant boat, and ferry follow separate deterministic routes rebuilt from the occupied shoreline after every edit. Docks, canals, sheltered water, occupations, businesses, and discoveries determine which vessels appear.
-   - Rooftop planting, gulls, blossom, fireflies, festival ribbons, local lantern lights, and a quiet finale emerge through eight additional chained discoveries.
+   - Rooftop planting, gulls, blossom, fireflies, festival ribbons, a traveler, rare tree, nest, clock tower, local lantern lights, and a quiet finale emerge through chained discoveries.
    - Spatially bucketed relationship checks are capped per tick, and established friends pause for shared meals, harbor news, evening walks, and other joint routines.
-   - Layered ambient tones respond to daylight and the finale without starting audio before the player has interacted.
-   - Press `G` for a developer panel showing snapshot totals, event eligibility, and recently committed effects.
+   - Layered procedural cues cover water, gulls, footsteps, construction, doors, chatter, bells, horns, insects, and the finale without starting ambient playback before the player has interacted.
+   - Press `G` for a developer panel showing snapshot totals, citizen and business state, selected topology, event eligibility, recent effects, nav visualization, event forcing, citizen spawning, and time advancement.
 
 The visual direction is a warm, fictional old East Asian harbor: layered tiled eaves, narrow signs, awnings, laundry balconies, pipes, rooftop tanks, and evening window light. It draws on old Tokyo and Hong Kong atmosphere without reproducing a specific property or place.
 
@@ -35,7 +36,7 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 - `src/city.ts` — sparse cell model, procedural architecture/storefront generation, local topology rebuilds, and static geometry batching.
 - `src/citizens.ts` — navigation graph, A* routing, resident lifecycle, routines, relationships, business visits, and citizen rendering.
 - `src/businesses.ts` — business recipes, emergence thresholds, scoring, opening hours, ownership, and validity maintenance.
-- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, and the 23-event catalog.
+- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, 43 one-shot discoveries, and five recurring moments.
 - `src/harbor.ts` — shoreline-derived boat routes, boats, birds, clouds, stars, blossom particles, and evening fireflies.
 - `src/water.ts` — shared deterministic shoreline, dock, canal, sheltered-water, and route derivation.
 - `src/topology.ts` — shared multi-cell plaza recognition.
@@ -51,8 +52,8 @@ The town is stored in `localStorage` under `little-tides-town-v1`. The current p
 
 - the deterministic world seed and sparse cell array;
 - day and time-of-day;
-- citizens, homes, positions and optional bridge elevation, traits, occupations, and relationships;
-- businesses, sites, owners, names, types, and opening times.
+- citizens, homes, household/age roles, visitor status, positions and optional bridge elevation, traits, occupations, relationships, favorite shops, and visit histories;
+- businesses, sites, owners, employees, popularity, names, types, and opening times.
 - discovered stable event IDs and illustrated journal entries.
 
 `SavedTown` accepts versions 1, 2, 3, and 4, and all fields added after version 1 are optional. Existing towns discover any currently satisfied observations gradually after loading. Preserve that additive migration behavior when extending the schema. The in-game **New tide** action clears the existing local save.

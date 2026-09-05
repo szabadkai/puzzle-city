@@ -1,4 +1,4 @@
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenSave, type JournalEntry, type JournalIllustration, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenKind, type CitizenSave, type JournalEntry, type JournalIllustration, keyOf } from './types';
 import { analyzeWaterTopology } from './water';
 import { findPlazaAnchors } from './topology';
 
@@ -24,13 +24,17 @@ export type DiscoveryCondition =
   | { kind: 'any'; conditions: readonly DiscoveryCondition[] }
   | { kind: 'not'; condition: DiscoveryCondition }
   | { kind: 'cells'; atLeast: number }
+  | { kind: 'height'; atLeast: number; cellsAtLeast: number }
   | { kind: 'population'; atLeast: number }
   | { kind: 'relationships'; atLeast: number }
   | { kind: 'day'; atLeast: number }
   | { kind: 'time'; after: number; before: number }
   | { kind: 'topology'; feature: TopologyFeature; atLeast: number }
-  | { kind: 'business'; businessType?: BusinessType; atLeast: number }
-  | { kind: 'citizen'; occupation?: string; trait?: string; atLeast: number }
+  | { kind: 'business'; businessType?: BusinessType; visitsAtLeast?: number; atLeast: number }
+  | { kind: 'regular-at'; businessType: BusinessType; atLeast: number }
+  | { kind: 'business-site'; businessType: BusinessType }
+  | { kind: 'adjacency'; businessType: BusinessType; feature: TopologyFeature; within?: number }
+  | { kind: 'citizen'; occupation?: string; trait?: string; ageGroup?: CitizenAgeGroup; residentKind?: CitizenKind; atLeast: number }
   | { kind: 'water'; feature: 'dock' | 'canal' | 'sheltered'; atLeast: number }
   | { kind: 'discovered'; eventId: string };
 
@@ -41,14 +45,19 @@ export type DiscoveryFocus =
 
 export type DiscoveryEffect =
   | { kind: 'city'; action: 'glimmer' | 'decorate' }
+  | { kind: 'business'; action: 'open'; businessType: BusinessType }
   | { kind: 'citizens'; action: 'notice'; activity: string }
-  | { kind: 'citizens'; action: 'assign-occupation'; occupation: string }
-  | { kind: 'ambience'; action: 'refresh' }
+  | { kind: 'citizens'; action: 'assign-occupation'; occupation: string; additional?: boolean }
+  | { kind: 'citizens'; action: 'spawn-visitor'; name: string; occupation: string }
+  | { kind: 'citizens'; action: 'gather'; activity: string }
+  | { kind: 'citizens'; action: 'moment'; activity: string; occupation?: string; ageGroup?: CitizenAgeGroup; favoriteBusinessType?: BusinessType }
+  | { kind: 'ambience'; action: 'refresh' | 'celebrate' }
   | { kind: 'presentation'; action: 'reveal'; caption: string; tone: 'stone' | 'green' | 'water' | 'warm' | 'people' };
 
 export type DiscoveryEvent = Readonly<{
   id: string;
   repeatable: boolean;
+  cooldownHours?: number;
   title: string;
   note: string;
   illustration: JournalIllustration;
@@ -73,7 +82,10 @@ type SnapshotInput = {
   priorDiscoveries: string[];
 };
 
-const BUSINESS_TYPES: readonly BusinessType[] = ['bakery', 'cafe', 'workshop', 'fishmonger', 'inn'];
+const BUSINESS_TYPES: readonly BusinessType[] = [
+  'bakery', 'cafe', 'flower-shop', 'workshop', 'bookstore',
+  'fishmonger', 'restaurant', 'tea-house', 'inn', 'pottery',
+];
 
 export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
   const cells = [...input.cells].map((cell) => Object.freeze({ ...cell, placedAt: 0 }));
@@ -148,14 +160,43 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
     case 'any': return condition.conditions.some((candidate) => evaluateCondition(candidate, snapshot));
     case 'not': return !evaluateCondition(condition.condition, snapshot);
     case 'cells': return snapshot.cells.length >= condition.atLeast;
+    case 'height': return snapshot.cells.filter((cell) => cell.height >= condition.atLeast).length >= condition.cellsAtLeast;
     case 'population': return snapshot.population >= condition.atLeast;
     case 'relationships': return snapshot.relationshipCount >= condition.atLeast;
     case 'day': return snapshot.day >= condition.atLeast;
     case 'topology': return snapshot.topology[condition.feature].length >= condition.atLeast;
-    case 'business': return (condition.businessType ? snapshot.businessCounts[condition.businessType] : snapshot.businesses.length) >= condition.atLeast;
+    case 'business': return snapshot.businesses.filter((business) =>
+      (!condition.businessType || business.type === condition.businessType)
+      && (!condition.visitsAtLeast || (business.visitCount ?? 0) >= condition.visitsAtLeast),
+    ).length >= condition.atLeast;
+    case 'regular-at': {
+      const matchingBusinesses = new Set(snapshot.businesses
+        .filter((business) => business.type === condition.businessType)
+        .map((business) => business.id));
+      return snapshot.citizens.filter((citizen) => citizen.favoriteBusinessId && matchingBusinesses.has(citizen.favoriteBusinessId)).length >= condition.atLeast;
+    }
+    case 'business-site': {
+      const occupiedCells = new Set(snapshot.businesses.map((business) => business.cellKey));
+      const occupiedOwners = new Set(snapshot.businesses.map((business) => business.ownerId));
+      const cellMap = new Map(snapshot.cells.map((cell) => [keyOf(cell.x, cell.z), cell]));
+      return snapshot.citizens.some((citizen) => {
+        if (citizen.ageGroup === 'child' || citizen.residentKind === 'visitor' || occupiedOwners.has(citizen.id) || occupiedCells.has(citizen.homeKey)) return false;
+        const cell = cellMap.get(citizen.homeKey);
+        if (!cell || (condition.businessType === 'inn' && cell.height < 2)) return false;
+        return CARDINALS.some(([dx, dz]) => !cellMap.has(keyOf(cell.x + dx, cell.z + dz)));
+      });
+    }
+    case 'adjacency': return snapshot.businesses.some((business) => {
+      if (business.type !== condition.businessType) return false;
+      const [x, z] = business.cellKey.split(',').map(Number);
+      const within = condition.within ?? 1;
+      return snapshot.topology[condition.feature].some((point) => Math.abs(point.x - x) + Math.abs(point.z - z) <= within);
+    });
     case 'citizen': return snapshot.citizens.filter((citizen) =>
       (!condition.occupation || citizen.occupation === condition.occupation)
-      && (!condition.trait || citizen.traits.includes(condition.trait)),
+      && (!condition.trait || citizen.traits.includes(condition.trait))
+      && (!condition.ageGroup || citizen.ageGroup === condition.ageGroup)
+      && (!condition.residentKind || citizen.residentKind === condition.residentKind),
     ).length >= condition.atLeast;
     case 'water': {
       const count = condition.feature === 'dock'
@@ -178,6 +219,7 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
 export class GrowSystem {
   private readonly discovered: Set<string>;
   private readonly journal: JournalEntry[];
+  private readonly lastTriggeredAt = new Map<string, number>();
 
   constructor(
     private readonly events: readonly DiscoveryEvent[],
@@ -187,6 +229,16 @@ export class GrowSystem {
   ) {
     this.discovered = new Set(discovered);
     this.journal = journal.map((entry) => ({ ...entry }));
+    for (const entry of this.journal) {
+      const absoluteHours = entry.day * 24 + entry.timeOfDay;
+      this.lastTriggeredAt.set(entry.eventId, Math.max(this.lastTriggeredAt.get(entry.eventId) ?? -Infinity, absoluteHours));
+    }
+  }
+
+  private isCoolingDown(event: DiscoveryEvent, snapshot: WorldSnapshot) {
+    if (!event.repeatable) return false;
+    const lastTriggered = this.lastTriggeredAt.get(event.id);
+    return lastTriggered !== undefined && snapshot.day * 24 + snapshot.timeOfDay - lastTriggered < (event.cooldownHours ?? 24);
   }
 
   evaluate(snapshot: WorldSnapshot, limit = 1) {
@@ -194,23 +246,34 @@ export class GrowSystem {
     for (const event of this.events) {
       if (triggered.length >= limit) break;
       if (!event.repeatable && this.discovered.has(event.id)) continue;
+      if (this.isCoolingDown(event, snapshot)) continue;
       if (!evaluateCondition(event.condition, snapshot)) continue;
-      const entry: JournalEntry = {
-        id: event.repeatable ? `${event.id}-${snapshot.day}-${snapshot.timeOfDay.toFixed(2)}` : event.id,
-        eventId: event.id,
-        title: event.title,
-        note: event.note,
-        illustration: event.illustration,
-        day: snapshot.day,
-        timeOfDay: snapshot.timeOfDay,
-      };
-      if (!event.repeatable) this.discovered.add(event.id);
-      if (!this.journal.some((existing) => existing.id === entry.id)) this.journal.push(entry);
-      const discovery = Object.freeze({ event, entry: Object.freeze({ ...entry }), snapshot });
-      for (const effect of event.effects) this.commitEffect(effect, discovery);
-      triggered.push(discovery);
+      triggered.push(this.trigger(event, snapshot));
     }
     return triggered;
+  }
+
+  force(eventId: string, snapshot: WorldSnapshot) {
+    const event = this.events.find((candidate) => candidate.id === eventId);
+    return event ? this.trigger(event, snapshot) : null;
+  }
+
+  private trigger(event: DiscoveryEvent, snapshot: WorldSnapshot) {
+    const entry: JournalEntry = {
+      id: event.repeatable ? `${event.id}-${snapshot.day}-${snapshot.timeOfDay.toFixed(2)}` : event.id,
+      eventId: event.id,
+      title: event.title,
+      note: event.note,
+      illustration: event.illustration,
+      day: snapshot.day,
+      timeOfDay: snapshot.timeOfDay,
+    };
+    if (!event.repeatable) this.discovered.add(event.id);
+    else this.lastTriggeredAt.set(event.id, snapshot.day * 24 + snapshot.timeOfDay);
+    if (!this.journal.some((existing) => existing.id === entry.id)) this.journal.push(entry);
+    const discovery = Object.freeze({ event, entry: Object.freeze({ ...entry }), snapshot });
+    for (const effect of event.effects) this.commitEffect(effect, discovery);
+    return discovery;
   }
 
   discoveredIds() { return [...this.discovered]; }
@@ -223,7 +286,8 @@ export class GrowSystem {
       title: event.title,
       repeatable: event.repeatable,
       discovered: this.discovered.has(event.id),
-      eligible: evaluateCondition(event.condition, snapshot),
+      coolingDown: this.isCoolingDown(event, snapshot),
+      eligible: evaluateCondition(event.condition, snapshot) && !this.isCoolingDown(event, snapshot),
     }));
   }
 }
@@ -274,10 +338,24 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     ],
   },
   {
+    id: 'fishing-crew', repeatable: false, title: 'Two Lamps Before Dawn', illustration: 'fish',
+    note: 'A second lamp began moving along the quay before sunrise. The first fisher no longer checked the nets alone.',
+    condition: all(discovered('fishing-boat'), { kind: 'population', atLeast: 6 }, { kind: 'day', atLeast: 2 }), focus: { kind: 'town' },
+    effects: [
+      { kind: 'citizens', action: 'assign-occupation', occupation: 'Fisher', additional: true },
+      { kind: 'citizens', action: 'notice', activity: 'gathering with the fishing crew before dawn' },
+      reveal('Two harbor lamps are moving before dawn.', 'water'),
+    ],
+  },
+  {
     id: 'sheltered-courtyard', repeatable: false, title: 'A Sheltered Green', illustration: 'garden',
     note: 'Walls gathered close and made a calm pocket. By morning, something green had taken root.',
     condition: all(discovered('first-foundation'), { kind: 'topology', feature: 'courtyard', atLeast: 1 }), focus: { kind: 'topology', feature: 'courtyard' },
-    effects: standardEffects('A sheltered garden has taken root.', 'green', 'resting in the new courtyard'),
+    effects: [
+      { kind: 'city', action: 'glimmer' },
+      { kind: 'citizens', action: 'gather', activity: 'gathering around the newly planted courtyard tree' },
+      reveal('A sheltered garden has taken root.', 'green'),
+    ],
   },
   {
     id: 'harbor-plaza', repeatable: false, title: 'Room to Linger', illustration: 'street',
@@ -308,6 +386,12 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     note: 'A second light appeared across the quay. The town had neighbors now.',
     condition: all(discovered('first-foundation'), { kind: 'population', atLeast: 2 }), focus: { kind: 'town' },
     effects: standardEffects('There are neighbors across the way.', 'people', 'welcoming a new neighbor'),
+  },
+  {
+    id: 'family-upstairs', repeatable: false, title: 'A Light Upstairs', illustration: 'neighbors',
+    note: 'A taller house found room for another small bed. Soon two generations were learning the same front step.',
+    condition: all(discovered('first-neighbors'), { kind: 'height', atLeast: 3, cellsAtLeast: 1 }, { kind: 'citizen', ageGroup: 'child', residentKind: 'resident', atLeast: 1 }, { kind: 'day', atLeast: 2 }), focus: { kind: 'town' },
+    effects: standardEffects('A family has made room upstairs.', 'people', 'helping a family settle into the taller house'),
   },
   {
     id: 'village-street', repeatable: false, title: 'A Street of Names', illustration: 'street',
@@ -352,6 +436,65 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: standardEffects('A lantern waits for the last ferry.', 'warm', 'listening to stories at the inn'),
   },
   {
+    id: 'courtyard-market', repeatable: false, title: 'Stems Beside the Bread', illustration: 'market',
+    note: 'The florist set green buckets beside the baker’s baskets, and the courtyard became a morning market without anyone naming it.',
+    condition: all(discovered('morning-bread'), { kind: 'business', businessType: 'flower-shop', atLeast: 1 }, { kind: 'adjacency', businessType: 'bakery', feature: 'courtyard' }, { kind: 'time', after: 7, before: 11 }), focus: { kind: 'topology', feature: 'courtyard' },
+    effects: [
+      { kind: 'city', action: 'decorate' },
+      { kind: 'citizens', action: 'gather', activity: 'gathering for the courtyard morning market' },
+      reveal('Flowers and warm bread fill the courtyard.', 'green'),
+    ],
+  },
+  {
+    id: 'reading-hour', repeatable: false, title: 'The Shelf by the Window', illustration: 'town',
+    note: 'The bookseller began leaving one low shelf for small hands. After lessons, the quietest corner filled first.',
+    condition: all({ kind: 'business', businessType: 'bookstore', atLeast: 1 }, { kind: 'citizen', ageGroup: 'child', atLeast: 1 }, { kind: 'time', after: 14, before: 19 }), focus: { kind: 'business', businessType: 'bookstore' },
+    effects: standardEffects('The bookstore has found its after-school readers.', 'people', 'reading together by the bookstore window'),
+  },
+  {
+    id: 'potters-kiln', repeatable: false, title: 'Blue Glaze', illustration: 'pots',
+    note: 'Tools from the workshop found their way to a pottery wheel. By afternoon, blue cups were cooling beside the quay.',
+    condition: all(discovered('makers-door'), { kind: 'business', businessType: 'pottery', atLeast: 1 }, { kind: 'time', after: 12, before: 19 }), focus: { kind: 'business', businessType: 'pottery' },
+    effects: standardEffects('Fresh blue cups are cooling outside the pottery.', 'stone', 'admiring the new blue glaze'),
+  },
+  {
+    id: 'quiet-tea', repeatable: false, title: 'The Patient Kettle', illustration: 'tea',
+    note: 'Every afternoon the same kettle warmed, and the elders discovered that nobody minded how long one cup lasted.',
+    condition: all({ kind: 'business', businessType: 'tea-house', atLeast: 1 }, { kind: 'citizen', ageGroup: 'elder', atLeast: 1 }, { kind: 'time', after: 14, before: 19 }), focus: { kind: 'business', businessType: 'tea-house' },
+    effects: standardEffects('The tea house keeps an unhurried afternoon table.', 'warm', 'sharing the patient afternoon kettle'),
+  },
+  {
+    id: 'dockside-kitchen', repeatable: false, title: 'Salt and Steam', illustration: 'supper',
+    note: 'The fishmonger saved the best of the morning catch. A cook opened another door, and by dusk its windows were clouded with steam.',
+    condition: all(
+      discovered('fishing-boat'), discovered('morning-catch'),
+      { kind: 'population', atLeast: 10 },
+      { kind: 'business-site', businessType: 'restaurant' },
+      { kind: 'not', condition: { kind: 'business', businessType: 'restaurant', atLeast: 1 } },
+    ), focus: { kind: 'business', businessType: 'fishmonger' },
+    effects: [
+      { kind: 'business', action: 'open', businessType: 'restaurant' },
+      { kind: 'citizens', action: 'notice', activity: 'following the first supper steam along the quay' },
+      reveal('The morning catch has found an evening kitchen.', 'warm'),
+    ],
+  },
+  {
+    id: 'harbor-supper', repeatable: false, title: 'Fish for the Long Table', illustration: 'supper',
+    note: 'The morning catch returned at dusk in steaming bowls. Fishermen and neighbors pulled their chairs to one long table.',
+    condition: all(discovered('dockside-kitchen'), { kind: 'business', businessType: 'restaurant', atLeast: 1 }, { kind: 'time', after: 18, before: 23 }), focus: { kind: 'business', businessType: 'restaurant' },
+    effects: [
+      { kind: 'citizens', action: 'gather', activity: 'gathering for fish supper at the long table' },
+      { kind: 'ambience', action: 'refresh' },
+      reveal('The waterfront gathers around a long supper table.', 'warm'),
+    ],
+  },
+  {
+    id: 'favorite-table', repeatable: false, title: 'The Usual Table', illustration: 'supper',
+    note: 'The restaurant no longer asked where to seat everyone. The regulars already knew which chairs were theirs.',
+    condition: all(discovered('harbor-supper'), { kind: 'business', businessType: 'restaurant', visitsAtLeast: 8, atLeast: 1 }, { kind: 'time', after: 18, before: 23 }), focus: { kind: 'business', businessType: 'restaurant' },
+    effects: standardEffects('The evening restaurant has found its regulars.', 'people', 'settling into the usual supper table'),
+  },
+  {
     id: 'ferry-route', repeatable: false, title: 'The Last Ferry', illustration: 'inn',
     note: 'The inn kept one lamp burning by the dock. Soon a small ferry learned to look for it in the dark.',
     condition: all(discovered('last-lantern'), { kind: 'water', feature: 'dock', atLeast: 1 }, { kind: 'business', businessType: 'inn', atLeast: 1 }), focus: { kind: 'business', businessType: 'inn' },
@@ -380,8 +523,41 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   {
     id: 'tower-bell', repeatable: false, title: 'The Bell Above the Quay', illustration: 'tower',
     note: 'The merchant left a bronze bell behind. The lookout raised it where both plaza and harbor could hear.',
-    condition: all(discovered('merchant-arrival'), discovered('lookout-tower'), discovered('harbor-plaza')), focus: { kind: 'topology', feature: 'tower' },
+    condition: all(discovered('merchant-arrival'), discovered('lookout-tower')), focus: { kind: 'topology', feature: 'tower' },
     effects: natureEffects('A bell rises above the harbor.', 'warm', 'listening for the new tower bell'),
+  },
+  {
+    id: 'mysterious-traveler', repeatable: false, title: 'A Coat Full of Roads', illustration: 'inn',
+    note: 'The last ferry left one passenger behind: a traveler with salt on her coat and a seed wrapped in blue paper.',
+    condition: all(discovered('festival-ribbons'), { kind: 'business', businessType: 'inn', atLeast: 1 }), focus: { kind: 'business', businessType: 'inn' },
+    effects: [
+      { kind: 'citizens', action: 'spawn-visitor', name: 'Mara', occupation: 'Traveler' },
+      { kind: 'citizens', action: 'notice', activity: 'welcoming a traveler from the last ferry' },
+      reveal('A traveler steps ashore carrying a blue-paper parcel.', 'people'),
+    ],
+  },
+  {
+    id: 'rare-tree', repeatable: false, title: 'The Blue-Paper Seed', illustration: 'garden',
+    note: 'Mara planted her seed in the most sheltered earth. Its silver-green leaves opened before anyone thought to doubt it.',
+    condition: all(discovered('mysterious-traveler'), discovered('sheltered-courtyard'), { kind: 'day', atLeast: 3 }), focus: { kind: 'topology', feature: 'courtyard' },
+    effects: natureEffects('A rare silver tree takes root in the courtyard.', 'green', 'visiting the traveler’s rare tree'),
+  },
+  {
+    id: 'birds-nest', repeatable: false, title: 'A Nest Above the Bell', illustration: 'gulls',
+    note: 'The rare tree offered one bright twig after another. By evening, a small nest had appeared above the bell.',
+    condition: all(discovered('rare-tree'), discovered('gulls-return'), { kind: 'citizen', ageGroup: 'child', atLeast: 1 }, { kind: 'day', atLeast: 4 }), focus: { kind: 'topology', feature: 'tower' },
+    effects: natureEffects('Harbor birds have built a nest above the bell.', 'green', 'looking up at the new nest'),
+  },
+  {
+    id: 'clock-tower', repeatable: false, title: 'The Harbor Keeps Time', illustration: 'tower',
+    note: 'The workshop fitted a patient clock beneath the nest. Its hands kept ferry time, bread time, and the hour when friends came home.',
+    condition: all(discovered('birds-nest'), discovered('tower-bell'), discovered('makers-door')), focus: { kind: 'topology', feature: 'tower' },
+    effects: [
+      { kind: 'city', action: 'decorate' },
+      { kind: 'ambience', action: 'celebrate' },
+      { kind: 'citizens', action: 'gather', activity: 'gathering below the clock for its first chime' },
+      reveal('A clock face begins keeping the harbor’s many hours.', 'warm'),
+    ],
   },
   {
     id: 'town-remembers', repeatable: false, title: 'The Town Remembers', illustration: 'town',
@@ -422,7 +598,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   {
     id: 'festival-ribbons', repeatable: false, title: 'Ribbons Across the Street', illustration: 'festival',
     note: 'Nobody announced a festival. Bright scraps simply crossed the street until celebration became inevitable.',
-    condition: all(discovered('town-remembers'), discovered('tower-bell'), { kind: 'relationships', atLeast: 3 }), focus: { kind: 'town' },
+    condition: all(discovered('town-remembers'), discovered('tower-bell'), discovered('harbor-plaza'), { kind: 'relationships', atLeast: 3 }), focus: { kind: 'topology', feature: 'plaza' },
     effects: natureEffects('Festival ribbons appear between the eaves.', 'warm', 'hanging bright ribbons over the quay'),
   },
   {
@@ -434,8 +610,43 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   {
     id: 'lantern-finale', repeatable: false, title: 'All the Lanterns', illustration: 'lanterns',
     note: 'Every window answered another. Seen from the water, the town was a constellation that had chosen to stay.',
-    condition: all(discovered('blossom-evening'), discovered('shared-supper'), discovered('evening-chorus'), { kind: 'time', after: 19, before: 23 }), focus: { kind: 'town' },
-    effects: natureEffects('One by one, every lantern answers the next.', 'warm', 'watching all the lanterns come alive'),
+    condition: all(discovered('blossom-evening'), discovered('shared-supper'), discovered('evening-chorus'), discovered('clock-tower'), discovered('ferry-route'), { kind: 'time', after: 19, before: 23 }), focus: { kind: 'town' },
+    effects: [
+      { kind: 'city', action: 'decorate' },
+      { kind: 'ambience', action: 'celebrate' },
+      { kind: 'citizens', action: 'gather', activity: 'gathering along the quay for all the lanterns' },
+      reveal('The town seems happy.', 'warm'),
+    ],
+  },
+  {
+    id: 'daily-morning-regulars', repeatable: true, cooldownHours: 22, title: 'The Familiar Order', illustration: 'bread',
+    note: 'The door opened before the order was spoken. Some rituals belong as much to a town as its streets do.',
+    condition: all(discovered('morning-bread'), { kind: 'regular-at', businessType: 'bakery', atLeast: 1 }, { kind: 'time', after: 6, before: 9.5 }), focus: { kind: 'business', businessType: 'bakery' },
+    effects: [{ kind: 'citizens', action: 'moment', activity: 'collecting the familiar morning order', favoriteBusinessType: 'bakery' }],
+  },
+  {
+    id: 'daily-fishing-crew', repeatable: true, cooldownHours: 22, title: 'Lamps Before Dawn', illustration: 'fish',
+    note: 'Two small lamps moved toward the water while the rest of the windows were still dark.',
+    condition: all(discovered('fishing-crew'), { kind: 'citizen', occupation: 'Fisher', atLeast: 2 }, { kind: 'time', after: 4.5, before: 6.25 }), focus: { kind: 'town' },
+    effects: [{ kind: 'citizens', action: 'moment', activity: 'walking down to the boats before dawn', occupation: 'Fisher' }],
+  },
+  {
+    id: 'daily-bird-feeding', repeatable: true, cooldownHours: 22, title: 'Crumbs in the Square', illustration: 'gulls',
+    note: 'After lessons, the smallest hands scattered crumbs and the boldest birds came down first.',
+    condition: all(discovered('birds-nest'), { kind: 'citizen', ageGroup: 'child', atLeast: 1 }, { kind: 'topology', feature: 'plaza', atLeast: 1 }, { kind: 'time', after: 14, before: 18 }), focus: { kind: 'topology', feature: 'plaza' },
+    effects: [{ kind: 'citizens', action: 'moment', activity: 'feeding the birds in the plaza', ageGroup: 'child' }],
+  },
+  {
+    id: 'daily-waterfront-greetings', repeatable: true, cooldownHours: 22, title: 'The Waterfront Bench', illustration: 'neighbors',
+    note: 'The same bench gathered a different conversation every afternoon.',
+    condition: all({ kind: 'citizen', ageGroup: 'elder', atLeast: 1 }, { kind: 'water', feature: 'dock', atLeast: 1 }, { kind: 'time', after: 14, before: 18 }), focus: { kind: 'town' },
+    effects: [{ kind: 'citizens', action: 'moment', activity: 'greeting passersby beside the water', ageGroup: 'elder' }],
+  },
+  {
+    id: 'daily-usual-table', repeatable: true, cooldownHours: 22, title: 'The Usual Table', illustration: 'supper',
+    note: 'A chair was already turned toward the door. The kitchen knew who would arrive next.',
+    condition: all(discovered('favorite-table'), { kind: 'regular-at', businessType: 'restaurant', atLeast: 1 }, { kind: 'business', businessType: 'restaurant', visitsAtLeast: 8, atLeast: 1 }, { kind: 'time', after: 18, before: 22 }), focus: { kind: 'business', businessType: 'restaurant' },
+    effects: [{ kind: 'citizens', action: 'moment', activity: 'returning to the usual table', favoriteBusinessType: 'restaurant' }],
   },
 ] as const;
 

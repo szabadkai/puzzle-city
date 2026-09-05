@@ -35,7 +35,9 @@ export type JournalEntry = {
   timeOfDay: number;
 };
 
-export type BusinessType = 'bakery' | 'cafe' | 'workshop' | 'fishmonger' | 'inn';
+export type BusinessType =
+  | 'bakery' | 'cafe' | 'flower-shop' | 'workshop' | 'bookstore'
+  | 'fishmonger' | 'restaurant' | 'tea-house' | 'inn' | 'pottery';
 
 export type BusinessSave = {
   id: string;
@@ -44,7 +46,12 @@ export type BusinessSave = {
   ownerId: string;
   name: string;
   openedAt: number;
+  employeeIds?: string[];
+  visitCount?: number;
 };
+
+export type CitizenAgeGroup = 'child' | 'adult' | 'elder';
+export type CitizenKind = 'resident' | 'visitor';
 
 export type CitizenSave = {
   id: string;
@@ -56,6 +63,11 @@ export type CitizenSave = {
   traits: string[];
   relationships: string[];
   color: number;
+  ageGroup?: CitizenAgeGroup;
+  householdId?: string;
+  favoriteBusinessId?: string;
+  businessVisits?: Record<string, number>;
+  residentKind?: CitizenKind;
 };
 
 export const keyOf = (x: number, z: number) => `${x},${z}`;

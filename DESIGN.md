@@ -19,10 +19,11 @@ Only the edited cell and its immediate three-by-three neighborhood are rebuilt a
 - An isolated low cell becomes a compact house with a steep roof.
 - Exposed sides receive windows, doors, sills, and quay walls; shared sides merge visually.
 - Opposite neighbors create a row; adjacent neighbors make a corner and can grow a balcony.
-- Dense clusters use flat roof decks, parapets, and roof gardens.
+- Dense clusters use flat roof decks, parapets, and compact rooftop trees.
 - An isolated stack of three or more levels becomes a flagged tower.
 - Three or four buildings around an empty cell shelter a planted courtyard.
-- Six or more buildings around a two-by-two opening form a paved harbor plaza with a central fountain.
+- Six or more buildings around a two-by-two opening form a paved harbor plaza with a central fountain and paired shade trees.
+- Seed-selected exposed façades slowly claim a neighboring water edge for a garden plot; herbs and flowers fill in over time, while some plots eventually grow a small tree.
 - Opposing buildings across one water tile grow through a canal → sea arch → high bridge → covered skybridge → lantern gate sequence as both sides rise from one to five storeys.
 - Three buildings in a straight run become a sheltered arcade at two storeys and a lantern-lined roof promenade at three.
 - Three buildings in a 1–2–3 height progression form an exterior stepped terrace; lifting the full sequence to 2–3–4 adds gardens, and 3–4–5 adds lanterns.
@@ -44,7 +45,7 @@ The current version-6 save contains the grid, RNG seed, simulation state, discov
 
 ## Town memory
 
-Time adds history rather than upkeep. Courtyard trees grow continuously from young saplings into full canopies over roughly three simulated days. Their age is derived from the foundations that enclosed the courtyard, so reshaping upper floors does not erase the tree's history. Mature canopies add shaded seating and give cats an afternoon perch. Exposed façades accumulate deterministic, context-sensitive patina: salt on open waterfront walls, moss in sheltered clusters, soot around working food and craft businesses, and occasional rust streaks below rooftop tanks. Changing a building's height partially refreshes its surface, after which the patina gradually returns. Frequently visited businesses develop worn approach stones in coarse visit-count stages.
+Time adds history rather than upkeep. Courtyard trees grow continuously from young saplings into full canopies over roughly three simulated days. Their age is derived from the foundations that enclosed the courtyard, so reshaping upper floors does not erase the tree's history. Mature canopies add shaded seating and give cats an afternoon perch. Plazas and suitably dense flat roofs gain smaller trees immediately as part of their architecture. Exposed houses can also seed deterministic shoreline garden plots after 18–48 simulated hours. Those plots visibly fill in over the next two and a half days as herb beds, flower beds, or small trees, and disappear naturally if the player builds into their tile. Exposed façades accumulate deterministic, context-sensitive patina: salt on open waterfront walls, moss in sheltered clusters, soot around working food and craft businesses, and occasional rust streaks below rooftop tanks. Changing a building's height partially refreshes its surface, after which the patina gradually returns. Frequently visited businesses develop worn approach stones in coarse visit-count stages.
 
 Once harbor cats are discovered, three founding cats establish a colony. A new kitten appears about every two simulated days and grows to adult size over the following two days. Fishmongers, inns, and up to two gardens determine the colony's carrying capacity, keeping reproduction legible and bounded. Coat colors and markings are inherited deterministically from the town seed. When habitat shrinks, displaced cats visibly walk out toward new harbor homes instead of silently disappearing.
 

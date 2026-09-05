@@ -85,6 +85,12 @@ try {
   city.setBusinesses(businesses);
   city.setDiscoveryState(discoveries);
   city.update(1, 240);
+  const vegetationPlots = [...city.root.children].filter((group) => group.userData.vegetationPlotKind);
+  if (!vegetationPlots.length) throw new Error('Exposed houses did not produce any deterministic vegetation plots.');
+  if (!vegetationPlots.some((group) => group.userData.vegetationStage > 0)) throw new Error('Established vegetation plots did not advance with town time.');
+  const architecturalTreeHabitats = [...city.root.children]
+    .flatMap((group) => (group.userData.architecturalTrees ?? []).map((tree) => tree.habitat));
+  if (!architecturalTreeHabitats.includes('rooftop')) throw new Error('Dense flat roofs did not produce compact rooftop trees.');
   if (city.signAtlas.tiles.size < businessTypes.length) throw new Error('The shared sign atlas did not receive every business sign.');
   const staticBatches = city.root.getObjectByName('town-static-batches').children;
   const vertexBatchMaterials = new Set();
@@ -125,6 +131,17 @@ try {
   }
 
   if (drawGroups > 100) throw new Error(`Full-feature scene has ${drawGroups} visible draw groups; budget is 100.`);
+
+  const plazaCells = [
+    [0, -1], [1, -1], [0, 2], [1, 2], [-1, 0], [-1, 1], [2, 0], [2, 1],
+  ].map(([x, z]) => ({ x, z, height: 1, color: 0, placedAt: 0, foundedAt: 0, renovatedAt: 0 }));
+  const plazaCity = new CityRenderer(seed);
+  plazaCity.load(plazaCells, 240);
+  const plazaTrees = [...plazaCity.root.children]
+    .flatMap((group) => group.userData.architecturalTrees ?? [])
+    .filter((tree) => tree.habitat === 'plaza');
+  if (plazaTrees.length !== 2) throw new Error(`Harbor plaza produced ${plazaTrees.length} trees instead of 2.`);
+
   console.log(`Render-structure check passed: ${drawGroups} draw groups`, byRoot);
 } finally {
   await server.close();

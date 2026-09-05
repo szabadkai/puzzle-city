@@ -6,8 +6,15 @@ export type ArcadeFeature = 'arcade row' | 'roof promenade';
 export type TerraceFeature = 'stepped terrace' | 'terraced garden' | 'lantern stair';
 export type RoofCourtFeature = 'rooftop court' | 'rooftop pavilion' | 'hanging roof garden';
 export type CourtyardFeature = 'courtyard garden' | 'cloister garden' | 'courtyard pavilion';
+export type VegetationPlotKind = 'herbs' | 'flowers' | 'sapling';
 export type GridDirection = 0 | 1 | 2 | 3;
 export type GridPoint = Readonly<{ x: number; z: number }>;
+export type VegetationPlotFeature = Readonly<{
+  owner: Cell;
+  direction: GridDirection;
+  kind: VegetationPlotKind;
+  delayHours: number;
+}>;
 
 type CellMap = ReadonlyMap<string, Cell>;
 
@@ -128,6 +135,31 @@ export function courtyardFeature(x: number, z: number, cells: CellMap): Courtyar
   if (lowestWall >= 3) return 'courtyard pavilion';
   if (lowestWall >= 2) return 'cloister garden';
   return 'courtyard garden';
+}
+
+/**
+ * Some exposed homes slowly claim a neighboring water edge for a small garden.
+ * The rule is local and seed-stable, so edits only need to rebuild the same
+ * three-by-three neighborhood as the rest of the procedural architecture.
+ */
+export function vegetationPlotFeature(x: number, z: number, cells: CellMap, seed: number): VegetationPlotFeature | null {
+  if (cells.has(keyOf(x, z))) return null;
+  const neighbors = CARDINALS
+    .map(([dx, dz], direction) => ({ owner: cells.get(keyOf(x - dx, z - dz)), direction: direction as GridDirection }))
+    .filter((candidate): candidate is { owner: Cell; direction: GridDirection } => Boolean(candidate.owner));
+  // Keep crossings, courtyards, and shared passages clear. These plots belong
+  // to a single exposed façade, rather than filling every gap in a cluster.
+  if (neighbors.length !== 1) return null;
+  const { owner, direction } = neighbors[0];
+  const chance = hash(seed, owner.x, owner.z, 3300 + direction);
+  if (chance >= .42) return null;
+  const variety = hash(seed, owner.x, owner.z, 3340 + direction);
+  return Object.freeze({
+    owner,
+    direction,
+    kind: variety < .4 ? 'herbs' : variety < .75 ? 'flowers' : 'sapling',
+    delayHours: 18 + Math.floor(hash(seed, owner.x, owner.z, 3380 + direction) * 31),
+  });
 }
 
 /** Opposing buildings progressively turn a water lane into an arch, bridge, then roofed skybridge. */

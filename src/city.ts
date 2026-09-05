@@ -9,7 +9,9 @@ import { hasDock, hasWaterStairs } from './water';
 import {
   arcadeFeature, courtyardFeature, emptyCrossingFeature, isRoofAccessCell, isWalkableRoof,
   roofAccessDirection, roofCourtAnchor, roofCourtFeature, steppedTerrace,
+  vegetationPlotFeature,
   type CourtyardFeature, type EmptyArchitectureFeature, type RoofCourtFeature, type TerraceFeature,
+  type VegetationPlotFeature,
 } from './architecture';
 
 const CELL = 2.45;
@@ -338,6 +340,19 @@ export class CityRenderer {
         const shadeSeats = group.userData.shadeSeats as THREE.Object3D | undefined;
         if (shadeSeats) shadeSeats.visible = progress > .82;
       }
+      const plotBornAt = group.userData.vegetationPlotBornAt as number | undefined;
+      if (plotBornAt !== undefined) {
+        const plotAge = absoluteHours - plotBornAt;
+        const stage = plotAge < 0 ? 0 : plotAge < 24 ? 1 : plotAge < 60 ? 2 : 3;
+        if (group.userData.vegetationStage !== stage) {
+          group.userData.vegetationStage = stage;
+          for (const child of group.children) {
+            const requiredStage = child.userData.vegetationStage as number | undefined;
+            if (requiredStage !== undefined) child.visible = requiredStage <= stage;
+          }
+          staticBatchChanged = true;
+        }
+      }
       const patina = group.userData.patina as THREE.Object3D[] | undefined;
       if (patina?.length) {
         for (const stain of patina) {
@@ -462,6 +477,15 @@ export class CityRenderer {
   matureTreeAnchors(absoluteHours: number) {
     const anchors: THREE.Vector3[] = [];
     for (const group of this.pieces.values()) {
+      const architecturalTrees = group.userData.architecturalTrees as Array<{ x: number; y: number; z: number }> | undefined;
+      for (const tree of architecturalTrees ?? []) {
+        anchors.push(new THREE.Vector3(group.position.x + tree.x, tree.y, group.position.z + tree.z));
+      }
+      const plotTree = group.userData.vegetationTreeAnchor as { x: number; y: number; z: number } | undefined;
+      const plotBornAt = group.userData.vegetationPlotBornAt as number | undefined;
+      if (plotTree && plotBornAt !== undefined && absoluteHours - plotBornAt >= 60) {
+        anchors.push(new THREE.Vector3(group.position.x + plotTree.x, plotTree.y, group.position.z + plotTree.z));
+      }
       if (!group.userData.growingTree) continue;
       if (ageInHours(group.userData.treeBornAt as number | undefined, absoluteHours) < TREE_MATURE_HOURS) continue;
       anchors.push(new THREE.Vector3(group.position.x + .34, 1.24, group.position.z + .12));
@@ -510,7 +534,7 @@ export class CityRenderer {
       this.buildAt(cell.x, cell.z);
     }
     for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
-      if (!this.get(x, z) && this.emptyFeature(x, z)) this.buildAt(x, z);
+      if (!this.get(x, z) && this.shouldBuildEmptyAt(x, z)) this.buildAt(x, z);
     }
     this.rebuildGlobalStaticBatch();
   }
@@ -531,7 +555,7 @@ export class CityRenderer {
       // depend on local topology, but only the edited tile should replay the
       // construction morph. Animating every regenerated neighbor makes stable
       // houses appear to collapse and gain a level at random.
-      if (this.get(px, pz) || this.emptyFeature(px, pz)) this.buildAt(px, pz, px === x && pz === z);
+      if (this.get(px, pz) || this.shouldBuildEmptyAt(px, pz)) this.buildAt(px, pz, px === x && pz === z);
     }
     this.rebuildGlobalStaticBatch();
   }
@@ -548,7 +572,7 @@ export class CityRenderer {
     // Business and wear changes replace the mesh without changing its height.
     // Keep the established building at full scale instead of replaying the
     // construction animation whenever that background state changes.
-    if (this.get(x, z) || this.emptyFeature(x, z)) this.buildAt(x, z);
+    if (this.get(x, z) || this.shouldBuildEmptyAt(x, z)) this.buildAt(x, z);
     this.rebuildGlobalStaticBatch();
   }
 
@@ -575,7 +599,8 @@ export class CityRenderer {
       if (!(child instanceof THREE.Mesh) || child.name === 'flag' || child.name.startsWith('laundry-') || child.name.startsWith('patina-')) continue;
       if (Array.isArray(child.material)) continue;
       this.applyVertexBatchMaterial(child);
-      const key = `${child.material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
+      const vegetationStage = child.userData.vegetationStage as number | undefined;
+      const key = `${child.material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}:${vegetationStage ?? '-'}`;
       const bucket = buckets.get(key) ?? [];
       bucket.push(child);
       buckets.set(key, bucket);
@@ -595,6 +620,8 @@ export class CityRenderer {
       const merged = new THREE.Mesh(mergedGeometry, meshes[0].material);
       merged.castShadow = meshes[0].castShadow;
       merged.receiveShadow = meshes[0].receiveShadow;
+      merged.visible = meshes[0].visible;
+      if (meshes[0].userData.vegetationStage !== undefined) merged.userData.vegetationStage = meshes[0].userData.vegetationStage;
       for (const mesh of meshes) {
         group.remove(mesh);
         mesh.geometry.dispose();
@@ -1494,11 +1521,35 @@ export class CityRenderer {
     const planter = shadow(new THREE.Mesh(new RoundedBoxGeometry(.82, .24, .56, 2, .05), this.stone));
     planter.position.set(-.3, y + .12, .1);
     group.add(planter);
-    for (let i = 0; i < 3; i++) {
+    this.addArchitecturalTree(group, -.3, .1, y + .24, .72, 'rooftop');
+    for (let i = 0; i < 2; i++) {
       const plant = shadow(new THREE.Mesh(new THREE.SphereGeometry(.17 + hash(this.seed, cell.x, cell.z, 300 + i) * .08, 7, 5), this.green));
-      plant.position.set(-.56 + i * .27, y + .35, .1);
+      plant.position.set(-.57 + i * .54, y + .35, .1);
       group.add(plant);
     }
+  }
+
+  private addArchitecturalTree(group: THREE.Group, x: number, z: number, baseY: number, scale: number, habitat: 'plaza' | 'rooftop') {
+    const trunkHeight = .72 * scale;
+    const trunk = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.065 * scale, .1 * scale, trunkHeight, 7), this.wood));
+    trunk.position.set(x, baseY + trunkHeight / 2, z);
+    group.add(trunk);
+    for (let index = 0; index < 3; index++) {
+      const angle = index * Math.PI * 2 / 3 + hash(this.seed, group.userData.cellX as number, group.userData.cellZ as number, 2310) * Math.PI;
+      const crown = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry((.29 + index % 2 * .045) * scale, 1), this.leaf));
+      crown.position.set(
+        x + Math.cos(angle) * .19 * scale,
+        baseY + trunkHeight + (.12 + index % 2 * .16) * scale,
+        z + Math.sin(angle) * .19 * scale,
+      );
+      group.add(crown);
+      if (this.discoveries.has('blossom-tide') && index === 1) {
+        const blooms = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.13 * scale, 1), this.blossom), false);
+        blooms.position.copy(crown.position).add(new THREE.Vector3(.1 * scale, .12 * scale, -.06 * scale));
+        group.add(blooms);
+      }
+    }
+    (group.userData.architecturalTrees ??= []).push({ x, y: baseY + .06, z, habitat });
   }
 
   private addHerbPots(group: THREE.Group, y: number, cell: Cell) {
@@ -1568,12 +1619,68 @@ export class CityRenderer {
     return emptyCrossingFeature(x, z, this.cells);
   }
 
+  private vegetationPlot(x: number, z: number) {
+    return this.isBuildable(x, z) ? vegetationPlotFeature(x, z, this.cells, this.seed) : null;
+  }
+
+  private shouldBuildEmptyAt(x: number, z: number) {
+    return Boolean(this.emptyFeature(x, z) || this.vegetationPlot(x, z));
+  }
+
   private buildFeature(group: THREE.Group, x: number, z: number) {
     const feature = this.emptyFeature(x, z);
     if (feature === 'harbor plaza') this.buildPlaza(group, x, z);
     else if (feature?.includes('courtyard') || feature === 'cloister garden') this.buildCourtyard(group, x, z, feature as CourtyardFeature);
     else if (feature === 'narrow canal') this.buildCanal(group, x, z);
     else if (feature) this.buildCrossing(group, x, z, feature as EmptyArchitectureFeature);
+    else {
+      const plot = this.vegetationPlot(x, z);
+      if (plot) this.buildVegetationPlot(group, plot);
+    }
+  }
+
+  private buildVegetationPlot(group: THREE.Group, plot: VegetationPlotFeature) {
+    const [dx, dz] = CARDINALS[plot.direction];
+    const lateral = new THREE.Vector3(dz, 0, -dx);
+    const centerX = -dx * .54;
+    const centerZ = -dz * .54;
+    const addAtStage = (mesh: THREE.Mesh, stage: number) => {
+      mesh.userData.vegetationStage = stage;
+      mesh.visible = false;
+      group.add(mesh);
+      return mesh;
+    };
+
+    const ledge = shadow(new THREE.Mesh(new RoundedBoxGeometry(plot.direction % 2 ? .92 : 1.48, .16, plot.direction % 2 ? 1.48 : .92, 3, .08), this.stone));
+    ledge.position.set(centerX, .04, centerZ);
+    addAtStage(ledge, 1);
+    const soil = shadow(new THREE.Mesh(new RoundedBoxGeometry(plot.direction % 2 ? .7 : 1.24, .11, plot.direction % 2 ? 1.24 : .7, 3, .07), this.green), false);
+    soil.position.set(centerX, .17, centerZ);
+    addAtStage(soil, 1);
+
+    const rows = plot.kind === 'sapling' ? 2 : 5;
+    for (let index = 0; index < rows; index++) {
+      const side = rows === 2 ? (index ? .38 : -.38) : (index - 2) * .2;
+      const plant = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(plot.kind === 'flowers' ? .12 : .15, 0), plot.kind === 'flowers' && index % 2 === 0 ? this.blossom : this.leaf), false);
+      plant.position.set(centerX + lateral.x * side, .3 + index % 2 * .035, centerZ + lateral.z * side);
+      addAtStage(plant, 2);
+    }
+
+    if (plot.kind === 'sapling') {
+      const trunk = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.055, .085, .68, 7), this.wood));
+      trunk.position.set(centerX, .56, centerZ);
+      addAtStage(trunk, 3);
+      for (let index = 0; index < 3; index++) {
+        const angle = index * Math.PI * 2 / 3 + hash(this.seed, plot.owner.x, plot.owner.z, 3420) * Math.PI;
+        const crown = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.3 + index % 2 * .04, 1), this.leaf));
+        crown.position.set(centerX + Math.cos(angle) * .18, .98 + index % 2 * .15, centerZ + Math.sin(angle) * .18);
+        addAtStage(crown, 3);
+      }
+      group.userData.vegetationTreeAnchor = { x: centerX, y: .28, z: centerZ };
+    }
+    group.userData.vegetationPlotBornAt = (plot.owner.foundedAt ?? 0) + plot.delayHours;
+    group.userData.vegetationPlotKind = plot.kind;
+    group.userData.vegetationStage = -1;
   }
 
   private buildCanal(group: THREE.Group, x: number, z: number) {
@@ -1605,6 +1712,18 @@ export class CityRenderer {
       const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.07, .1, .65, 9), this.stone));
       post.position.set(CELL / 2, .62, CELL / 2);
       group.add(basin, water, post);
+    }
+    const relativeX = x - anchor.x;
+    const relativeZ = z - anchor.z;
+    if (relativeX === relativeZ) {
+      const treeX = relativeX === 0 ? -.72 : .72;
+      const treeZ = relativeZ === 0 ? -.72 : .72;
+      const planter = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.34, .4, .18, 12), this.stoneDark));
+      planter.position.set(treeX, .27, treeZ);
+      const soil = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.3, .3, .025, 12), this.green), false);
+      soil.position.set(treeX, .372, treeZ);
+      group.add(planter, soil);
+      this.addArchitecturalTree(group, treeX, treeZ, .385, 1.08, 'plaza');
     }
   }
 

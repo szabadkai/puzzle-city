@@ -18,12 +18,13 @@ This repository is complete through **Milestone 5**, the final milestone in the 
    - Businesses close or are reassigned when edits invalidate their site or owner.
 4. **GROW discoveries**
    - Pure declarative condition trees evaluate cloned, read-only snapshots of topology, population, time, businesses, relationships, and prior discoveries.
-   - Forty-three stable, chained one-shot event IDs commit through narrow city, business, citizen, ambience, and presentation effects.
-   - Five recurring, cooldown-backed observations turn regular customers, dawn fishing crews, bird-feeding children, waterfront elders, and familiar restaurant tables into persistent daily patterns.
-   - Discoveries add a restrained world glimmer, resident reaction, caption and sound, then persist an illustrated observation in the harbor journal.
+   - Forty-seven stable, chained one-shot event IDs commit through narrow city, business, citizen, wildlife, ambience, and presentation effects.
+   - Six recurring, cooldown-backed observations turn regular customers, dawn fishing crews, bird-feeding children, waterfront elders, familiar restaurant tables, and the harbor cats’ breakfast into persistent daily patterns without adding duplicate journal entries.
+   - Discoveries add a restrained world glimmer, resident reaction, caption and sound, then persist their first illustrated observation in the harbor journal.
 5. **Polish and quiet finale**
    - A rowboat, fishing boat, merchant boat, and ferry follow separate deterministic routes rebuilt from the occupied shoreline after every edit. Docks, canals, sheltered water, occupations, businesses, and discoveries determine which vessels appear.
    - Rooftop planting, gulls, blossom, fireflies, festival ribbons, a traveler, rare tree, nest, clock tower, local lantern lights, and a quiet finale emerge through chained discoveries.
+   - Stateful gulls fly, perch, feed, and scatter from construction; fish school in sheltered water; crabs patrol docks; cats wander outside fishmongers and inns; and butterflies circle sheltered gardens.
    - Spatially bucketed relationship checks are capped per tick, and established friends pause for shared meals, harbor news, evening walks, and other joint routines.
    - Layered procedural cues cover water, gulls, footsteps, construction, doors, chatter, bells, horns, insects, and the finale without starting ambient playback before the player has interacted.
    - Press `G` for a developer panel showing snapshot totals, citizen and business state, selected topology, event eligibility, recent effects, nav visualization, event forcing, citizen spawning, and time advancement.
@@ -36,8 +37,9 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 - `src/city.ts` — sparse cell model, procedural architecture/storefront generation, local topology rebuilds, and static geometry batching.
 - `src/citizens.ts` — navigation graph, A* routing, resident lifecycle, routines, relationships, business visits, and citizen rendering.
 - `src/businesses.ts` — business recipes, emergence thresholds, scoring, opening hours, ownership, and validity maintenance.
-- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, 43 one-shot discoveries, and five recurring moments.
+- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, 47 one-shot discoveries, and six recurring moments.
 - `src/harbor.ts` — shoreline-derived boat routes, boats, birds, clouds, stars, blossom particles, and evening fireflies.
+- `src/fauna.ts` — deterministic habitat derivation, low-poly wildlife models, and fly/feed/perch/scatter/swim/wander behavior.
 - `src/water.ts` — shared deterministic shoreline, dock, canal, sheltered-water, and route derivation.
 - `src/topology.ts` — shared multi-cell plaza recognition.
 - `src/types.ts` — saved-world and shared domain types.
@@ -48,15 +50,15 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 
 ## Persistence and compatibility
 
-The town is stored in `localStorage` under `little-tides-town-v1`. The current payload is save version 4 and includes:
+The town is stored in `localStorage` under `little-tides-town-v1`. The current payload is save version 5 and includes:
 
 - the deterministic world seed and sparse cell array;
 - day and time-of-day;
 - citizens, homes, household/age roles, visitor status, positions and optional bridge elevation, traits, occupations, relationships, favorite shops, and visit histories;
 - businesses, sites, owners, employees, popularity, names, types, and opening times.
-- discovered stable event IDs and illustrated journal entries.
+- discovered stable event IDs, illustrated journal entries, and recurring-event cooldown timestamps.
 
-`SavedTown` accepts versions 1, 2, 3, and 4, and all fields added after version 1 are optional. Existing towns discover any currently satisfied observations gradually after loading. Preserve that additive migration behavior when extending the schema. The in-game **New tide** action clears the existing local save.
+`SavedTown` accepts versions 1 through 5, and all fields added after version 1 are optional. Existing towns discover any currently satisfied observations gradually after loading; repeated journal entries from older saves are compacted on load. Preserve that additive migration behavior when extending the schema. The in-game **New tide** action clears the existing local save.
 
 ## Performance baseline
 

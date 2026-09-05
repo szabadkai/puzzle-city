@@ -8,9 +8,9 @@ Every accessible home attracts a named resident. Taller homes support small hous
 
 As the population grows, residents may quietly turn their ground floor into a bakery, café, flower shop, workshop, bookstore, fishmonger, restaurant, tea house, inn, or pottery studio. Each has its own storefront details and opening hours. Repeat customers can become regulars, and a nearby adult regular may eventually stay on as a helper.
 
-The town also keeps an observation journal. Forty-three quiet one-shot discoveries connect its architecture, water topology, working boats, residents, friendships, time of day, businesses, gardens, wildlife, a mysterious traveler, and a lantern-lit finale. Five cooldown-backed moments can recur on later days as the town settles into recognizable habits. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
+The town also keeps an observation journal. Forty-seven quiet one-shot discoveries connect its architecture, water topology, working boats, residents, friendships, time of day, businesses, gardens, wildlife, a mysterious traveler, and a lantern-lit finale. Six cooldown-backed moments can recur on later days as the town settles into recognizable habits, but each earns only one journal entry. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
 
-Rowboats trace the changing shoreline; docks can lead to fishing, merchant arrivals, and a last ferry. Friends pause for shared meals and conversations, courtyard cuttings spread to rooftop pots, and the harbor gradually gathers gulls, blossom, festival ribbons, fireflies, and lantern light. A hidden late-game chain brings a traveler, rare tree, bird nest, clock tower, coordinated gathering, floating lanterns, and fireworks without ending the sandbox.
+Rowboats trace the changing shoreline; docks can lead to fishing, merchant arrivals, and a last ferry. Friends pause for shared meals and conversations, courtyard cuttings spread to rooftop pots, and the harbor gradually gathers circling and feeding gulls, sheltered-water fish, dock crabs, harbor cats, garden butterflies, blossom, festival ribbons, fireflies, and lantern light. Wildlife perches, feeds, wanders, swims, and scatters when construction disturbs it. A hidden late-game chain brings a traveler, rare tree, bird nest, clock tower, coordinated gathering, floating lanterns, and fireworks without ending the sandbox.
 
 ## Controls
 
@@ -19,6 +19,7 @@ Rowboats trace the changing shoreline; docks can lead to fishing, merchant arriv
 - Click and drag: move the view
 - Middle or right drag: orbit
 - Mouse wheel: zoom
+- Touch: one-finger drag orbits; two-finger drag moves; pinch zooms
 - J: open or close the observation journal
 - P: toggle the performance overlay
 - G: toggle the GROW developer inspector (including nav visualization, event forcing, citizen spawning, and time controls)

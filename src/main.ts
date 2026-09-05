@@ -43,12 +43,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </dl>
       <p class="card-relationship" id="citizen-relationship"></p>
     </aside>
-    <div class="recipe-note" id="note"><strong>Harbor notebook</strong><span>Click the water. Old walls and new stories will find their own shape.</span></div>
     <div class="hint" id="hint">
       <span class="desktop-hint"><i class="mouse"></i> click to build</span>
       <span class="desktop-hint">right-click to remove</span>
       <span class="desktop-hint">drag to move · right-drag to orbit · scroll to zoom</span>
-      <span class="touch-hint">Tap the water to build · drag to move · pinch to zoom</span>
+      <span class="touch-hint">Tap to build · drag to orbit · two fingers to move or zoom</span>
     </div>
     <nav class="mobile-controls" aria-label="Touch controls">
       <button class="touch-action active" data-touch-mode="build" aria-pressed="true">
@@ -71,8 +70,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <h2 id="touch-guide-title">Shape the harbor by touch</h2>
         <div class="gesture-list">
           <div><span class="gesture-icon" aria-hidden="true">☝</span><p><strong>Tap</strong> the water to build. Tap a resident to meet them.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to move around your town.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Pinch</strong> with two fingers to zoom and move the view.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to orbit around your town.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Drag</strong> with two fingers to move the view, or pinch to zoom.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">−</span><p>Choose <strong>Remove</strong>, then tap a building to take down one floor.</p></div>
         </div>
         <button class="guide-done" id="touch-guide-done">Got it</button>
@@ -135,7 +134,7 @@ controls.target.set(0, 1.3, 0);
 controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
 controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
 controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
-controls.touches.ONE = THREE.TOUCH.PAN;
+controls.touches.ONE = THREE.TOUCH.ROTATE;
 controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
 
 const hemi = new THREE.HemisphereLight(0xffe8bd, 0x315f63, 2.25);
@@ -212,9 +211,13 @@ const businesses = new BusinessSystem(seed, saved?.businesses ?? []);
 businesses.maintain(citizens.residents(), city.cells);
 city.setBusinesses(businesses.all());
 citizens.setBusinesses(businesses.all());
-const grow = new GrowSystem(DISCOVERY_EVENTS, saved?.discoveries ?? [], saved?.journal ?? [], commitDiscoveryEffect);
-const lastJournalEntry = grow.entries().at(-1);
-if (lastJournalEntry) setNote(lastJournalEntry.note);
+const grow = new GrowSystem(
+  DISCOVERY_EVENTS,
+  saved?.discoveries ?? [],
+  saved?.journal ?? [],
+  saved?.eventLastTriggeredAt ?? {},
+  commitDiscoveryEffect,
+);
 city.setDiscoveryState(grow.discoveredIds());
 citizens.setDiscoveries(grow.discoveredIds());
 
@@ -392,6 +395,7 @@ function build(x: number, z: number) {
   }
   const after = city.topologyLabel(x, z);
   citizens.rebuild(city.cells);
+  ambience.scatterWildlife(x, z);
   refreshAmbience();
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), false);
   performanceWarmup = 0;
@@ -407,6 +411,7 @@ function build(x: number, z: number) {
 function demolish(x: number, z: number) {
   if (!city.remove(x, z)) return;
   citizens.rebuild(city.cells);
+  ambience.scatterWildlife(x, z);
   refreshAmbience();
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), true);
   performanceWarmup = 0;
@@ -425,7 +430,7 @@ function persistSoon() {
 
 function saveTown() {
   const data: SavedTown = {
-    version: 4,
+    version: 5,
     seed,
     cells: city.serialize(),
     timeOfDay,
@@ -434,6 +439,7 @@ function saveTown() {
     businesses: businesses.serialize(),
     discoveries: grow.discoveredIds(),
     journal: grow.entries(),
+    eventLastTriggeredAt: grow.recurringTriggerTimes(),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
@@ -441,7 +447,7 @@ function saveTown() {
 function loadTown(): SavedTown | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedTown | null;
-    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 ? parsed : null;
+    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 || parsed?.version === 5 ? parsed : null;
   } catch {
     return null;
   }
@@ -453,10 +459,6 @@ function showToast(message: string) {
   toast.classList.add('show');
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2200);
-}
-
-function setNote(message: string) {
-  document.querySelector<HTMLSpanElement>('#note span')!.textContent = message;
 }
 
 function currentSnapshot() {
@@ -506,13 +508,16 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
     else if (focus) citizens.gatherAt(focus.x, focus.z, effect.activity);
     return;
   }
+  if (effect.kind === 'wildlife') {
+    ambience.wildlifeEffect(effect.action, effect.animal, focus);
+    return;
+  }
   if (effect.kind === 'ambience') {
     refreshAmbience();
     if (effect.action === 'celebrate') playCue('celebration');
     return;
   }
   showToast(effect.caption);
-  setNote(discovery.entry.note);
   if (focus) controls.target.lerp(city.worldPosition(focus.x, focus.z).setY(1), .14);
   const tones = {
     stone: [310, 430],
@@ -544,7 +549,8 @@ function updateGrowInspector() {
   const fleet = ambience.activeFleet();
   const selected = hoveredCell ? `${hoveredCell.x},${hoveredCell.z}: ${city.topologyLabel(hoveredCell.x, hoveredCell.z)}` : 'none';
   const nav = citizens.navStats();
-  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · fleet: ${fleet.join(', ') || 'none'} · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
+  const fauna = ambience.wildlifeStats();
+  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · fleet: ${fleet.join(', ') || 'none'} · fauna: ${fauna.birds} birds, ${fauna.gulls} gulls (${fauna.gullModes.flying} flying/${fauna.gullModes.feeding} feeding/${fauna.gullModes.perching} perched/${fauna.gullModes.scattering} scattering), ${fauna.fish} fish, ${fauna.crabs} crabs, ${fauna.cats} cats, ${fauna.butterflies} butterflies · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
   const eligibleTitle = document.createElement('span');
   eligibleTitle.textContent = 'Eligible next';
   const eligibleList = document.createElement('p');
@@ -563,7 +569,7 @@ function updateGrowInspector() {
   effects.textContent = committedEffects.length ? committedEffects.join('\n') : 'none this session';
   const controls = document.createElement('div');
   controls.className = 'grow-tools';
-  controls.innerHTML = `<button data-grow-action="nav">${navDebugVisible ? 'Hide' : 'Show'} nav</button><button data-grow-action="spawn">Spawn citizen</button><button data-grow-action="hour">+1 hour</button>`;
+  controls.innerHTML = `<button data-grow-action="nav">${navDebugVisible ? 'Hide' : 'Show'} nav</button><button data-grow-action="spawn">Spawn citizen</button><button data-grow-action="fauna">Scatter fauna</button><button data-grow-action="hour">+1 hour</button>`;
   const select = document.createElement('select');
   select.setAttribute('aria-label', 'Discovery to force');
   for (const event of events) {
@@ -742,13 +748,11 @@ function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
   }
   if (announce && update.closed[0]) {
     showToast(`${update.closed[0].name} has quietly closed its shutters.`);
-    setNote(`The sign at ${update.closed[0].name} has come down. Perhaps another door will open elsewhere.`);
   }
   if (announce && update.hired[0]) {
     const hire = update.hired[0];
     const citizen = citizens.card(hire.citizenId);
     showToast(`${citizen?.name ?? 'A neighbor'} has begun helping at ${hire.business.name}.`);
-    setNote(`A familiar customer crossed the threshold at ${hire.business.name} and stayed to help.`);
     playCue('door');
   }
   persistSoon();
@@ -892,6 +896,10 @@ document.querySelector('#grow-inspector')!.addEventListener('click', (event) => 
     showToast(id ? 'A developer-spawned citizen has arrived.' : 'Build a home before spawning a citizen.');
     refreshAmbience();
     persistSoon();
+  } else if (action === 'fauna') {
+    const focus = hoveredCell ?? { x: 0, z: 0 };
+    ambience.scatterWildlife(focus.x, focus.z);
+    showToast('The harbor wildlife scatters, then settles again.');
   } else if (action === 'hour') {
     timeOfDay += 1;
     if (timeOfDay >= 24) { timeOfDay %= 24; day += 1; }
@@ -985,7 +993,6 @@ function animate() {
   if (timeOfDay >= 24) {
     timeOfDay %= 24;
     day += 1;
-    setNote('Another day has folded itself into the harbor. The routines remain, but never quite repeat.');
   }
   const absoluteHours = day * 24 + timeOfDay;
   const currentHour = Math.floor(absoluteHours);
@@ -1037,7 +1044,7 @@ function animate() {
     updateGrowInspector();
     inspectorElapsed = 0;
   }
-  ambience.update(time, daylight);
+  ambience.update(time, daylight, timeOfDay, absoluteHours);
   clockUpdate += delta;
   autosaveElapsed += delta;
   if (clockUpdate > .25) {

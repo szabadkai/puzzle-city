@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { BusinessSave, Cell, CitizenSave } from './types';
 import { hash } from './random';
 import { analyzeWaterTopology, createShorelineRoute, type WaterTopology } from './water';
+import { FaunaSystem, type WildlifeAction, type WildlifeKind } from './fauna';
 
 export function createWaterRoute(cells: Iterable<Cell>, seed: number, lane = 0) {
   return createShorelineRoute(cells, seed, lane);
@@ -21,8 +22,7 @@ type BoatActor = {
 export class HarborAmbience {
   readonly root = new THREE.Group();
   private readonly fleet: BoatActor[] = [];
-  private readonly birds = new THREE.Group();
-  private readonly gulls = new THREE.Group();
+  private readonly fauna: FaunaSystem;
   private readonly clouds = new THREE.Group();
   private readonly petals: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly fireflies: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
@@ -40,8 +40,9 @@ export class HarborAmbience {
   constructor(private readonly seed: number, camera: THREE.Camera, cells: Iterable<Cell>) {
     this.root.name = 'harbor-ambience';
     this.createFleet();
+    this.fauna = new FaunaSystem(seed);
+    this.root.add(this.fauna.root);
     this.setTown(cells);
-    this.createBirds();
     this.createClouds();
     this.createStars();
     this.petals = this.createParticles(42, 0xf1a8ad, .1, 1700);
@@ -75,12 +76,13 @@ export class HarborAmbience {
     this.citizens = citizens.map((citizen) => ({ ...citizen, traits: [...citizen.traits], relationships: [...citizen.relationships] }));
     this.topology = analyzeWaterTopology(this.cells, this.seed);
     this.fleet.forEach((boat, index) => { boat.route = createWaterRoute(this.cells, this.seed, index * .42); });
+    this.fauna.setTown(this.cells, this.businesses);
     this.refreshFleetVisibility();
   }
 
   setDiscoveryState(discoveries: readonly string[]) {
     this.discoveries = new Set(discoveries);
-    this.gulls.visible = this.discoveries.has('gulls-return');
+    this.fauna.setDiscoveryState(discoveries);
     this.petals.visible = this.discoveries.has('blossom-tide');
     this.fireflies.visible = this.discoveries.has('evening-chorus');
     this.floatingLanterns.visible = this.discoveries.has('lantern-finale');
@@ -92,7 +94,15 @@ export class HarborAmbience {
 
   activeFleet() { return this.fleet.filter((boat) => boat.model.visible).map((boat) => boat.kind); }
 
-  update(time: number, daylight: number) {
+  wildlifeStats() { return this.fauna.stats(); }
+
+  wildlifeEffect(action: WildlifeAction, animal: WildlifeKind, focus?: { x: number; z: number } | null) {
+    this.fauna.apply(action, animal, focus);
+  }
+
+  scatterWildlife(x: number, z: number) { this.fauna.scatterAt(x, z); }
+
+  update(time: number, daylight: number, timeOfDay: number, absoluteHours: number) {
     for (const boat of this.fleet) {
       if (!boat.model.visible) continue;
       const progress = (time * boat.speed + boat.phase) % 1;
@@ -100,16 +110,12 @@ export class HarborAmbience {
       const tangent = boat.route.getTangentAt(progress);
       boat.model.position.copy(point);
       boat.model.position.y += Math.sin(time * boat.bobSpeed + boat.phase * 8) * .055;
-      boat.model.rotation.y = Math.atan2(tangent.x, tangent.z);
+      // Hulls are modeled lengthwise on local X, so offset Three's +Z-style heading
+      // by a quarter turn. Without this, the fleet travels broadside along its route.
+      boat.model.rotation.y = Math.atan2(tangent.x, tangent.z) - Math.PI / 2;
       boat.model.rotation.z = Math.sin(time * boat.bobSpeed * .78 + boat.phase * 5) * .028;
     }
-    const birdAngle = time * .085;
-    this.birds.position.set(Math.cos(birdAngle) * 9, 7.5 + Math.sin(time * .35), Math.sin(birdAngle) * 9);
-    this.birds.rotation.y = -birdAngle;
-    this.birds.children.forEach((bird, index) => { bird.rotation.z = Math.sin(time * 5 + index) * .22; });
-    const gullAngle = time * .055;
-    this.gulls.position.set(Math.cos(gullAngle) * 12, 3.2 + Math.sin(time * .4) * .6, Math.sin(gullAngle) * 10);
-    this.gulls.rotation.y = -gullAngle;
+    this.fauna.update(time, daylight, timeOfDay, absoluteHours);
     this.clouds.position.x = Math.sin(time * .018) * 2.5;
     this.cloudMaterial.opacity = .12 + daylight * .32;
     this.starMaterial.opacity = Math.pow(1 - daylight, 2) * (.62 + Math.sin(time * .7) * .08);
@@ -235,27 +241,6 @@ export class HarborAmbience {
     }
     boat.scale.setScalar(1.12);
     return boat;
-  }
-
-  private createBirds() {
-    const birdMaterial = new THREE.MeshBasicMaterial({ color: 0x47676b, side: THREE.DoubleSide });
-    for (let index = 0; index < 7; index++) {
-      const bird = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(-.18, 0, 0), new THREE.Vector3(0, -.06, 0), new THREE.Vector3(.18, 0, 0),
-      ]), birdMaterial);
-      bird.position.set(index * .6, Math.sin(index) * .34, Math.cos(index * 2) * .5);
-      this.birds.add(bird);
-    }
-    const gullMaterial = new THREE.MeshBasicMaterial({ color: 0xe8e2cf, side: THREE.DoubleSide });
-    for (let index = 0; index < 5; index++) {
-      const gull = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(-.22, 0, 0), new THREE.Vector3(0, -.08, 0), new THREE.Vector3(.22, 0, 0),
-      ]), gullMaterial);
-      gull.position.set((index - 2) * .7, Math.sin(index * 2) * .25, Math.cos(index) * .55);
-      this.gulls.add(gull);
-    }
-    this.gulls.visible = false;
-    this.root.add(this.birds, this.gulls);
   }
 
   private createClouds() {

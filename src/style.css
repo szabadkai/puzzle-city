@@ -215,22 +215,6 @@ button:active { transform: translateY(1px); }
 .grow-tools select { grid-column: span 2; }
 .grow-tools button:hover { background: rgba(255,217,148,.16); }
 
-.recipe-note {
-  position: absolute;
-  right: 24px;
-  bottom: 26px;
-  width: 190px;
-  padding: 14px 16px;
-  border-radius: 12px 12px 12px 3px;
-  background: rgba(236,218,178,.82);
-  box-shadow: 0 12px 35px rgba(41,68,63,.09);
-  transform: rotate(-1deg);
-  color: rgba(45,51,41,.76);
-  font: 13px/1.45 'Fraunces', serif;
-  transition: opacity .4s;
-}
-.recipe-note strong { display: block; color: #a8463e; margin-bottom: 3px; font-family: 'DM Sans'; font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; }
-
 .journal-scrim {
   position: absolute;
   inset: 0;
@@ -372,7 +356,6 @@ button:active { transform: translateY(1px); }
   .top-actions #center { display: none; }
   .citizen-card { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 72px); }
   .hint { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 75px); }
-  .recipe-note { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 76px); }
   .mobile-controls,
   .hint { transition: opacity .18s ease, transform .18s ease; }
   .hud.touch-guide-open .mobile-controls,
@@ -451,7 +434,6 @@ button:active { transform: translateY(1px); }
   .perf-panel { top: 112px; left: 18px; }
   .grow-inspector { top: 142px; left: 18px; width: calc(100vw - 36px); max-height: 45vh; }
   .citizen-card { left: max(12px, env(safe-area-inset-left)); bottom: calc(max(10px, env(safe-area-inset-bottom)) + 72px); width: min(250px, calc(100vw - 24px)); }
-  .recipe-note { display: none; }
   .hint { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 75px); width: max-content; max-width: calc(100vw - 24px); justify-content: center; gap: 10px; font-size: 10px; text-align: center; }
   .touch-hint { white-space: normal !important; }
   .top-actions { top: max(15px, env(safe-area-inset-top)); right: max(15px, env(safe-area-inset-right)); }

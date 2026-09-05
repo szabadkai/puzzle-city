@@ -7,7 +7,7 @@ export type Cell = {
 };
 
 export type SavedTown = {
-  version: 1 | 2 | 3 | 4;
+  version: 1 | 2 | 3 | 4 | 5;
   seed: number;
   cells: Cell[];
   timeOfDay?: number;
@@ -16,6 +16,7 @@ export type SavedTown = {
   businesses?: BusinessSave[];
   discoveries?: string[];
   journal?: JournalEntry[];
+  eventLastTriggeredAt?: Record<string, number>;
 };
 
 export type JournalIllustration =

@@ -564,7 +564,9 @@ export class CitizenSystem {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
         target = businessVisit.target;
       } else {
-        citizen.activity = citizen.occupation === 'Fisher' ? 'checking the morning tide' : 'taking an early walk';
+        citizen.activity = citizen.occupation === 'Fisher'
+          ? this.discoveries.has('silver-shoal') ? 'following the silver shoal toward the nets' : 'checking the morning tide'
+          : 'taking an early walk';
         target = this.graph.randomNode(choice, from.key, (node) => Math.hypot(node.position.x, node.position.z) > 2);
       }
     } else if (hour < 12) {
@@ -584,9 +586,17 @@ export class CitizenSystem {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
         target = businessVisit.target;
       } else {
-        const friendVisit = citizen.traits.includes('quiet') ? null : this.chooseFriendVisit(citizen, choice, from.key);
-        citizen.activity = friendVisit ? `visiting ${friendVisit.friend.name} at home` : citizen.traits.includes('quiet') ? 'watching the harbor' : 'walking past the neighbors’ doors';
-        target = friendVisit?.target ?? this.graph.randomNode(choice, from.key);
+        const fishmonger = this.discoveries.has('harbor-cats') && (citizen.traits.includes('curious') || citizen.traits.includes('sociable')) && choice < .22
+          ? this.businesses.find((business) => business.type === 'fishmonger')
+          : undefined;
+        const catVisit = fishmonger ? this.graph.entrance(fishmonger.cellKey) : undefined;
+        const friendVisit = catVisit || citizen.traits.includes('quiet') ? null : this.chooseFriendVisit(citizen, choice, from.key);
+        citizen.activity = catVisit
+          ? 'stopping to greet the harbor cats'
+          : friendVisit
+            ? `visiting ${friendVisit.friend.name} at home`
+            : citizen.traits.includes('quiet') ? 'watching the harbor' : 'walking past the neighbors’ doors';
+        target = catVisit ?? friendVisit?.target ?? this.graph.randomNode(choice, from.key);
       }
     } else if (hour < 21) {
       if (businessVisit) {

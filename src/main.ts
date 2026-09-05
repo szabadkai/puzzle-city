@@ -5,10 +5,9 @@ import { CityRenderer, type CityMemoryInspection } from './city';
 import { CitizenSystem } from './citizens';
 import { BusinessSystem, type BusinessUpdate } from './businesses';
 import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryClue, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
-import { HarborAmbience } from './harbor';
+import { HarborAmbience, type HarborMemoryInspection } from './harbor';
 import { weatherAt, type TownMemorySnapshot } from './memory';
 import { CraftingSystem } from './crafting';
-import type { WildlifeMemoryInspection } from './fauna';
 import type { JournalEntry, JournalIllustration, SavedTown } from './types';
 import { FLOOR_HEIGHT } from './spatial';
 import { makeTidePostcard, readTidePostcard, TidePostcardError } from './tide-postcard';
@@ -33,11 +32,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button id="music-toggle" class="music-toggle" aria-label="Turn music off" aria-pressed="true"><span aria-hidden="true">♫</span></button>
     </div>
     <div class="top-actions">
-      <button id="journal-open" aria-label="Open observation journal"><span class="desktop-journal-label">Journal</span><span class="mobile-journal-label" aria-hidden="true">▤</span><span id="journal-count">0</span></button>
-      <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
-      <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
-      <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
-      <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
+      <button id="mobile-menu-toggle" class="mobile-menu-toggle" aria-label="Open town controls" aria-controls="top-actions-menu" aria-expanded="false"><span aria-hidden="true">☰</span></button>
+      <div class="top-actions-menu" id="top-actions-menu">
+        <button id="journal-open" aria-label="Open observation journal"><span class="desktop-journal-label">Journal</span><span class="mobile-journal-label" aria-hidden="true">▤</span><span id="journal-count">0</span></button>
+        <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
+        <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
+        <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
+        <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
+      </div>
     </div>
     <div class="toast" id="toast"></div>
     <div class="perf-panel" id="perf-panel">Performance</div>
@@ -100,7 +102,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to orbit around your town.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Drag</strong> with two fingers to move the view, or pinch to zoom.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">−</span><p>Choose <strong>Remove</strong>, then tap a building to take down one floor.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">◉</span><p>Choose <strong>Observe</strong> above, then tap a building, tree, animal, or resident to read its history.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">◉</span><p>Choose <strong>Observe</strong> above, then tap a building, tree, animal, boat, or resident to read its history.</p></div>
         </div>
         <button class="guide-done" id="touch-guide-done">Got it</button>
       </section>
@@ -338,7 +340,7 @@ let selectedCitizenId: string | null = null;
 let touchMode: 'build' | 'remove' = 'build';
 let followedThreadId: string | null = saved?.followedDiscoveryId ?? null;
 let observeMode = false;
-let selectedMemoryReader: (() => CityMemoryInspection | WildlifeMemoryInspection | null) | null = null;
+let selectedMemoryReader: (() => CityMemoryInspection | HarborMemoryInspection | null) | null = null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   activePointers.add(event.pointerId);
@@ -379,28 +381,25 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     return;
   }
   updateHover(event.clientX, event.clientY);
-  if (!hoveredCell) {
-    resetPointerGesture();
-    return;
-  }
   if (event.button === 0) {
-    if (touchMode === 'remove') {
+    if (touchMode === 'remove' && hoveredCell) {
       hideCitizenCard();
       demolish(hoveredCell.x, hoveredCell.z);
     } else if (!inspectCitizen(event.clientX, event.clientY)) {
       hideCitizenCard();
       if (observeMode) inspectTownMemory(event.clientX, event.clientY);
-      else {
+      else if (hoveredCell) {
         hideMemoryCard();
         build(hoveredCell.x, hoveredCell.z);
       }
     }
   }
-  if (event.button === 2) demolish(hoveredCell.x, hoveredCell.z);
+  if (event.button === 2 && hoveredCell) demolish(hoveredCell.x, hoveredCell.z);
   if (event.pointerType === 'touch') {
     hover.visible = false;
     hoveredCell = null;
     renderer.domElement.classList.remove('inspect-resident');
+    renderer.domElement.classList.remove('inspect-observable');
   }
   resetPointerGesture();
 });
@@ -415,6 +414,7 @@ renderer.domElement.addEventListener('pointerleave', () => {
   hover.visible = false;
   hoveredCell = null;
   renderer.domElement.classList.remove('inspect-resident');
+  renderer.domElement.classList.remove('inspect-observable');
   renderer.domElement.classList.remove('dragging');
 });
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -435,6 +435,7 @@ function cancelCameraGesture() {
   hover.visible = false;
   hoveredCell = null;
   renderer.domElement.classList.remove('inspect-resident');
+  renderer.domElement.classList.remove('inspect-observable');
 
   // Preserve the current view while forcing OrbitControls back to its idle state.
   controls.saveState();
@@ -444,9 +445,17 @@ function cancelCameraGesture() {
 function updateHover(clientX: number, clientY: number) {
   pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const residentHovered = raycaster.intersectObject(citizens.root, true)
-    .some((intersection) => citizens.citizenIdFrom(intersection.object) !== null);
+  const residentHovered = citizens.pick(raycaster) !== null;
+  const absoluteHours = day * 24 + timeOfDay;
+  const observableHovered = observeMode && raycaster.intersectObject(ambience.root, true)
+    .some((intersection) => ambience.memoryFromObject(intersection.object, absoluteHours, catColonyFoundedAt, intersection.instanceId) !== null);
   renderer.domElement.classList.toggle('inspect-resident', residentHovered);
+  renderer.domElement.classList.toggle('inspect-observable', observableHovered);
+  if (residentHovered || observableHovered) {
+    hover.visible = false;
+    hoveredCell = null;
+    return;
+  }
   const size = CityRenderer.cellSize();
   const cityHit = raycaster.intersectObject(city.root, true)
     .map((intersection) => city.cellFromObject(intersection.object))
@@ -477,9 +486,7 @@ function updateHover(clientX: number, clientY: number) {
 function inspectCitizen(clientX: number, clientY: number) {
   pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const citizenId = raycaster.intersectObject(citizens.root, true)
-    .map((intersection) => citizens.citizenIdFrom(intersection.object))
-    .find((id) => id !== null) ?? null;
+  const citizenId = citizens.pick(raycaster);
   if (!citizenId) return false;
   hideMemoryCard();
   selectedCitizenId = citizenId;
@@ -492,20 +499,20 @@ function inspectTownMemory(clientX: number, clientY: number) {
   pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
   const absoluteHours = day * 24 + timeOfDay;
-  const wildlifeHit = raycaster.intersectObject(ambience.root, true)
-    .find((intersection) => ambience.wildlifeMemoryFromObject(intersection.object, absoluteHours, catColonyFoundedAt, intersection.instanceId) !== null);
-  const wildlife = wildlifeHit ? ambience.wildlifeMemoryFromObject(wildlifeHit.object, absoluteHours, catColonyFoundedAt, wildlifeHit.instanceId) : null;
-  const cityPoint = raycaster.intersectObject(city.root, true)
+  const ambienceHit = raycaster.intersectObject(ambience.root, true)
+    .find((intersection) => ambience.memoryFromObject(intersection.object, absoluteHours, catColonyFoundedAt, intersection.instanceId) !== null);
+  const ambienceMemory = ambienceHit ? ambience.memoryFromObject(ambienceHit.object, absoluteHours, catColonyFoundedAt, ambienceHit.instanceId) : null;
+  const cityPoint = ambienceMemory ? null : raycaster.intersectObject(city.root, true)
     .map((intersection) => city.cellFromObject(intersection.object))
     .find((point) => point !== null) ?? hoveredCell;
-  const memory = wildlife ?? (cityPoint ? cityObservationAt(cityPoint.x, cityPoint.z, absoluteHours) : null);
+  const memory = ambienceMemory ?? (cityPoint ? cityObservationAt(cityPoint.x, cityPoint.z, absoluteHours) : null);
   if (!memory) {
     hideMemoryCard();
     showToast('Nothing here is ready to be observed yet.');
     return false;
   }
-  selectedMemoryReader = wildlife && wildlifeHit
-    ? () => ambience.wildlifeMemoryFromObject(wildlifeHit.object, day * 24 + timeOfDay, catColonyFoundedAt, wildlifeHit.instanceId)
+  selectedMemoryReader = ambienceMemory && ambienceHit
+    ? () => ambience.memoryFromObject(ambienceHit.object, day * 24 + timeOfDay, catColonyFoundedAt, ambienceHit.instanceId)
     : cityPoint ? () => cityObservationAt(cityPoint.x, cityPoint.z, day * 24 + timeOfDay) : null;
   showMemoryCard(memory);
   return true;
@@ -519,8 +526,8 @@ function cityObservationAt(x: number, z: number, absoluteHours: number) {
   return status ? { ...memory, detail: status, note: `${memory.detail} ${memory.note}` } : memory;
 }
 
-function showMemoryCard(memory: CityMemoryInspection | WildlifeMemoryInspection) {
-  document.querySelector('#memory-kicker')!.textContent = memory.kind === 'cat' ? 'Harbor family' : memory.kind === 'wildlife' ? 'Harbor wildlife' : memory.kind === 'tree' ? 'Living landmark' : 'Town memory';
+function showMemoryCard(memory: CityMemoryInspection | HarborMemoryInspection) {
+  document.querySelector('#memory-kicker')!.textContent = memory.kind === 'cat' ? 'Harbor family' : memory.kind === 'wildlife' ? 'Harbor wildlife' : memory.kind === 'boat' ? 'Harbor vessel' : memory.kind === 'tree' ? 'Living landmark' : 'Town memory';
   document.querySelector('#memory-title')!.textContent = memory.title;
   document.querySelector('#memory-age')!.textContent = memory.ageLabel;
   document.querySelector('#memory-detail')!.textContent = memory.detail;
@@ -1274,6 +1281,7 @@ function setTouchMode(mode: 'build' | 'remove') {
   hover.visible = false;
   hoveredCell = null;
   renderer.domElement.classList.remove('inspect-resident');
+  renderer.domElement.classList.remove('inspect-observable');
   document.querySelectorAll<HTMLButtonElement>('[data-touch-mode]').forEach((button) => {
     const active = button.dataset.touchMode === mode;
     button.classList.toggle('active', active);
@@ -1304,6 +1312,34 @@ document.querySelector('#touch-guide')!.addEventListener('click', (event) => {
   if (event.target === event.currentTarget) setTouchGuideOpen(false);
 });
 
+const mobileHeaderQuery = matchMedia('(max-width: 700px), (hover: none) and (pointer: coarse)');
+
+function setTopActionsOpen(open: boolean) {
+  const mobileMenu = mobileHeaderQuery.matches;
+  const expanded = mobileMenu && open;
+  const actions = document.querySelector<HTMLElement>('.top-actions')!;
+  const menu = document.querySelector<HTMLElement>('#top-actions-menu')!;
+  const toggle = document.querySelector<HTMLButtonElement>('#mobile-menu-toggle')!;
+  actions.classList.toggle('open', expanded);
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-label', expanded ? 'Close town controls' : 'Open town controls');
+  menu.setAttribute('aria-hidden', String(mobileMenu && !expanded));
+  if (mobileMenu && !expanded) menu.setAttribute('inert', '');
+  else menu.removeAttribute('inert');
+}
+
+document.querySelector('#mobile-menu-toggle')!.addEventListener('click', () => {
+  setTopActionsOpen(!document.querySelector('.top-actions')!.classList.contains('open'));
+});
+document.querySelector('#top-actions-menu')!.addEventListener('click', (event) => {
+  if ((event.target as HTMLElement).closest('button')) setTopActionsOpen(false);
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!document.querySelector('.top-actions')!.contains(event.target as Node)) setTopActionsOpen(false);
+});
+mobileHeaderQuery.addEventListener('change', () => setTopActionsOpen(false));
+setTopActionsOpen(false);
+
 document.querySelector('#reset')!.addEventListener('click', () => {
   if (!confirm('Let this town drift away and begin with a new tide?')) return;
   localStorage.removeItem(STORAGE_KEY);
@@ -1318,7 +1354,7 @@ document.querySelector('#observe-toggle')!.addEventListener('click', () => {
   button.classList.toggle('active', observeMode);
   button.setAttribute('aria-pressed', String(observeMode));
   if (!observeMode) hideMemoryCard();
-  showToast(observeMode ? 'Observe mode: choose a building, tree, animal, or resident.' : 'Build mode restored.');
+  showToast(observeMode ? 'Observe mode: choose a building, tree, animal, boat, or resident.' : 'Build mode restored.');
 });
 document.querySelector('#thread-close')!.addEventListener('click', () => {
   followedThreadId = null;
@@ -1418,6 +1454,7 @@ window.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape') {
     cancelCameraGesture();
+    setTopActionsOpen(false);
     setJournalOpen(false);
     setTouchGuideOpen(false);
     setAboutOpen(false);
@@ -1465,6 +1502,12 @@ let inspectorElapsed = 0;
 let nightMode = false;
 let shadowsActive = true;
 let lastRaining = weatherAt(seed, day * 24 + timeOfDay).raining;
+const performanceCosts = { city: 0, citizens: 0, business: 0, discovery: 0, background: 0, ambience: 0, render: 0 };
+
+function recordPerformanceCost(name: keyof typeof performanceCosts, startedAt: number) {
+  const duration = performance.now() - startedAt;
+  performanceCosts[name] += (duration - performanceCosts[name]) * .08;
+}
 
 function daylightAt(hour: number) {
   const solar = Math.sin((hour - 6) / 12 * Math.PI);
@@ -1486,6 +1529,9 @@ function animate() {
   requestAnimationFrame(animate);
   const rawDelta = clock.getDelta();
   if (document.hidden) return;
+  const performancePanel = document.querySelector<HTMLElement>('#perf-panel')!;
+  const profileFrame = performancePanel.classList.contains('show');
+  let profileStartedAt = profileFrame ? performance.now() : 0;
   const delta = Math.min(rawDelta, .1);
   const time = clock.elapsedTime;
   if (ignoreNextPerformanceSample) ignoreNextPerformanceSample = false;
@@ -1553,7 +1599,15 @@ function animate() {
   city.setWeather(weather.intensity);
   city.update(time, absoluteHours);
   city.setDaylight(daylight);
+  if (profileFrame) {
+    recordPerformanceCost('city', profileStartedAt);
+    profileStartedAt = performance.now();
+  }
   citizens.update(delta * simulationSpeed, timeOfDay, absoluteHours, time);
+  if (profileFrame) {
+    recordPerformanceCost('citizens', profileStartedAt);
+    profileStartedAt = performance.now();
+  }
   if (businessCheckElapsed > .5) {
     const residentState = citizens.residents();
     applyBusinessUpdate(businesses.recordVisits(citizens.drainBusinessVisits(), residentState), true);
@@ -1568,9 +1622,17 @@ function animate() {
     if (craftingUpdate.changed) persistSoon();
     businessCheckElapsed = 0;
   }
+  if (profileFrame) {
+    recordPerformanceCost('business', profileStartedAt);
+    profileStartedAt = performance.now();
+  }
   if (discoveryCheckElapsed > .5) {
     evaluateDiscoveries();
     discoveryCheckElapsed = 0;
+  }
+  if (profileFrame) {
+    recordPerformanceCost('discovery', profileStartedAt);
+    profileStartedAt = performance.now();
   }
   if (ambientSoundElapsed > 11) {
     playHarborAmbience(daylight, weather.intensity);
@@ -1580,7 +1642,15 @@ function animate() {
     updateGrowInspector();
     inspectorElapsed = 0;
   }
+  if (profileFrame) {
+    recordPerformanceCost('background', profileStartedAt);
+    profileStartedAt = performance.now();
+  }
   ambience.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, weather.intensity);
+  if (profileFrame) {
+    recordPerformanceCost('ambience', profileStartedAt);
+    profileStartedAt = performance.now();
+  }
   clockUpdate += delta;
   autosaveElapsed += delta;
   if (clockUpdate > .25) {
@@ -1599,6 +1669,7 @@ function animate() {
   } else if (performanceWarmup > 8 && performanceCooldown > 4 && severeOverloadSeconds > 2 && renderPixelRatio <= 1 && shadowsActive) {
     shadowsActive = false;
     renderer.shadowMap.enabled = false;
+    city.setMaterialDetail(false);
     performanceCooldown = 0;
     severeOverloadSeconds = 0;
   } else if (performanceWarmup > 12 && performanceCooldown > 4 && severeOverloadSeconds > 2 && renderPixelRatio > .75) {
@@ -1612,13 +1683,15 @@ function animate() {
     performanceCooldown = 0;
     recoverySeconds = 0;
   }
-  if (performanceUpdate > .75) {
-    const info = renderer.info.render;
-    document.querySelector('#perf-panel')!.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'}`;
-    performanceUpdate = 0;
-  }
   controls.update();
   renderer.render(scene, camera);
+  if (profileFrame) recordPerformanceCost('render', profileStartedAt);
+  if (performanceUpdate > .75) {
+    const info = renderer.info.render;
+    const cpu = Object.values(performanceCosts).reduce((sum, duration) => sum + duration, 0);
+    performancePanel.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'} · ${cpu.toFixed(1)}ms CPU (city ${performanceCosts.city.toFixed(1)} · people ${performanceCosts.citizens.toFixed(1)} · shops ${performanceCosts.business.toFixed(1)} · GROW ${performanceCosts.discovery.toFixed(1)} · ui ${performanceCosts.background.toFixed(1)} · life ${performanceCosts.ambience.toFixed(1)} · render ${performanceCosts.render.toFixed(1)})`;
+    performanceUpdate = 0;
+  }
 }
 updateTimeDisplay();
 animate();

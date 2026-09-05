@@ -93,6 +93,24 @@ function consolidateActor(group: THREE.Group, animatedParts = new Set<THREE.Obje
   }
 }
 
+/** Add forgiving screen picking to a moving model without adding another draw call. */
+function addPickSphere(group: THREE.Group, radius: number) {
+  const target = group.children.find((child): child is THREE.Mesh => child instanceof THREE.Mesh);
+  if (!target) return;
+  const preciseRaycast = target.raycast.bind(target);
+  const center = new THREE.Vector3();
+  const closest = new THREE.Vector3();
+  target.raycast = (raycaster, intersections) => {
+    preciseRaycast(raycaster, intersections);
+    group.getWorldPosition(center);
+    raycaster.ray.closestPointToPoint(center, closest);
+    if (closest.distanceToSquared(center) > radius * radius) return;
+    const distance = raycaster.ray.origin.distanceTo(closest);
+    if (distance < raycaster.near || distance > raycaster.far) return;
+    intersections.push({ distance, point: closest.clone(), object: target });
+  };
+}
+
 export class FaunaSystem {
   readonly root = new THREE.Group();
   private readonly ambientBirds = new THREE.Group();
@@ -373,8 +391,8 @@ export class FaunaSystem {
         note: 'Their looping path carries them safely around the town’s shoreline.',
       },
       squids: {
-        title: 'Drifting squids', ageLabel: 'Below the surface',
-        detail: 'A small group of squids pulses through the green-blue water.',
+        title: 'Drifting jellyfish', ageLabel: 'Below the surface',
+        detail: 'A small group of translucent jellyfish pulses through the green-blue water.',
         note: 'They become clearest when the tide carries them close to shore.',
       },
       tuna: {
@@ -443,9 +461,36 @@ export class FaunaSystem {
       mesh.frustumCulled = false;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.userData.wildlifeObservation = layout.sources[0]?.userData.wildlifeObservation;
+      this.addActorInstanceRaycast(mesh);
       parent.add(mesh);
       this.actorInstanceBatches.push({ mesh, parent, sources: layout.sources });
     }
+  }
+
+  private addActorInstanceRaycast(mesh: THREE.InstancedMesh) {
+    const wildlife = mesh.userData.wildlifeObservation as ObservableWildlife | undefined;
+    const radius = wildlife === 'dolphins' ? .62
+      : wildlife === 'turtle' ? .46
+        : wildlife === 'cat' ? .38
+          : wildlife === 'fish' || wildlife === 'tuna' ? .34
+            : .3;
+    const instance = new THREE.Matrix4();
+    const world = new THREE.Matrix4();
+    const center = new THREE.Vector3();
+    const closest = new THREE.Vector3();
+    mesh.raycast = (raycaster, intersections) => {
+      mesh.updateWorldMatrix(true, false);
+      for (let instanceId = 0; instanceId < mesh.count; instanceId++) {
+        mesh.getMatrixAt(instanceId, instance);
+        world.multiplyMatrices(mesh.matrixWorld, instance);
+        center.setFromMatrixPosition(world);
+        raycaster.ray.closestPointToPoint(center, closest);
+        if (closest.distanceToSquared(center) > radius * radius) continue;
+        const distance = raycaster.ray.origin.distanceTo(closest);
+        if (distance < raycaster.near || distance > raycaster.far) continue;
+        intersections.push({ distance, point: closest.clone(), object: mesh, instanceId });
+      }
+    };
   }
 
   private updateActorInstances() {
@@ -466,7 +511,12 @@ export class FaunaSystem {
         batch.mesh.setMatrixAt(count++, this.instanceMatrix.multiplyMatrices(this.inverseParentMatrix, source.matrixWorld));
       }
       batch.mesh.count = count;
-      if (count) batch.mesh.instanceMatrix.needsUpdate = true;
+      if (count) {
+        batch.mesh.instanceMatrix.needsUpdate = true;
+        // Moving instances invalidate Three's lazily cached raycast bounds.
+        batch.mesh.boundingBox = null;
+        batch.mesh.boundingSphere = null;
+      }
     }
   }
 
@@ -719,6 +769,7 @@ export class FaunaSystem {
     spout.position.set(.86, .22, 0);
     whale.add(body, belly, dorsal, spout);
     consolidateActor(whale, new Set([spout]));
+    addPickSphere(whale, 1.15);
     whale.userData.baseScale = 1;
     return whale;
   }
@@ -784,6 +835,7 @@ export class FaunaSystem {
       }
       squid.add(bell);
       consolidateActor(squid);
+      addPickSphere(squid, .42);
       squid.position.set(-index * .34, Math.sin(index) * .12, (index - 1.5) * .33);
       squid.scale.setScalar(.8 + index * .055);
       group.add(squid);

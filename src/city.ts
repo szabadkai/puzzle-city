@@ -179,7 +179,8 @@ export class CityRenderer {
   private readonly roofVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.roofTexture, bumpMap: this.roofTexture, bumpScale: .035, roughness: .82, roughnessMap: this.roofTexture });
   private readonly accentVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92, side: THREE.DoubleSide });
   private readonly seed: number;
-  private rainIntensity = 0;
+  private rainIntensity = -1;
+  private materialDetail = true;
   private lastPatinaUpdateBucket = -1;
   private readonly wetTint = new THREE.Color(0x355c5b);
   private discoveryGlow: { mesh: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>; startedAt: number } | null = null;
@@ -449,7 +450,9 @@ export class CityRenderer {
   }
 
   setWeather(rainIntensity: number) {
-    this.rainIntensity = THREE.MathUtils.clamp(rainIntensity, 0, 1);
+    const nextRainIntensity = Math.round(THREE.MathUtils.clamp(rainIntensity, 0, 1) * 256) / 256;
+    if (nextRainIntensity === this.rainIntensity) return;
+    this.rainIntensity = nextRainIntensity;
     this.stone.roughness = 1 - this.rainIntensity * .48;
     this.stoneDark.roughness = 1 - this.rainIntensity * .42;
     this.stone.color.setHex(0xb9ad91).lerp(this.wetTint, this.rainIntensity * .18);
@@ -466,6 +469,22 @@ export class CityRenderer {
     this.wallVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .14);
     this.roofVertexMaterial.roughness = .82 - this.rainIntensity * .34;
     this.roofVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .2);
+  }
+
+  setMaterialDetail(enabled: boolean) {
+    if (enabled === this.materialDetail) return;
+    this.materialDetail = enabled;
+    const update = (material: THREE.MeshStandardMaterial, texture: THREE.Texture | null) => {
+      material.bumpMap = enabled ? texture : null;
+      material.roughnessMap = enabled ? texture : null;
+      material.needsUpdate = true;
+    };
+    update(this.stone, this.stoneTexture);
+    update(this.stoneDark, this.stoneTexture);
+    update(this.wallVertexMaterial, this.plasterTexture);
+    update(this.roofVertexMaterial, this.roofTexture);
+    for (const material of this.wallMaterials.values()) update(material, this.plasterTexture);
+    for (const material of this.roofMaterials.values()) update(material, this.roofTexture);
   }
 
   memoryStats(absoluteHours: number) {
@@ -818,12 +837,12 @@ export class CityRenderer {
     group.userData.foundedAt = cell.foundedAt ?? 0;
     group.userData.renovatedAt = cell.renovatedAt ?? cell.foundedAt ?? 0;
 
-    const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .97, .34, CELL * .97, 3, .12), this.stone));
+    const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .97, .34, CELL * .97, 1, .12), this.stone));
     foundation.position.y = BASE_Y;
     group.add(foundation);
 
     for (let level = 0; level < cell.height; level++) {
-      const body = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.005, FLOOR + .04, CELL * 1.005, 3, .09), walls));
+      const body = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.005, FLOOR + .04, CELL * 1.005, 1, .09), walls));
       body.position.y = .34 + FLOOR * level + FLOOR / 2;
       group.add(body);
 
@@ -964,7 +983,7 @@ export class CityRenderer {
     const lateral = new THREE.Vector3(CARDINALS[dir][1], 0, -CARDINALS[dir][0]);
     const [px, pz] = this.edgePosition(dir, CELL * .507);
     if (isDoor) {
-      const door = shadow(new THREE.Mesh(new RoundedBoxGeometry(.46, .82, .08, 3, .07), this.dark), false);
+      const door = shadow(new THREE.Mesh(new THREE.BoxGeometry(.46, .82, .08), this.dark), false);
       door.position.set(px, .34 + .43, pz);
       door.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       group.add(door);
@@ -977,7 +996,7 @@ export class CityRenderer {
     for (let i = 0; i < windowCount; i++) {
       if (isDoor && i === 0) continue;
       const offset = windowCount === 1 ? 0 : (i - .5) * .72;
-      const windowMesh = shadow(new THREE.Mesh(new RoundedBoxGeometry(.39, .48, .055, 2, .035), this.window), false);
+      const windowMesh = shadow(new THREE.Mesh(new THREE.BoxGeometry(.39, .48, .055), this.window), false);
       windowMesh.position.set(px + lateral.x * offset, y, pz + lateral.z * offset);
       windowMesh.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       group.add(windowMesh);
@@ -1323,7 +1342,7 @@ export class CityRenderer {
 
   private addAirConditioner(group: THREE.Group, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, y: number) {
     const [dx, dz] = CARDINALS[dir];
-    const unit = shadow(new THREE.Mesh(new RoundedBoxGeometry(dir % 2 ? .18 : .5, .32, dir % 2 ? .5 : .18, 2, .03), this.cream), false);
+    const unit = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .18 : .5, .32, dir % 2 ? .5 : .18), this.cream), false);
     unit.position.set(px + dx * .12 + lateral.x * .52, y, pz + dz * .12 + lateral.z * .52);
     group.add(unit);
     const fan = new THREE.Mesh(new THREE.TorusGeometry(.09, .018, 5, 10), this.metal);
@@ -1360,8 +1379,8 @@ export class CityRenderer {
         color,
         roughness,
         map: texture,
-        roughnessMap: texture,
-        bumpMap: texture,
+        roughnessMap: this.materialDetail ? texture : null,
+        bumpMap: this.materialDetail ? texture : null,
         bumpScale: cache === this.wallMaterials ? .028 : cache === this.roofMaterials ? .035 : 0,
       });
       material.userData.vertexBatchColor = color;
@@ -1448,7 +1467,7 @@ export class CityRenderer {
   }
 
   private addRoofEaves(group: THREE.Group, y: number, roofMaterial: THREE.Material, cell: Cell) {
-    const eave = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.13, .11, CELL * 1.13, 2, .04), roofMaterial));
+    const eave = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.13, .11, CELL * 1.13, 1, .04), roofMaterial));
     eave.position.y = y + .04;
     group.add(eave);
     const ridge = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, CELL * .9, 8), this.dark));
@@ -1604,7 +1623,7 @@ export class CityRenderer {
   }
 
   private addChimney(group: THREE.Group, y: number, x: number, z: number) {
-    const chimney = shadow(new THREE.Mesh(new RoundedBoxGeometry(.32, .68, .32, 2, .035), this.dark));
+    const chimney = shadow(new THREE.Mesh(new RoundedBoxGeometry(.32, .68, .32, 1, .035), this.dark));
     chimney.position.set(x, y + .28, z);
     group.add(chimney);
     const smoke = new THREE.Group();
@@ -1665,7 +1684,7 @@ export class CityRenderer {
   }
 
   private addRoofGarden(group: THREE.Group, y: number, cell: Cell) {
-    const planter = shadow(new THREE.Mesh(new RoundedBoxGeometry(.82, .24, .56, 2, .05), this.stone));
+    const planter = shadow(new THREE.Mesh(new RoundedBoxGeometry(.82, .24, .56, 1, .05), this.stone));
     planter.position.set(-.3, y + .12, .1);
     group.add(planter);
     this.addArchitecturalTree(group, -.3, .1, y + .24, .72, 'rooftop');
@@ -1798,10 +1817,10 @@ export class CityRenderer {
       return mesh;
     };
 
-    const ledge = shadow(new THREE.Mesh(new RoundedBoxGeometry(plot.direction % 2 ? .92 : 1.48, .16, plot.direction % 2 ? 1.48 : .92, 3, .08), this.stone));
+    const ledge = shadow(new THREE.Mesh(new RoundedBoxGeometry(plot.direction % 2 ? .92 : 1.48, .16, plot.direction % 2 ? 1.48 : .92, 1, .08), this.stone));
     ledge.position.set(centerX, .04, centerZ);
     addAtStage(ledge, 1);
-    const soil = shadow(new THREE.Mesh(new RoundedBoxGeometry(plot.direction % 2 ? .7 : 1.24, .11, plot.direction % 2 ? 1.24 : .7, 3, .07), this.green), false);
+    const soil = shadow(new THREE.Mesh(new RoundedBoxGeometry(plot.direction % 2 ? .7 : 1.24, .11, plot.direction % 2 ? 1.24 : .7, 1, .07), this.green), false);
     soil.position.set(centerX, .17, centerZ);
     addAtStage(soil, 1);
 
@@ -1843,7 +1862,7 @@ export class CityRenderer {
   private buildPlaza(group: THREE.Group, x: number, z: number) {
     const anchor = plazaAnchorAt(x, z, this.cells);
     if (!anchor) return;
-    const platform = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .96, .18, CELL * .96, 2, .06), this.stone));
+    const platform = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .96, .18, CELL * .96, 1, .06), this.stone));
     platform.position.y = .08;
     group.add(platform);
     for (const offset of [-.52, .52]) {
@@ -1875,7 +1894,7 @@ export class CityRenderer {
   }
 
   private buildCourtyard(group: THREE.Group, x: number, z: number, feature: CourtyardFeature) {
-    const platform = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .83, .2, CELL * .83, 4, .18), this.stone));
+    const platform = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .83, .2, CELL * .83, 1, .18), this.stone));
     platform.position.y = .05;
     group.add(platform);
     const patch = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.72, .78, .12, 12), this.green));
@@ -1955,7 +1974,7 @@ export class CityRenderer {
     const grand = feature === 'lantern gate';
     const y = high ? HIGH_CROSSING_SPAN_Y : FLOOR * 1.42;
     const walls = this.cachedMaterial(this.wallMaterials, pick(WALL_COLORS, hash(this.seed, x, z, 500)), .9);
-    const span = shadow(new THREE.Mesh(new RoundedBoxGeometry(northSouth ? 1.25 : CELL * 1.08, .58, northSouth ? CELL * 1.08 : 1.25, 4, .16), walls));
+    const span = shadow(new THREE.Mesh(new RoundedBoxGeometry(northSouth ? 1.25 : CELL * 1.08, .58, northSouth ? CELL * 1.08 : 1.25, 1, .16), walls));
     span.position.y = y;
     group.add(span);
     const walk = shadow(new THREE.Mesh(new THREE.BoxGeometry(northSouth ? .95 : CELL, .12, northSouth ? CELL : .95), this.stone));

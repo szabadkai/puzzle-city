@@ -74,6 +74,9 @@ export class NavGraph {
   readonly plazas: string[] = [];
   readonly docks: string[] = [];
   readonly rooftops = new Map<string, string>();
+  private readonly componentByNode = new Map<string, string>();
+  private readonly nodesByComponent = new Map<string, NavNode[]>();
+  private readonly nodeBuckets = new Map<string, NavNode[]>();
   private readonly cells: Map<string, Cell>;
   private readonly seed: number;
 
@@ -81,6 +84,32 @@ export class NavGraph {
     this.cells = cells;
     this.seed = seed;
     this.build();
+    this.indexNavigation();
+  }
+
+  private indexNavigation() {
+    for (const node of this.nodes.values()) {
+      const bucketKey = `${Math.floor(node.position.x / CELL)},${Math.floor(node.position.z / CELL)}`;
+      const bucket = this.nodeBuckets.get(bucketKey) ?? [];
+      bucket.push(node);
+      this.nodeBuckets.set(bucketKey, bucket);
+    }
+    for (const node of this.nodes.values()) {
+      if (this.componentByNode.has(node.key)) continue;
+      const component = node.key;
+      const members: NavNode[] = [];
+      const pending = [node.key];
+      while (pending.length) {
+        const key = pending.pop()!;
+        if (this.componentByNode.has(key)) continue;
+        this.componentByNode.set(key, component);
+        const member = this.nodes.get(key);
+        if (!member) continue;
+        members.push(member);
+        for (const neighbor of member.links) pending.push(neighbor);
+      }
+      this.nodesByComponent.set(component, members);
+    }
   }
 
   private addNode(x: number, z: number, y = WALK_Y) {
@@ -267,7 +296,13 @@ export class NavGraph {
   closest(position: THREE.Vector3) {
     let closest: NavNode | undefined;
     let distance = Infinity;
-    for (const node of this.nodes.values()) {
+    const bx = Math.floor(position.x / CELL);
+    const bz = Math.floor(position.z / CELL);
+    const nearby: NavNode[] = [];
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      nearby.push(...(this.nodeBuckets.get(`${bx + dx},${bz + dz}`) ?? []));
+    }
+    for (const node of nearby.length ? nearby : this.nodes.values()) {
       const next = node.position.distanceToSquared(position);
       if (next < distance) {
         distance = next;
@@ -278,15 +313,8 @@ export class NavGraph {
   }
 
   randomNode(value: number, from: string, predicate?: (node: NavNode) => boolean) {
-    const reachable = new Set<string>();
-    const pending = [from];
-    while (pending.length) {
-      const key = pending.pop()!;
-      if (reachable.has(key)) continue;
-      reachable.add(key);
-      for (const neighbor of this.nodes.get(key)?.links ?? []) pending.push(neighbor);
-    }
-    const component = [...this.nodes.values()].filter((node) => reachable.has(node.key));
+    const componentId = this.componentByNode.get(from);
+    const component = componentId ? this.nodesByComponent.get(componentId) ?? [] : [];
     const everyday = component.filter((node) => !this.rooftops.has(node.key));
     const preferred = predicate ? everyday.filter(predicate) : everyday;
     const options = preferred.length ? preferred : everyday.length ? everyday : component;
@@ -306,15 +334,10 @@ export class NavGraph {
   }
 
   rooftopNode(value: number, from: string) {
-    const reachable = new Set<string>();
-    const pending = [from];
-    while (pending.length) {
-      const key = pending.pop()!;
-      if (reachable.has(key)) continue;
-      reachable.add(key);
-      for (const neighbor of this.nodes.get(key)?.links ?? []) pending.push(neighbor);
-    }
-    const options = [...this.rooftops.keys()].filter((key) => reachable.has(key));
+    const component = this.componentByNode.get(from);
+    const options = component
+      ? (this.nodesByComponent.get(component) ?? []).filter((node) => this.rooftops.has(node.key)).map((node) => node.key)
+      : [];
     if (!options.length) return undefined;
     return this.nodes.get(options[Math.floor(value * options.length) % options.length]);
   }
@@ -322,19 +345,8 @@ export class NavGraph {
   rooftopLabel(key: string) { return this.rooftops.get(key) ?? null; }
 
   canReach(from: string, to: string) {
-    if (from === to) return true;
-    const visited = new Set([from]);
-    const pending = [from];
-    while (pending.length) {
-      const key = pending.pop()!;
-      for (const neighbor of this.nodes.get(key)?.links ?? []) {
-        if (neighbor === to) return true;
-        if (visited.has(neighbor)) continue;
-        visited.add(neighbor);
-        pending.push(neighbor);
-      }
-    }
-    return false;
+    const component = this.componentByNode.get(from);
+    return component !== undefined && component === this.componentByNode.get(to);
   }
 
   path(from: string, to: string) {
@@ -414,6 +426,8 @@ export class CitizenSystem {
   private discoveries = new Set<string>();
   private pendingBusinessVisits: BusinessVisit[] = [];
   private readonly walkDirection = new THREE.Vector3();
+  private readonly pickCenter = new THREE.Vector3();
+  private readonly pickClosest = new THREE.Vector3();
   private readonly skinMaterial = new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 });
   private readonly darkMaterial = new THREE.MeshStandardMaterial({ color: 0x3f3432, roughness: 1 });
   private readonly hatMaterial = new THREE.MeshStandardMaterial({ color: 0xc79d58, roughness: 1 });
@@ -699,7 +713,6 @@ export class CitizenSystem {
   }
 
   private setActorPart(batch: THREE.InstancedMesh, index: number, model: THREE.Group, part: THREE.Object3D) {
-    model.updateMatrix();
     part.updateMatrix();
     batch.setMatrixAt(index, this.renderMatrix.multiplyMatrices(model.matrix, part.matrix));
   }
@@ -711,7 +724,10 @@ export class CitizenSystem {
     let legs = 0;
     let hats = 0;
     let cargo = 0;
-    for (const citizen of this.citizens.slice(0, MAX_RENDERED_CITIZENS)) {
+    const renderedCount = Math.min(this.citizens.length, MAX_RENDERED_CITIZENS);
+    for (let index = 0; index < renderedCount; index++) {
+      const citizen = this.citizens[index];
+      citizen.model.updateMatrix();
       const color = citizen.color % this.bodyInstances.length;
       this.setActorPart(this.bodyInstances[color], bodyCounts[color]++, citizen.model, citizen.body);
       this.setActorPart(this.headInstances, heads++, citizen.model, citizen.head);
@@ -1062,6 +1078,26 @@ export class CitizenSystem {
       current = current.parent;
     }
     return null;
+  }
+
+  /** Pick one moving resident without raycasting every hidden source body part. */
+  pick(raycaster: THREE.Raycaster) {
+    let pickedId: string | null = null;
+    let pickedDistance = Infinity;
+    const renderedCount = Math.min(this.citizens.length, MAX_RENDERED_CITIZENS);
+    for (let index = 0; index < renderedCount; index++) {
+      const citizen = this.citizens[index];
+      const scale = citizen.model.scale.x;
+      this.pickCenter.copy(citizen.model.position);
+      this.pickCenter.y += .3 * scale;
+      raycaster.ray.closestPointToPoint(this.pickCenter, this.pickClosest);
+      if (this.pickClosest.distanceToSquared(this.pickCenter) > .24 * .24 * scale * scale) continue;
+      const distance = raycaster.ray.origin.distanceTo(this.pickClosest);
+      if (distance < raycaster.near || distance > raycaster.far || distance >= pickedDistance) continue;
+      pickedDistance = distance;
+      pickedId = citizen.id;
+    }
+    return pickedId;
   }
 
   noticeDiscovery(activity: string) {

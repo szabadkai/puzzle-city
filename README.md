@@ -27,7 +27,7 @@ Rowboats trace the changing shoreline; docks can lead to fishing, merchant arriv
 - Mouse wheel: zoom
 - Touch: one-finger drag orbits; two-finger drag moves; pinch zooms
 - J: open or close the observation journal
-- I or **Observe**: inspect buildings, trees, residents, cats, and waterlife—including turtles
+- I or **Observe**: inspect buildings, trees, residents, boats, cats, and waterlife—including turtles
 - P: toggle the performance overlay
 - G: toggle the GROW developer inspector (including nav visualization, event forcing, citizen spawning, and time controls)
 
@@ -46,7 +46,7 @@ Run deterministic town-memory checks with `npm run test:memory`.
 
 The `main` branch is automatically deployed to GitHub Pages by GitHub Actions.
 
-Press `P` to toggle the lightweight performance overlay while testing a larger town.
+Press `P` to toggle the lightweight performance overlay while testing a larger town. It includes FPS, draw calls, triangles, render scale, fallback state, and an EMA breakdown of the main CPU subsystems.
 
 ## Credits
 

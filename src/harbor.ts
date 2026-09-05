@@ -40,7 +40,35 @@ function consolidateModel(group: THREE.Group) {
   return group;
 }
 
+/** Make a moving vessel easy to select without rendering a separate hit target. */
+function addPickSphere(group: THREE.Group, radius: number) {
+  const target = group.children.find((child): child is THREE.Mesh => child instanceof THREE.Mesh);
+  if (!target) return;
+  const preciseRaycast = target.raycast.bind(target);
+  const center = new THREE.Vector3();
+  const closest = new THREE.Vector3();
+  target.raycast = (raycaster, intersections) => {
+    preciseRaycast(raycaster, intersections);
+    group.getWorldPosition(center);
+    raycaster.ray.closestPointToPoint(center, closest);
+    if (closest.distanceToSquared(center) > radius * radius) return;
+    const distance = raycaster.ray.origin.distanceTo(closest);
+    if (distance < raycaster.near || distance > raycaster.far) return;
+    intersections.push({ distance, point: closest.clone(), object: target });
+  };
+}
+
 type BoatKind = 'rowboat' | 'fishing boat' | 'merchant boat' | 'ferry';
+
+export type BoatMemoryInspection = Readonly<{
+  kind: 'boat';
+  title: string;
+  ageLabel: string;
+  detail: string;
+  note: string;
+}>;
+
+export type HarborMemoryInspection = WildlifeMemoryInspection | BoatMemoryInspection;
 
 type BoatActor = {
   kind: BoatKind;
@@ -144,6 +172,19 @@ export class HarborAmbience {
     return this.fauna.wildlifeMemoryFromObject(object, absoluteHours, colonyFoundedAt, instanceId);
   }
 
+  memoryFromObject(object: THREE.Object3D | null, absoluteHours: number, colonyFoundedAt?: number, instanceId?: number): HarborMemoryInspection | null {
+    const wildlife = this.wildlifeMemoryFromObject(object, absoluteHours, colonyFoundedAt, instanceId);
+    if (wildlife) return wildlife;
+    if (!object) return null;
+    let current: THREE.Object3D | null = object;
+    while (current && current !== this.root) {
+      const kind = current.userData.boatKind as BoatKind | undefined;
+      if (kind) return this.boatObservation(kind, current);
+      current = current.parent;
+    }
+    return null;
+  }
+
   wildlifeEffect(action: WildlifeAction, animal: WildlifeKind, focus?: { x: number; z: number } | null) {
     this.fauna.apply(action, animal, focus);
   }
@@ -225,9 +266,40 @@ export class HarborAmbience {
     );
     for (const boat of this.fleet) {
       boat.model.name = boat.kind.replaceAll(' ', '-');
+      boat.model.userData.boatKind = boat.kind;
+      addPickSphere(boat.model, boat.kind === 'rowboat' ? .58 : 1.05);
       boat.model.visible = false;
       this.root.add(boat.model);
     }
+  }
+
+  private boatObservation(kind: BoatKind, model: THREE.Object3D): BoatMemoryInspection | null {
+    for (let current: THREE.Object3D | null = model; current && current !== this.root.parent; current = current.parent) {
+      if (!current.visible) return null;
+    }
+    const observations: Record<BoatKind, Omit<BoatMemoryInspection, 'kind'>> = {
+      rowboat: {
+        title: 'Harbor rowboat', ageLabel: 'Shoreline wanderer',
+        detail: 'A small rowboat follows the changing edge of the town.',
+        note: 'Its route quietly reshapes itself whenever the harbor grows.',
+      },
+      'fishing boat': {
+        title: 'Working fishing boat', ageLabel: 'Harbor working vessel',
+        detail: 'The fishing crew follows the shoreline in search of the morning catch.',
+        note: 'It sails at dawn and late afternoon when the harbor has a dock and a fisher.',
+      },
+      'merchant boat': {
+        title: 'Merchant boat', ageLabel: 'Visiting cargo vessel',
+        detail: 'Crates from beyond the harbor ride low on this broad-decked boat.',
+        note: 'A working dock gives it somewhere to unload before evening.',
+      },
+      ferry: {
+        title: 'Harbor ferry', ageLabel: 'Daily passenger vessel',
+        detail: 'The ferry makes a steady circuit between the town and the open water.',
+        note: 'Its late route depends on a dock and a welcoming inn.',
+      },
+    };
+    return { kind: 'boat', ...observations[kind] };
   }
 
   private refreshFleetVisibility() {

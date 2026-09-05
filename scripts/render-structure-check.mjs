@@ -138,6 +138,64 @@ try {
   if (!fishBatch || ambience.wildlifeMemoryFromObject(fishBatch, 240, 0)?.title !== 'Silver shoal') {
     throw new Error('Visible waterlife cannot be inspected in Observe mode.');
   }
+  const rowboat = ambience.root.getObjectByName('rowboat');
+  if (!rowboat?.visible || ambience.memoryFromObject(rowboat, 240, 0)?.kind !== 'boat') {
+    throw new Error('Visible boats cannot be inspected in Observe mode.');
+  }
+  ambience.root.updateWorldMatrix(true, true);
+  const raycaster = new THREE.Raycaster();
+  const target = rowboat.getWorldPosition(new THREE.Vector3());
+  raycaster.set(target.clone().add(new THREE.Vector3(8, 9, 10)), new THREE.Vector3(-8, -9, -10).normalize());
+  const boatRayHit = raycaster.intersectObject(ambience.root, true)
+    .find((hit) => ambience.memoryFromObject(hit.object, 240, 0, hit.instanceId)?.kind === 'boat');
+  if (!boatRayHit) throw new Error('The Observe raycaster cannot select a visible boat.');
+
+  const turtleMatrix = new THREE.Matrix4();
+  turtleBatch.getMatrixAt(0, turtleMatrix);
+  turtleMatrix.premultiply(turtleBatch.matrixWorld);
+  const turtleTarget = new THREE.Vector3().setFromMatrixPosition(turtleMatrix);
+  raycaster.set(turtleTarget.clone().add(new THREE.Vector3(8, 9, 10)), new THREE.Vector3(-8, -9, -10).normalize());
+  const turtleRayHit = raycaster.intersectObject(ambience.root, true)
+    .find((hit) => ambience.memoryFromObject(hit.object, 240, 0, hit.instanceId)?.title === 'Harbor turtle');
+  if (!turtleRayHit) throw new Error('The Observe raycaster cannot select visible instanced wildlife.');
+
+  const raycastFirstInstance = (batch, expectedTitle) => {
+    batch.getMatrixAt(0, turtleMatrix);
+    turtleMatrix.premultiply(batch.matrixWorld);
+    const instanceTarget = new THREE.Vector3().setFromMatrixPosition(turtleMatrix);
+    raycaster.set(instanceTarget.clone().add(new THREE.Vector3(8, 9, 10)), new THREE.Vector3(-8, -9, -10).normalize());
+    return raycaster.intersectObject(ambience.root, true)
+      .some((hit) => ambience.memoryFromObject(hit.object, 240, 0, hit.instanceId)?.title === expectedTitle);
+  };
+  if (!raycastFirstInstance(fishBatch, 'Silver shoal')) {
+    throw new Error('The Observe raycaster cannot select visible fish.');
+  }
+
+  let jellyfishRayHit = false;
+  for (let testTime = 0; testTime < 120 && !jellyfishRayHit; testTime += 1) {
+    ambience.update(testTime, .8, 12, 240, 0, 0);
+    const jellyfish = ambience.root.getObjectByName('squid-group');
+    if (!jellyfish?.visible) continue;
+    ambience.root.updateWorldMatrix(true, true);
+    const jellyfishTarget = jellyfish.children[0]?.getWorldPosition(new THREE.Vector3());
+    if (!jellyfishTarget) continue;
+    raycaster.set(jellyfishTarget.clone().add(new THREE.Vector3(8, 9, 10)), new THREE.Vector3(-8, -9, -10).normalize());
+    jellyfishRayHit = raycaster.intersectObject(ambience.root, true)
+      .some((hit) => ambience.memoryFromObject(hit.object, 240, 0, hit.instanceId)?.title === 'Drifting jellyfish');
+  }
+  if (!jellyfishRayHit) throw new Error('The Observe raycaster cannot select visible jellyfish.');
+
+  let dolphinRayHit = false;
+  for (let testTime = 0; testTime < 120 && !dolphinRayHit; testTime += 1) {
+    ambience.update(testTime, .8, 12, 240, 0, 0);
+    ambience.root.updateWorldMatrix(true, true);
+    let dolphinBatch;
+    ambience.root.traverse((object) => {
+      if (object instanceof THREE.InstancedMesh && object.userData.wildlifeObservation === 'dolphins' && object.count > 0) dolphinBatch = object;
+    });
+    if (dolphinBatch) dolphinRayHit = raycastFirstInstance(dolphinBatch, 'Dolphin pod');
+  }
+  if (!dolphinRayHit) throw new Error('The Observe raycaster cannot select visible dolphins.');
 
   const root = new THREE.Group();
   root.add(city.root, people.root, ambience.root);

@@ -11,7 +11,7 @@
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { user-select: none; }
 canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
-canvas.inspect-resident { cursor: zoom-in; }
+canvas.inspect-resident, canvas.inspect-observable { cursor: zoom-in; }
 canvas.dragging { cursor: grabbing; }
 
 .hud {
@@ -186,7 +186,9 @@ canvas.dragging { cursor: grabbing; }
 .mouse { width: 15px; height: 20px; border: 1.5px solid currentColor; border-radius: 8px; position: relative; }
 .mouse::before { content: ''; position: absolute; left: 6px; top: 3px; width: 1px; height: 5px; background: currentColor; }
 
-.top-actions { position: absolute; right: 24px; top: 22px; display: flex; gap: 8px; pointer-events: auto; }
+.top-actions { position: absolute; right: 24px; top: 22px; pointer-events: auto; }
+.top-actions-menu { display: flex; gap: 8px; }
+.mobile-menu-toggle { display: none; }
 .mobile-about-label { display: none; }
 .mobile-observe-label { display: none; }
 .mobile-postcard-label { display: none; }
@@ -745,31 +747,75 @@ button:active { transform: translateY(1px); }
   .top-actions {
     top: max(10px, env(safe-area-inset-top));
     right: max(8px, env(safe-area-inset-right));
-    flex-wrap: nowrap;
-    gap: 4px;
+    z-index: 15;
   }
-  .top-actions button { flex: 0 0 40px; width: 40px; min-width: 0; min-height: 40px; padding: 0; white-space: nowrap; }
-  #journal-open { position: relative; }
-  #journal-open span#journal-count {
+  .mobile-menu-toggle {
+    display: grid;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    place-items: center;
+    font-size: 18px;
+  }
+  .mobile-menu-toggle:focus-visible { outline: 2px solid rgba(255,244,216,.9); outline-offset: 2px; }
+  .top-actions.open .mobile-menu-toggle { color: #fff4d6; background: #54746f; }
+  .top-actions-menu {
     position: absolute;
-    top: 2px;
-    right: 2px;
-    min-width: 14px;
-    height: 14px;
-    margin: 0;
-    padding: 0 3px;
-    font-size: 8px;
+    top: 47px;
+    right: 0;
+    display: grid;
+    gap: 3px;
+    width: 158px;
+    padding: 6px;
+    border: 1px solid rgba(255,238,204,.65);
+    border-radius: 15px 5px 15px 15px;
+    background: rgba(229,213,177,.94);
+    box-shadow: 0 14px 38px rgba(24,58,58,.24);
+    backdrop-filter: blur(18px);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-5px) scale(.97);
+    transform-origin: top right;
+    transition: opacity .16s ease, transform .16s ease, visibility .16s;
+    pointer-events: none;
+  }
+  .top-actions.open .top-actions-menu {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+  }
+  .top-actions-menu button {
+    display: flex;
+    width: 100%;
+    min-height: 40px;
+    padding: 0 10px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    box-shadow: none;
+    white-space: nowrap;
+  }
+  .top-actions-menu button:hover { transform: none; background: rgba(255,245,218,.58); }
+  .top-actions-menu button:active { transform: scale(.98); }
+  .top-actions-menu #journal-count {
+    min-width: 17px;
+    height: 17px;
+    margin-left: auto;
   }
   .desktop-journal-label,
   .desktop-reset-label,
   .desktop-about-label,
-  .desktop-postcard-label { display: none; }
-  .desktop-observe-label { display: none; }
+  .desktop-postcard-label,
+  .desktop-observe-label { display: inline; }
   .mobile-journal-label,
-  .mobile-reset-label { display: inline; font: 500 18px/1 'DM Sans', sans-serif; }
-  .mobile-postcard-label { display: inline; font: 500 19px/1 'DM Sans', sans-serif; }
-  .mobile-about-label { display: inline; font-family: 'Fraunces', serif; font-size: 14px; font-style: italic; }
-  .mobile-observe-label { display: inline; font: 600 18px/1 'Fraunces', serif; }
+  .mobile-reset-label,
+  .mobile-postcard-label,
+  .mobile-about-label,
+  .mobile-observe-label { display: none; }
   .about-panel { padding: 28px 24px 23px; }
   .postcard-panel { padding: 28px 24px 23px; }
   .journal-scrim { z-index: 20; padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); }
@@ -777,16 +823,6 @@ button:active { transform: translateY(1px); }
   .journal-entry { grid-template-columns: 88px 1fr; gap: 12px; }
   .journal-illustration { width: 88px; height: 70px; }
   .clue-heading small { display: none; }
-}
-
-@media (max-width: 420px) {
-  .time-widget { top: calc(max(10px, env(safe-area-inset-top)) + 48px); padding-left: 5px; }
-}
-
-@media (max-width: 380px) {
-  .mobile-clock { display: none; }
-  .top-actions { gap: 3px; }
-  .top-actions button { flex-basis: 38px; width: 38px; }
 }
 
 @media (max-height: 620px) {

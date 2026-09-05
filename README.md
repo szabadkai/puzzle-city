@@ -2,6 +2,8 @@
 
 A small, polished sandbox city-building prototype inspired by effortless architectural sculpting and miniature living dioramas.
 
+**[Play Little Tides](https://szabadkai.github.io/puzzle-city/)**
+
 Click anywhere in the harbor to raise a foundation, click existing structures to build upward, and arrange neighboring pieces to discover courtyards, plazas, canals, arches, bridges, towers, arcaded rows, stepped terraces, shared rooftop courts, covered skybridges, docks, water stairs, and other procedural transformations. Many shapes keep growing: courtyards become cloisters and pavilions, arcades gain roof promenades, terraces gather gardens and lanterns, and water crossings can rise through five distinct forms. Foundations can stand alone as little islets or grow together into a continuous town.
 
 Every accessible home attracts a named resident. Taller homes support small households with children or elders. Citizens follow the town's quays and courtyards using A* routes, keep daily routines, form friendships and favorite-shop habits, and can be clicked to reveal their small lives and current destination. A full day passes in about eight minutes, with pause, normal, and fast simulation controls.

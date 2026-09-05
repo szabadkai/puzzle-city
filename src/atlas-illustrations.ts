@@ -1,0 +1,87 @@
+import type { FormationId } from './types';
+
+/**
+ * Small field-guide drawings for the Formation Atlas. They deliberately use
+ * the same 108 × 72 canvas and line classes as the observation journal so the
+ * two halves of the book feel drawn by the same hand.
+ */
+export const FORMATION_SKETCHES: Record<FormationId, string> = {
+  'narrow-canal': `
+    <path class="wash water" d="M38 18 Q54 14 70 18 L72 66 Q54 70 36 65Z"/>
+    <path d="M9 61 L12 34 L30 29 L36 62 M72 62 L77 28 L96 34 L99 61 M11 35 L22 25 L34 31 M75 30 L87 23 L99 34 M40 58 Q54 53 69 58 M41 64 Q54 59 68 64"/>
+    <path class="faint" d="M21 58 L21 43 M87 58 L87 43 M46 48 Q54 44 63 48"/>`,
+  'sea-arch': `
+    <path class="wash water" d="M35 49 Q54 39 73 49 L72 68 Q54 71 35 67Z"/>
+    <path d="M9 62 L12 27 L37 23 L40 62 M68 62 L71 22 L96 27 L99 62 M12 29 L24 18 L39 25 M69 24 L84 16 L98 28 M38 55 Q54 30 71 55 M38 60 Q54 38 71 60"/>
+    <path class="faint" d="M18 39 L32 37 M77 36 L91 39 M40 65 Q54 59 70 65"/>`,
+  'high-bridge': `
+    <path class="wash water" d="M7 57 Q52 50 101 57 L100 70 L7 70Z"/>
+    <path d="M10 59 Q53 52 99 59 M14 56 L17 19 L36 16 L40 54 M69 54 L72 15 L91 19 L95 56 M36 30 Q53 22 72 29 M38 36 Q54 29 70 35 M43 32 L44 45 M52 28 L53 42 M62 29 L63 44"/>
+    <path class="faint" d="M20 52 L20 29 M32 50 L32 27 M78 49 L78 26 M89 52 L89 30"/>`,
+  'covered-skybridge': `
+    <path class="wash water" d="M7 57 Q53 50 101 57 L100 70 L7 70Z"/>
+    <path class="wash" d="M34 29 Q53 14 75 29 L70 40 Q53 33 38 40Z"/>
+    <path d="M9 59 Q53 52 100 59 M13 56 L16 20 L36 16 L40 55 M69 54 L72 15 L92 20 L96 57 M34 29 Q53 13 75 29 M38 32 L38 43 M72 31 L71 43 M38 39 Q54 32 71 39 M43 29 L44 39 M52 23 L53 35 M63 25 L63 36"/>
+    <path class="faint" d="M19 51 L20 29 M31 49 L31 27 M78 48 L78 26 M89 51 L89 30"/>`,
+  'lantern-gate': `
+    <path class="wash water" d="M6 58 Q53 50 102 58 L101 70 L6 70Z"/>
+    <path class="wash warm" d="M36 29 Q53 13 73 29 L69 41 Q53 35 39 41Z"/>
+    <path d="M8 60 Q53 52 101 60 M12 57 L16 18 L36 14 L40 55 M69 55 L73 13 L93 18 L97 57 M33 27 Q53 10 76 27 M37 31 Q53 23 72 30 M39 39 Q54 32 70 39 M43 28 L44 42 M53 21 L53 37 M64 26 L64 41"/>
+    <path class="accent-line" d="M42 41 q4-3 8 0 l-1 9 q-3 4-7 0Z M59 40 q4-3 8 0 l-1 9 q-3 4-7 0Z M43 45 L49 45 M60 44 L66 44"/>
+    <path class="faint" d="M20 51 L20 27 M31 48 L31 24 M78 48 L78 24 M89 51 L89 28"/>`,
+  'arcade-row': `
+    <path class="wash" d="M8 57 L11 31 L36 27 L38 56 L39 25 L68 22 L70 56 L72 31 L97 28 L100 58Z"/>
+    <path d="M6 62 Q53 55 102 62 M10 57 L12 31 L36 27 L38 57 M38 57 L40 25 L68 22 L70 56 M71 57 L73 31 L97 28 L99 58 M10 33 L24 22 L38 29 M38 27 L54 15 L71 24 M71 33 L85 22 L100 30 M17 57 Q24 43 31 57 M46 56 Q54 40 62 56 M78 57 Q85 44 93 57"/>
+    <path class="faint" d="M16 38 L32 35 M46 32 L63 30 M78 38 L94 36"/>`,
+  'roof-promenade': `
+    <path class="wash warm" d="M10 28 Q53 18 98 28 L96 36 Q52 28 12 37Z"/>
+    <path d="M6 62 Q53 55 102 62 M10 57 L12 29 L37 26 L39 57 M38 57 L40 24 L68 22 L70 56 M70 57 L73 29 L98 27 L100 59 M11 30 L24 20 L38 27 M39 26 L54 15 L71 24 M71 31 L85 21 L100 29 M17 57 Q24 43 31 57 M47 56 Q54 41 62 56 M78 57 Q85 43 93 57 M15 25 Q53 14 96 23 M20 23 L20 31 M35 19 L35 28 M53 16 L53 25 M71 18 L71 27 M88 21 L88 29"/>
+    <path class="accent-line" d="M18 24 q3-3 6 0 l-1 6 q-2 3-5 0Z M50 17 q3-3 6 0 l-1 6 q-2 3-5 0Z M85 22 q3-3 6 0 l-1 6 q-2 3-5 0Z"/>`,
+  'stepped-terrace': `
+    <path class="wash" d="M10 59 L12 43 L37 39 L39 58 L40 30 L67 27 L69 57 L71 16 L96 20 L99 59Z"/>
+    <path d="M6 63 Q53 56 102 63 M10 59 L12 43 L37 39 L39 58 M39 58 L41 30 L67 27 L69 57 M70 58 L72 16 L96 20 L99 59 M11 44 L24 35 L39 41 M40 32 L54 22 L70 29 M71 18 L84 10 L99 20 M27 40 L43 34 L58 28 L74 21 M31 38 L31 44 M46 31 L46 38 M61 25 L61 32"/>
+    <path class="faint" d="M19 55 L19 48 M49 53 L49 40 M80 51 L80 31"/>`,
+  'terraced-garden': `
+    <path class="wash botanical" d="M20 39 Q31 26 43 36 Q53 19 68 30 Q79 10 92 24 L91 38 L22 50Z"/>
+    <path d="M6 63 Q53 56 102 63 M10 59 L12 43 L37 39 L39 58 M39 58 L41 30 L67 27 L69 57 M70 58 L72 16 L96 20 L99 59 M11 44 L24 35 L39 41 M40 32 L54 22 L70 29 M71 18 L84 10 L99 20 M27 40 L43 34 L58 28 L74 21 M20 39 Q25 34 30 39 Q35 31 40 37 M48 29 Q54 22 59 29 Q64 22 69 27 M77 17 Q83 9 88 18 Q92 12 96 19"/>
+    <path class="faint" d="M29 36 L29 43 M58 25 L58 32 M87 14 L87 22"/>`,
+  'lantern-stair': `
+    <path class="wash botanical" d="M18 40 Q31 27 43 37 Q54 19 68 30 Q79 10 94 23 L92 39 L21 51Z"/>
+    <path d="M6 63 Q53 56 102 63 M10 59 L12 43 L37 39 L39 58 M39 58 L41 30 L67 27 L69 57 M70 58 L72 16 L96 20 L99 59 M11 44 L24 35 L39 41 M40 32 L54 22 L70 29 M71 18 L84 10 L99 20 M27 40 L43 34 L58 28 L74 21 M20 39 Q26 32 31 39 Q36 31 40 37 M49 29 Q54 22 60 29 Q64 21 69 27 M77 17 Q83 9 88 18 Q93 12 97 19"/>
+    <path class="accent-line" d="M29 36 q3-3 6 0 l-1 7 q-2 3-5 0Z M57 25 q3-3 6 0 l-1 7 q-2 3-5 0Z M85 14 q3-3 6 0 l-1 7 q-2 3-5 0Z"/>`,
+  'rooftop-court': `
+    <path class="wash" d="M14 29 L43 16 L55 23 L68 15 L96 28 L82 39 L96 51 L67 62 L55 54 L42 62 L13 50 L28 39Z"/>
+    <path d="M14 29 L42 17 L54 24 L68 16 L96 28 L82 39 L96 51 L67 62 L55 54 L42 62 L13 50 L28 39Z M14 29 L28 39 L55 29 L42 17 M55 29 L82 39 L96 28 M82 39 L55 50 L67 62 M55 50 L28 39 L13 50 M55 29 L55 50"/>
+    <path class="faint" d="M38 35 L47 31 M63 31 L73 35 M64 47 L73 43 M38 44 L47 48"/>`,
+  'rooftop-pavilion': `
+    <path class="wash warm" d="M35 37 Q54 19 75 37 L70 47 Q54 40 39 47Z"/>
+    <path d="M13 30 L42 17 L54 24 L68 16 L96 29 L82 40 L96 51 L67 62 L55 54 L42 62 L13 50 L28 40Z M14 30 L28 40 L55 30 L42 17 M55 30 L82 40 L96 29 M82 40 L55 50 L67 62 M55 50 L28 40 L13 50 M35 37 Q54 19 75 37 M40 40 L40 49 M71 39 L71 49 M40 46 Q55 39 71 46"/>
+    <path class="faint" d="M48 33 L48 45 M62 32 L62 44"/>`,
+  'hanging-roof-garden': `
+    <path class="wash botanical" d="M22 31 Q35 17 47 29 Q55 12 67 28 Q79 14 91 29 L84 56 Q69 67 55 51 Q39 65 24 53Z"/>
+    <path d="M13 30 L42 17 L54 24 L68 16 L96 29 L82 40 L96 51 L67 62 L55 54 L42 62 L13 50 L28 40Z M14 30 L28 40 L55 30 L42 17 M55 30 L82 40 L96 29 M82 40 L55 50 L67 62 M55 50 L28 40 L13 50 M23 31 Q30 23 37 30 Q43 19 49 29 M59 28 Q66 18 72 29 Q80 20 87 30 M29 41 Q27 51 33 58 M42 37 Q40 50 45 57 M68 37 Q68 50 63 57 M81 41 Q83 51 77 58"/>
+    <path class="accent-line" d="M34 27 q3-5 7 0 q5-1 3 4 q2 4-3 3 q-3 4-6 0 q-5 0-2-4Z M72 26 q3-5 7 0 q5-1 3 4 q2 4-3 3 q-3 4-6 0 q-5 0-2-4Z"/>`,
+  'courtyard-garden': `
+    <path class="wash botanical" d="M38 54 Q38 34 54 30 Q72 35 70 55Z"/>
+    <path d="M8 62 Q53 55 101 62 M12 57 L14 31 L34 27 L38 57 M72 57 L75 27 L96 31 L99 59 M36 58 L38 41 L70 41 L72 58 M13 33 L24 22 L38 29 M72 29 L85 21 L99 32 M38 42 L54 32 L71 42 M53 56 L53 37 M52 46 Q44 41 41 35 M54 44 Q63 39 67 33"/>
+    <path class="faint" d="M20 53 L20 40 M86 53 L86 39 M41 57 Q54 51 69 57"/>`,
+  'cloister-garden': `
+    <path class="wash botanical" d="M39 53 Q39 35 54 31 Q70 35 69 54Z"/>
+    <path d="M7 62 Q53 55 102 62 M10 57 L13 25 L37 21 L39 57 M70 57 L73 21 L98 25 L101 59 M36 58 L38 36 L71 36 L73 58 M11 27 L24 16 L39 23 M71 23 L86 15 L100 26 M38 37 L54 27 L72 37 M15 57 Q21 42 28 57 M77 57 Q84 42 92 57 M53 56 L53 33 M52 45 Q45 40 42 35 M54 43 Q62 38 66 33"/>
+    <path class="faint" d="M18 33 L33 30 M77 30 L94 33 M40 57 Q54 51 69 57"/>`,
+  'courtyard-pavilion': `
+    <path class="wash warm" d="M35 39 Q54 20 75 39 L71 49 Q54 42 39 49Z"/>
+    <path d="M7 62 Q53 55 102 62 M10 57 L13 23 L36 19 L39 57 M71 57 L74 19 L98 23 L101 59 M11 25 L24 14 L39 21 M72 21 L86 13 L100 24 M34 39 Q54 19 76 39 M39 42 L39 55 M72 41 L72 55 M39 49 Q55 42 72 49 M45 38 L46 51 M55 30 L55 47 M66 37 L65 51"/>
+    <path class="accent-line" d="M51 51 q4-3 8 0 l-1 8 q-3 4-7 0Z"/>
+    <path class="faint" d="M18 51 L18 31 M31 48 L31 28 M80 48 L80 27 M92 51 L92 31"/>`,
+  'harbor-plaza': `
+    <path class="wash water" d="M41 36 Q54 27 67 36 L65 50 Q54 56 42 49Z"/>
+    <path d="M11 29 L34 19 L45 26 M63 25 L76 18 L98 29 M12 51 L34 61 L45 54 M64 55 L77 62 L98 51 M11 29 L28 38 L12 51 M98 29 L81 39 L98 51 M28 38 L45 29 M64 29 L81 39 M28 42 L45 52 M64 52 L81 42 M41 37 Q54 28 67 37 L65 49 Q54 55 42 49Z M48 36 L48 26 M60 35 L60 25 M48 25 Q54 19 60 25"/>
+    <path class="accent-line" d="M22 36 Q26 27 30 36 M78 36 Q83 27 87 36 M22 48 Q26 39 30 48 M78 48 Q83 39 87 48"/>
+    <path class="faint" d="M36 33 L42 30 M67 31 L73 34 M36 48 L42 51 M67 50 L74 47"/>`,
+  'lookout-tower': `
+    <path class="wash" d="M39 62 L41 20 L69 19 L72 62Z"/>
+    <path d="M20 63 Q54 57 89 63 M40 60 L42 20 L68 19 L71 60 M38 21 Q54 13 72 20 M46 18 L47 11 M55 17 L56 8 M64 18 L66 11 M47 31 L63 30 M47 40 L64 39 M48 49 L64 48 M49 60 L49 52 L63 52 L64 60"/>
+    <path class="accent-line" d="M56 8 Q69 8 76 13 Q66 17 56 14Z"/>
+    <path class="faint" d="M44 59 L45 24 M69 62 Q54 57 38 62"/>`,
+};

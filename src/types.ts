@@ -11,7 +11,7 @@ export type Cell = {
 };
 
 export type SavedTown = {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
   seed: number;
   cells: Cell[];
   timeOfDay?: number;
@@ -24,7 +24,33 @@ export type SavedTown = {
   followedDiscoveryId?: string;
   catColonyFoundedAt?: number;
   crafting?: CraftingSave;
+  /** Architectural forms the player has revealed, even if later reshaped. */
+  formations?: FormationId[];
+  /** Higher-order places formed by bringing compatible architectural forms together. */
+  placeIdentities?: PlaceIdentityId[];
+  /** Optional living-place clue currently followed in the shared tide tracker. */
+  followedPlaceIdentityId?: PlaceIdentityId;
+  /** Whether the player has seen or dismissed the optional Second Tide introduction. */
+  placeIntroductionSeen?: boolean;
+  /** Existing towns and players who skip the guide should not see it again. */
+  onboardingDismissed?: boolean;
 };
+
+export type FormationId =
+  | 'narrow-canal' | 'sea-arch' | 'high-bridge' | 'covered-skybridge' | 'lantern-gate'
+  | 'arcade-row' | 'roof-promenade'
+  | 'stepped-terrace' | 'terraced-garden' | 'lantern-stair'
+  | 'rooftop-court' | 'rooftop-pavilion' | 'hanging-roof-garden'
+  | 'courtyard-garden' | 'cloister-garden' | 'courtyard-pavilion'
+  | 'harbor-plaza' | 'lookout-tower';
+
+export type PlaceIdentityId =
+  | 'canal-market'
+  | 'garden-commons'
+  | 'makers-walk'
+  | 'roof-village'
+  | 'high-harbor'
+  | 'lantern-square';
 
 export type JournalIllustration =
   | 'foundation' | 'rain' | 'garden' | 'arch' | 'bridge' | 'tower'

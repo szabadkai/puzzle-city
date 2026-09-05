@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { BusinessSave, Cell, CitizenSave } from './types';
+import type { BusinessSave, Cell, CitizenSave, PlaceIdentityId } from './types';
+import type { PlaceIdentityOccurrence } from './place-identities';
 import { hash } from './random';
 import { analyzeWaterTopology, createShorelineRoute, WORLD_CELL_SIZE, type WaterTopology } from './water';
 import { FaunaSystem, type WildlifeAction, type WildlifeKind, type WildlifeMemoryInspection } from './fauna';
@@ -58,7 +59,7 @@ function addPickSphere(group: THREE.Group, radius: number) {
   };
 }
 
-type BoatKind = 'rowboat' | 'fishing boat' | 'merchant boat' | 'ferry';
+type BoatKind = 'rowboat' | 'fishing boat' | 'merchant boat' | 'signal boat' | 'ferry';
 
 export type BoatMemoryInspection = Readonly<{
   kind: 'boat';
@@ -97,6 +98,7 @@ export class HarborAmbience {
   private businesses: BusinessSave[] = [];
   private citizens: CitizenSave[] = [];
   private discoveries = new Set<string>();
+  private placeIdentities = new Set<PlaceIdentityId>();
   private topology!: WaterTopology;
   private readonly townCenter = new THREE.Vector3();
 
@@ -159,6 +161,11 @@ export class HarborAmbience {
     this.fireflies.visible = this.discoveries.has('evening-chorus');
     this.floatingLanterns.visible = this.discoveries.has('lantern-finale');
     this.fireworks.visible = this.discoveries.has('lantern-finale');
+    this.refreshFleetVisibility();
+  }
+
+  setPlaceIdentities(identities: readonly PlaceIdentityOccurrence[]) {
+    this.placeIdentities = new Set(identities.map((identity) => identity.id));
     this.refreshFleetVisibility();
   }
 
@@ -257,11 +264,13 @@ export class HarborAmbience {
     const rowboat = this.createRowboat();
     const fishingBoat = this.createFishingBoat();
     const merchantBoat = this.createMerchantBoat();
+    const signalBoat = this.createSignalBoat();
     const ferry = this.createFerry();
     this.fleet.push(
       { kind: 'rowboat', model: rowboat, route: emptyRoute, phase: .08, speed: .012, bobSpeed: 1.15, eligible: false },
       { kind: 'fishing boat', model: fishingBoat, route: emptyRoute, phase: .42, speed: .009, bobSpeed: 1.4, eligible: false },
       { kind: 'merchant boat', model: merchantBoat, route: emptyRoute, phase: .68, speed: .0065, bobSpeed: 1.05, eligible: false },
+      { kind: 'signal boat', model: signalBoat, route: emptyRoute, phase: .79, speed: .01, bobSpeed: 1.22, eligible: false },
       { kind: 'ferry', model: ferry, route: emptyRoute, phase: .87, speed: .0075, bobSpeed: .92, eligible: false },
     );
     for (const boat of this.fleet) {
@@ -291,7 +300,14 @@ export class HarborAmbience {
       'merchant boat': {
         title: 'Merchant boat', ageLabel: 'Visiting cargo vessel',
         detail: 'Crates from beyond the harbor ride low on this broad-decked boat.',
-        note: 'A working dock gives it somewhere to unload before evening.',
+        note: this.placeIdentities.has('canal-market')
+          ? 'The market barge’s painted awning draws it toward the town before evening.'
+          : 'A working dock gives it somewhere to unload before evening.',
+      },
+      'signal boat': {
+        title: 'Beacon survey boat', ageLabel: 'Outer-water scout',
+        detail: 'A small blue sail traces the edge of the harbor and reads the signals above the roofs.',
+        note: 'It appears only while a High Harbor keeps its signal beacon.',
       },
       ferry: {
         title: 'Harbor ferry', ageLabel: 'Daily passenger vessel',
@@ -310,7 +326,8 @@ export class HarborAmbience {
     for (const boat of this.fleet) {
       if (boat.kind === 'rowboat') boat.eligible = this.cells.length > 0;
       if (boat.kind === 'fishing boat') boat.eligible = hasDock && hasFisher && this.discoveries.has('fishing-boat');
-      if (boat.kind === 'merchant boat') boat.eligible = hasDock && this.discoveries.has('merchant-arrival');
+      if (boat.kind === 'merchant boat') boat.eligible = (hasDock && this.discoveries.has('merchant-arrival')) || this.placeIdentities.has('canal-market');
+      if (boat.kind === 'signal boat') boat.eligible = this.placeIdentities.has('high-harbor');
       if (boat.kind === 'ferry') boat.eligible = hasDock && hasInn && this.discoveries.has('ferry-route');
       boat.model.visible = boat.eligible;
     }
@@ -320,6 +337,7 @@ export class HarborAmbience {
     if (this.discoveries.has('lantern-finale') && hour >= 19 && hour < 23) return true;
     if (kind === 'fishing boat') return (hour >= 4.5 && hour < 11.5) || (hour >= 15.5 && hour < 18.5);
     if (kind === 'merchant boat') return hour >= 8 && hour < 18.5;
+    if (kind === 'signal boat') return hour >= 5.5 && hour < 19.5;
     if (kind === 'ferry') return hour >= 6 && hour < 23;
     return hour >= 6.5 && hour < 20.5;
   }
@@ -401,6 +419,22 @@ export class HarborAmbience {
     boat.add(hull, cover);
     boat.scale.setScalar(.84);
     return consolidateModel(boat);
+  }
+
+  private createSignalBoat() {
+    const boat = this.createRowboat();
+    boat.scale.setScalar(.92);
+    const mastMaterial = new THREE.MeshStandardMaterial({ color: 0x4f4540, roughness: 1 });
+    const sailMaterial = new THREE.MeshStandardMaterial({ color: 0x477b8b, side: THREE.DoubleSide, roughness: .9 });
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(.015, .02, .72, 6), mastMaterial);
+    mast.position.set(.04, .48, 0);
+    const sail = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(.05, .8, 0), new THREE.Vector3(.05, .22, 0), new THREE.Vector3(.42, .28, 0),
+    ]), sailMaterial);
+    const signal = new THREE.Mesh(new THREE.SphereGeometry(.05, 7, 5), new THREE.MeshStandardMaterial({ color: 0xffc86b, emissive: 0xff8c3c, emissiveIntensity: 1.2 }));
+    signal.position.set(.04, .86, 0);
+    boat.add(mast, sail, signal);
+    return boat;
   }
 
   private createMerchantBoat() {

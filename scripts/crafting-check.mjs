@@ -43,4 +43,33 @@ const restored = new CraftingSystem(crafting.serialize());
 assert.equal(restored.completedCount(), crafting.completedCount(), 'crafting milestones survive save/load');
 assert.equal(restored.summary(), crafting.summary(), 'goods survive save/load');
 
+const fishmonger = [{
+  id: 'business-fishmonger', type: 'fishmonger', cellKey: '-1,0', ownerId: 'fishmonger-owner',
+  name: 'Morning Catch', openedAt: 0, employeeIds: [], visitCount: 0,
+}];
+const fisher = [{
+  id: 'formation-fisher', name: 'Fisher', homeKey: '-1,0', position: [-1, 0], occupation: 'Fisher',
+  traits: ['patient'], relationships: [], color: 0, ageGroup: 'adult',
+}];
+const ordinaryCatch = new CraftingSystem();
+ordinaryCatch.update(fishmonger, fisher, ['fishing-boat'], 30);
+const canalCatch = new CraftingSystem();
+canalCatch.update(fishmonger, fisher, ['fishing-boat'], 30, [{ id: 'narrow-canal', x: 0, z: 0 }]);
+const marketCatch = new CraftingSystem();
+const canalMarket = [{ id: 'narrow-canal', x: 0, z: 0 }, { id: 'arcade-row', x: 2, z: 0 }];
+marketCatch.update(fishmonger, fisher, ['fishing-boat'], 30, canalMarket);
+assert.equal(ordinaryCatch.serialize().goods.fish, 2, 'an ordinary morning catch keeps its base yield');
+assert.equal(canalCatch.serialize().goods.fish, 3, 'a well-placed fishmonger gains a fuller formation-supported batch');
+assert.equal(marketCatch.serialize().goods.fish, 4, 'a fishmonger in a canal market gains a generous living-place batch');
+assert.match(
+  canalCatch.businessStatus('fishmonger', '-1,0', [{ id: 'narrow-canal', x: 0, z: 0 }]),
+  /adds one extra item/,
+  'Observe mode explains a formation-supported workplace bonus',
+);
+assert.match(
+  marketCatch.businessStatus('fishmonger', '-1,0', canalMarket),
+  /adds two extra items/,
+  'Observe mode explains a living-place workplace bonus',
+);
+
 console.log('Crafting-chain checks passed.');

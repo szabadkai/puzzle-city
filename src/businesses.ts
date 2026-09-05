@@ -1,5 +1,10 @@
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenSave, keyOf } from './types';
 import { hash, pick } from './random';
+import {
+  detectFormations,
+  type FormationOccurrence,
+} from './formations.ts';
+import { placeBusinessAffinity, placeOpeningPopulation } from './place-identities.ts';
 
 type BusinessRecipe = {
   type: BusinessType;
@@ -219,8 +224,9 @@ export class BusinessSystem {
     if (absoluteHours < this.nextOpeningAt) return result;
     this.nextOpeningAt = absoluteHours + .3;
 
+    const formations = detectFormations(cells);
     const recipes = RECIPES.filter((candidate) =>
-      citizens.length >= candidate.population
+      citizens.length >= placeOpeningPopulation(candidate.type, candidate.population, formations)
       && candidate.automatic !== false
       && !this.businesses.some((business) => business.type === candidate.type)
       && (!candidate.available || candidate.available(citizens, this.businesses)),
@@ -228,7 +234,7 @@ export class BusinessSystem {
     if (!recipes.length) return result;
 
     for (const recipe of recipes) {
-      const business = this.tryOpenRecipe(recipe, citizens, cells, absoluteHours);
+      const business = this.tryOpenRecipe(recipe, citizens, cells, absoluteHours, formations);
       if (business) return { changed: true, opened: [business], closed: result.closed, hired: result.hired };
     }
     return result;
@@ -239,13 +245,19 @@ export class BusinessSystem {
     if (this.businesses.some((business) => business.type === type)) return result;
     const recipe = RECIPES.find((candidate) => candidate.type === type);
     if (!recipe || (recipe.available && !recipe.available(citizens, this.businesses))) return result;
-    const business = this.tryOpenRecipe(recipe, citizens, cells, absoluteHours);
+    const business = this.tryOpenRecipe(recipe, citizens, cells, absoluteHours, detectFormations(cells));
     return business
       ? { changed: true, opened: [business], closed: result.closed, hired: result.hired }
       : result;
   }
 
-  private tryOpenRecipe(recipe: BusinessRecipe, citizens: CitizenSave[], cells: Map<string, Cell>, absoluteHours: number) {
+  private tryOpenRecipe(
+    recipe: BusinessRecipe,
+    citizens: CitizenSave[],
+    cells: Map<string, Cell>,
+    absoluteHours: number,
+    formations: readonly FormationOccurrence[],
+  ) {
     const occupiedCells = new Set(this.businesses.map((business) => business.cellKey));
     const occupiedOwners = new Set(this.businesses.map((business) => business.ownerId));
     const occupiedEmployees = new Set(this.businesses.flatMap((business) => business.employeeIds ?? []));
@@ -256,12 +268,16 @@ export class BusinessSystem {
       .filter((citizen) => cells.has(citizen.homeKey) && !occupiedCells.has(citizen.homeKey) && !occupiedOwners.has(citizen.id))
       .map((citizen) => ({ citizen, cell: cells.get(citizen.homeKey)! }))
       .filter(({ cell }) => recipe.type !== 'inn' || cell.height >= 2)
+      .filter(({ cell }) => citizens.length >= recipe.population || placeBusinessAffinity(recipe.type, cell, formations).score > 0)
       .sort((a, b) => {
         const reserveA = !hasInn && recipe.type !== 'inn' && a.cell.height >= 2 ? -50 : 0;
         const reserveB = !hasInn && recipe.type !== 'inn' && b.cell.height >= 2 ? -50 : 0;
         const employeeA = occupiedEmployees.has(a.citizen.id) ? -20 : 0;
         const employeeB = occupiedEmployees.has(b.citizen.id) ? -20 : 0;
-        const difference = recipe.score(b.citizen, b.cell, cells) + reserveB + employeeB - recipe.score(a.citizen, a.cell, cells) - reserveA - employeeA;
+        const formationA = placeBusinessAffinity(recipe.type, a.cell, formations).score;
+        const formationB = placeBusinessAffinity(recipe.type, b.cell, formations).score;
+        const difference = recipe.score(b.citizen, b.cell, cells) + formationB + reserveB + employeeB
+          - recipe.score(a.citizen, a.cell, cells) - formationA - reserveA - employeeA;
         if (difference !== 0) return difference;
         return hash(this.seed, b.cell.x, b.cell.z, recipe.population * 31) - hash(this.seed, a.cell.x, a.cell.z, recipe.population * 31);
       });

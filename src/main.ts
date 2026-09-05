@@ -8,11 +8,31 @@ import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type D
 import { HarborAmbience, type HarborMemoryInspection } from './harbor';
 import { weatherAt, type TownMemorySnapshot } from './memory';
 import { CraftingSystem } from './crafting';
-import type { JournalEntry, JournalIllustration, SavedTown } from './types';
+import { CARDINALS, keyOf, type FormationId, type JournalEntry, type JournalIllustration, type PlaceIdentityId, type SavedTown } from './types';
 import { FLOOR_HEIGHT } from './spatial';
 import { makeTidePostcard, readTidePostcard, TidePostcardError } from './tide-postcard';
 import { makeTownStl } from './town-stl';
 import { composePostcard, postcardDate } from './postcard-image';
+import { FORMATION_SKETCHES } from './atlas-illustrations';
+import {
+  detectFormations,
+  FORMATION_BY_ID,
+  FORMATION_CATALOG,
+  formationInfluenceSummary,
+  formationLineage,
+  hasAdjacentHomes,
+  type FormationOccurrence,
+} from './formations';
+import {
+  detectPlaceIdentities,
+  PLACE_IDENTITY_BY_ID,
+  PLACE_IDENTITY_CATALOG,
+  placeBusinessAffinity,
+  placeIdentityProgress,
+  placeLandmarkSocket,
+  livingPlaceIntroductionReady,
+  type PlaceIdentityOccurrence,
+} from './place-identities';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
@@ -72,6 +92,20 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <p id="thread-hint"></p>
       <div class="thread-progress" role="progressbar" aria-label="Discovery progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="thread-progress-fill"></i></div>
     </aside>
+    <aside class="first-tide" id="first-tide" aria-live="polite">
+      <button class="first-tide-close" id="first-tide-close" aria-label="Skip the first-tide guide">×</button>
+      <span id="first-tide-progress">First tide · 1 of 4</span>
+      <strong id="first-tide-title">Raise the first home</strong>
+      <p id="first-tide-hint">Click anywhere in the nearby water.</p>
+      <button class="first-tide-atlas" id="first-tide-atlas">Open Formation Atlas</button>
+    </aside>
+    <aside class="second-tide" id="second-tide" aria-live="polite">
+      <button class="second-tide-close" id="second-tide-close" aria-label="Dismiss the living-places introduction">×</button>
+      <span>Second tide</span>
+      <strong>When shapes meet</strong>
+      <p id="second-tide-hint">You know enough kinds of shape to begin listening for what happens when they meet.</p>
+      <button class="second-tide-atlas" id="second-tide-atlas">Explore living places</button>
+    </aside>
     <div class="hint" id="hint">
       <span class="desktop-hint"><i class="mouse"></i> click to build</span>
       <span class="desktop-hint">right-click to remove</span>
@@ -113,8 +147,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <div><span class="journal-kicker">Observations from the water</span><h2 id="journal-title">Harbor Journal</h2></div>
           <button id="journal-close" aria-label="Close observation journal">×</button>
         </header>
-        <p class="journal-intro">No tasks to finish—only small things the town has shown you.</p>
-        <div class="journal-list" id="journal-list"></div>
+        <div class="journal-tabs" role="tablist" aria-label="Harbor records">
+          <button id="journal-tab-stories" role="tab" data-journal-view="stories" aria-selected="true">Stories <span id="story-count">0</span></button>
+          <button id="journal-tab-atlas" role="tab" data-journal-view="atlas" aria-selected="false">Formations <span id="formation-count">0/18</span></button>
+        </div>
+        <p class="journal-intro" id="journal-intro">No tasks to finish—only small things the town has shown you.</p>
+        <div class="journal-list" id="journal-list" tabindex="0" aria-label="Journal entries"></div>
       </aside>
     </div>
     <div class="about-scrim" id="about-scrim" aria-hidden="true">
@@ -283,6 +321,16 @@ scene.add(water);
 const city = new CityRenderer(seed);
 scene.add(city.root);
 if (saved) city.load(saved.cells, day * 24 + timeOfDay);
+let formationOccurrences: readonly FormationOccurrence[] = detectFormations(city.cells);
+const knownFormations = new Set<FormationId>(saved?.formations ?? []);
+for (const id of formationLineage(formationOccurrences.map((formation) => formation.id))) knownFormations.add(id);
+let placeIdentityOccurrences: readonly PlaceIdentityOccurrence[] = detectPlaceIdentities(formationOccurrences);
+const knownPlaceIdentities = new Set<PlaceIdentityId>(saved?.placeIdentities ?? []);
+for (const occurrence of placeIdentityOccurrences) knownPlaceIdentities.add(occurrence.id);
+city.setPlaceIdentities(placeIdentityOccurrences);
+let onboardingDismissed = saved?.onboardingDismissed ?? Boolean(saved?.cells.length);
+let placeIntroductionSeen = saved?.placeIntroductionSeen ?? Boolean(saved?.placeIdentities?.length);
+let journalView: 'stories' | 'atlas' = 'stories';
 const citizens = new CitizenSystem(seed, city.cells, saved?.citizens ?? []);
 scene.add(citizens.root);
 const businesses = new BusinessSystem(seed, saved?.businesses ?? []);
@@ -312,6 +360,18 @@ hover.renderOrder = 3;
 hover.visible = false;
 scene.add(hover);
 
+const onboardingMarkerGeometry = new THREE.TorusGeometry(.54, .045, 8, 40);
+const onboardingMarkerMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffd477,
+  transparent: true,
+  opacity: .78,
+  depthWrite: false,
+  depthTest: false,
+});
+const onboardingMarkers = new THREE.Group();
+onboardingMarkers.userData.nonPrintable = true;
+scene.add(onboardingMarkers);
+
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const interactionPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -324,6 +384,8 @@ let multiTouchGesture = false;
 let dragged = false;
 let toastTimer = 0;
 let saveTimer = 0;
+let secondTideTimer = 0;
+let secondTideEligibleSince: number | null = null;
 let audioContext: AudioContext | null = null;
 let musicMuted = localStorage.getItem(MUSIC_MUTED_KEY) === 'true';
 const musicTracks = ['audio/deja-vus.m4a', 'audio/caketown.mp3'];
@@ -339,6 +401,7 @@ backgroundMusic.addEventListener('ended', () => {
 let selectedCitizenId: string | null = null;
 let touchMode: 'build' | 'remove' = 'build';
 let followedThreadId: string | null = saved?.followedDiscoveryId ?? null;
+let followedPlaceIdentityId: PlaceIdentityId | null = saved?.followedPlaceIdentityId ?? null;
 let observeMode = false;
 let selectedMemoryReader: (() => CityMemoryInspection | HarborMemoryInspection | null) | null = null;
 
@@ -522,12 +585,12 @@ function cityObservationAt(x: number, z: number, absoluteHours: number) {
   const memory = city.memoryAt(x, z, absoluteHours);
   if (!memory || memory.kind !== 'building') return memory;
   const business = businesses.all().find((candidate) => candidate.cellKey === `${x},${z}`);
-  const status = business ? crafting.businessStatus(business.type) : null;
+  const status = business ? crafting.businessStatus(business.type, business.cellKey, formationOccurrences) : null;
   return status ? { ...memory, detail: status, note: `${memory.detail} ${memory.note}` } : memory;
 }
 
 function showMemoryCard(memory: CityMemoryInspection | HarborMemoryInspection) {
-  document.querySelector('#memory-kicker')!.textContent = memory.kind === 'cat' ? 'Harbor family' : memory.kind === 'wildlife' ? 'Harbor wildlife' : memory.kind === 'boat' ? 'Harbor vessel' : memory.kind === 'tree' ? 'Living landmark' : 'Town memory';
+  document.querySelector('#memory-kicker')!.textContent = memory.kind === 'cat' ? 'Harbor family' : memory.kind === 'wildlife' ? 'Harbor wildlife' : memory.kind === 'boat' ? 'Harbor vessel' : memory.kind === 'tree' ? 'Living landmark' : memory.kind === 'landmark' ? 'Place landmark' : 'Town memory';
   document.querySelector('#memory-title')!.textContent = memory.title;
   document.querySelector('#memory-age')!.textContent = memory.ageLabel;
   document.querySelector('#memory-detail')!.textContent = memory.detail;
@@ -566,6 +629,7 @@ function build(x: number, z: number) {
     return;
   }
   citizens.rebuild(city.cells);
+  refreshFormations(true);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), false);
@@ -585,6 +649,7 @@ function demolish(x: number, z: number) {
   if (!city.remove(x, z, day * 24 + timeOfDay)) return;
   hideMemoryCard();
   citizens.rebuild(city.cells);
+  refreshFormations(true);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
   applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), true);
@@ -607,7 +672,7 @@ function persistSoon() {
 
 function currentTownData(): SavedTown {
   return {
-    version: 7,
+    version: 10,
     seed,
     cells: city.serialize(),
     timeOfDay,
@@ -618,8 +683,13 @@ function currentTownData(): SavedTown {
     journal: grow.entries(),
     eventLastTriggeredAt: grow.recurringTriggerTimes(),
     followedDiscoveryId: followedThreadId ?? undefined,
+    followedPlaceIdentityId: followedPlaceIdentityId ?? undefined,
     catColonyFoundedAt,
     crafting: crafting.serialize(),
+    formations: [...knownFormations],
+    placeIdentities: [...knownPlaceIdentities],
+    onboardingDismissed,
+    placeIntroductionSeen,
   };
 }
 
@@ -631,7 +701,7 @@ function saveTown() {
 function loadTown(): SavedTown | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedTown | null;
-    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 || parsed?.version === 5 || parsed?.version === 6 || parsed?.version === 7 ? parsed : null;
+    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 || parsed?.version === 5 || parsed?.version === 6 || parsed?.version === 7 || parsed?.version === 8 || parsed?.version === 9 || parsed?.version === 10 ? parsed : null;
   } catch {
     return null;
   }
@@ -643,6 +713,182 @@ function showToast(message: string) {
   toast.classList.add('show');
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2200);
+}
+
+function refreshFormations(announce: boolean) {
+  const previousPlaces = placeIdentityOccurrences;
+  formationOccurrences = detectFormations(city.cells);
+  placeIdentityOccurrences = detectPlaceIdentities(formationOccurrences);
+  const settledPlaces = placeIdentityOccurrences.filter((occurrence) => !previousPlaces.some((previous) =>
+    previous.id === occurrence.id && Math.abs(previous.x - occurrence.x) + Math.abs(previous.z - occurrence.z) <= 2));
+  city.setPlaceIdentities(placeIdentityOccurrences, announce);
+  const expanded = formationLineage(formationOccurrences.map((formation) => formation.id));
+  const revealed = [...expanded].filter((id) => !knownFormations.has(id));
+  for (const id of expanded) knownFormations.add(id);
+  const revealedPlaces = placeIdentityOccurrences.filter((occurrence) => !knownPlaceIdentities.has(occurrence.id));
+  for (const occurrence of placeIdentityOccurrences) knownPlaceIdentities.add(occurrence.id);
+  if (announce && settledPlaces.length) {
+    const occurrence = settledPlaces.at(-1)!;
+    const identity = PLACE_IDENTITY_BY_ID.get(occurrence.id);
+    const landmark = placeLandmarkSocket(occurrence);
+    const firstDiscovery = revealedPlaces.some((revealed) => revealed.id === occurrence.id);
+    if (firstDiscovery) placeIntroductionSeen = true;
+    if (identity) showToast(firstDiscovery
+      ? `${identity.title} has emerged. Its ${identity.landmark.title.toLowerCase()} could settle nowhere else.`
+      : `${identity.landmark.title} has settled here again.`);
+    controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .22);
+    city.celebrateAt(landmark.x, landmark.z);
+    citizens.gatherAt(landmark.x, landmark.z, `welcoming the new ${landmark.title.toLowerCase()}`);
+    softTone(430, .16);
+    window.setTimeout(() => softTone(650, .2), 90);
+    if (settledPlaces.some((place) => place.id === followedPlaceIdentityId)) followedPlaceIdentityId = null;
+  } else if (announce && revealed.length) {
+    const formation = FORMATION_BY_ID.get(revealed.at(-1)!);
+    if (formation) showToast(`New formation: ${formation.title}. Recorded in the Atlas.`);
+  }
+  updateFirstTideGuide();
+  updateSecondTideIntroduction();
+  updateThreadStatus();
+  if (document.querySelector('#journal-scrim')?.classList.contains('show')) renderJournal();
+}
+
+function onboardingStep() {
+  if (!city.cells.size) return 0;
+  if (!knownFormations.has('narrow-canal')) return 1;
+  if (!knownFormations.has('sea-arch')) return 2;
+  if (!hasAdjacentHomes(city.cells)) return 3;
+  return 4;
+}
+
+function crossingBanks(occurrence: FormationOccurrence) {
+  for (const [[ax, az], [bx, bz]] of [
+    [[-1, 0], [1, 0]],
+    [[0, -1], [0, 1]],
+  ] as const) {
+    const first = city.get(occurrence.x + ax, occurrence.z + az);
+    const second = city.get(occurrence.x + bx, occurrence.z + bz);
+    if (first && second) return [first, second] as const;
+  }
+  return [];
+}
+
+function updateOnboardingMarkers(step: number) {
+  onboardingMarkers.clear();
+  onboardingMarkers.visible = !onboardingDismissed && step < 4;
+  if (!onboardingMarkers.visible) return;
+
+  const targets: { x: number; z: number; height?: number }[] = [];
+  if (step === 0) {
+    targets.push({ x: 0, z: 0 });
+  } else if (step === 1) {
+    for (const home of city.cells.values()) {
+      for (const [dx, dz] of CARDINALS) {
+        const x = home.x + dx * 2;
+        const z = home.z + dz * 2;
+        if (!city.get(home.x + dx, home.z + dz) && !city.get(x, z) && city.isBuildable(x, z)) targets.push({ x, z });
+      }
+    }
+  } else if (step === 2) {
+    const canal = formationOccurrences.find((formation) => formation.id === 'narrow-canal');
+    if (canal) {
+      for (const bank of crossingBanks(canal)) {
+        if (bank.height < 2) targets.push({ x: bank.x, z: bank.z, height: bank.height });
+      }
+    }
+  } else if (step === 3) {
+    const crossing = formationOccurrences.find((formation) => ['sea-arch', 'high-bridge', 'covered-skybridge', 'lantern-gate'].includes(formation.id));
+    if (crossing) {
+      const candidates = new Map<string, { x: number; z: number }>();
+      for (const bank of crossingBanks(crossing)) {
+        for (const [dx, dz] of CARDINALS) {
+          const x = bank.x + dx;
+          const z = bank.z + dz;
+          if ((x !== crossing.x || z !== crossing.z) && !city.get(x, z) && city.isBuildable(x, z)) candidates.set(keyOf(x, z), { x, z });
+        }
+      }
+      targets.push(...[...candidates.values()]
+        .sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z) || a.z - b.z || a.x - b.x)
+        .slice(0, 3));
+    }
+  }
+
+  const size = CityRenderer.cellSize();
+  for (const target of targets) {
+    const marker = new THREE.Mesh(onboardingMarkerGeometry, onboardingMarkerMaterial);
+    marker.rotation.x = Math.PI / 2;
+    marker.position.set(target.x * size, target.height === undefined ? -.22 : .5 + target.height * FLOOR_HEIGHT, target.z * size);
+    marker.renderOrder = 4;
+    marker.userData.nonPrintable = true;
+    onboardingMarkers.add(marker);
+  }
+}
+
+function updateFirstTideGuide() {
+  const panel = document.querySelector<HTMLElement>('#first-tide')!;
+  if (onboardingDismissed) {
+    panel.classList.remove('show');
+    onboardingMarkers.visible = false;
+    return;
+  }
+  const step = onboardingStep();
+  const copy = [
+    ['Raise the first home', 'Build at the golden ripple—or anywhere in the nearby water.'],
+    ['Leave water between neighbors', 'The four ripples skip one water tile. Choose one for a second home.'],
+    ['Lift both banks', 'Gold rings mark the two roofs. Add one storey to each to make a sea arch.'],
+    ['Let buildings meet', 'Choose a nearby ripple. A shared wall will reshape both buildings.'],
+    ['The harbor is yours', 'Shapes create places. Right-click—or choose Remove—to take a floor back whenever you like.'],
+  ] as const;
+  document.querySelector('#first-tide-progress')!.textContent = step === 4 ? 'First tide complete' : `First tide · ${step + 1} of 4`;
+  document.querySelector('#first-tide-title')!.textContent = copy[step][0];
+  document.querySelector('#first-tide-hint')!.textContent = copy[step][1];
+  document.querySelector('#first-tide-atlas')!.textContent = step === 4 ? 'Explore Formation Atlas' : 'Open Formation Atlas';
+  panel.classList.toggle('complete', step === 4);
+  panel.classList.add('show');
+  updateOnboardingMarkers(step);
+}
+
+function dismissFirstTide() {
+  onboardingDismissed = true;
+  document.querySelector('#first-tide')!.classList.remove('show');
+  onboardingMarkers.visible = false;
+  updateSecondTideIntroduction();
+  persistSoon();
+}
+
+function updateSecondTideIntroduction() {
+  const panel = document.querySelector<HTMLElement>('#second-tide')!;
+  const journalOpen = document.querySelector('#journal-scrim')?.classList.contains('show');
+  const residents = citizens.residents().filter((resident) => resident.residentKind !== 'visitor').length;
+  const eligible = onboardingDismissed
+    && livingPlaceIntroductionReady(knownFormations, formationOccurrences, residents)
+    && !placeIntroductionSeen
+    && !followedPlaceIdentityId;
+  if (!eligible) {
+    secondTideEligibleSince = null;
+    window.clearTimeout(secondTideTimer);
+    panel.classList.remove('show');
+    return;
+  }
+  if (secondTideEligibleSince === null) {
+    secondTideEligibleSince = performance.now();
+    window.clearTimeout(secondTideTimer);
+    secondTideTimer = window.setTimeout(updateSecondTideIntroduction, 4200);
+  }
+  const surfaced = PLACE_IDENTITY_CATALOG.filter((identity) =>
+    knownPlaceIdentities.has(identity.id) || placeIdentityProgress(identity.id, formationOccurrences).state !== 'missing').length;
+  document.querySelector('#second-tide-hint')!.textContent = surfaced === 1
+    ? 'One possibility has begun to surface. The Atlas will reveal only the part your town is ready to understand.'
+    : `${surfaced} possibilities have begun to surface. The Atlas will reveal only what your town is ready to understand.`;
+  const delayPassed = performance.now() - secondTideEligibleSince >= 4000;
+  panel.classList.toggle('show', delayPassed && !journalOpen);
+}
+
+function dismissSecondTide() {
+  placeIntroductionSeen = true;
+  secondTideEligibleSince = null;
+  window.clearTimeout(secondTideTimer);
+  document.querySelector('#second-tide')!.classList.remove('show');
+  persistSoon();
 }
 
 function currentSnapshot() {
@@ -668,6 +914,8 @@ function currentSnapshot() {
     timeOfDay,
     priorDiscoveries: grow.discoveredIds(),
     memory,
+    placeIdentities: placeIdentityOccurrences,
+    placeVisitorCounts: citizens.identityUseCounts(),
   });
 }
 
@@ -763,7 +1011,10 @@ function updateGrowInspector() {
   const citizensTitle = document.createElement('span');
   citizensTitle.textContent = 'Citizens';
   const citizenList = document.createElement('p');
-  citizenList.textContent = snapshot.citizens.map((citizen) => `${citizen.name} · ${citizen.ageGroup ?? 'adult'} · ${citizen.occupation}${citizen.residentKind === 'visitor' ? ' · visitor' : ''}`).join('\n') || 'none';
+  citizenList.textContent = snapshot.citizens.map((citizen) => {
+    const card = citizens.card(citizen.id);
+    return `${citizen.name} · ${citizen.ageGroup ?? 'adult'} · ${citizen.occupation}${citizen.residentKind === 'visitor' ? ' · visitor' : ''}${card ? ` · ${card.activity} → ${card.destination}` : ''}`;
+  }).join('\n') || 'none';
   const businessesTitle = document.createElement('span');
   businessesTitle.textContent = 'Businesses';
   const businessList = document.createElement('p');
@@ -795,9 +1046,25 @@ function updateGrowInspector() {
 function renderJournal() {
   const list = document.querySelector<HTMLDivElement>('#journal-list')!;
   const entries = grow.entries().reverse();
-  const clues = grow.clues(currentSnapshot());
   document.querySelector('#journal-count')!.textContent = String(entries.length);
+  document.querySelector('#story-count')!.textContent = String(entries.length);
+  document.querySelector('#formation-count')!.textContent = `${knownFormations.size}/${FORMATION_CATALOG.length}`;
+  document.querySelector('#journal-title')!.textContent = journalView === 'stories' ? 'Harbor Journal' : 'Formation Atlas';
+  document.querySelector('.journal-kicker')!.textContent = journalView === 'stories' ? 'Observations from the water' : 'The shapes a town can remember';
+  document.querySelector('#journal-intro')!.textContent = journalView === 'stories'
+    ? 'No tasks to finish—only small things the town has shown you.'
+    : 'Build around space, water, and neighboring roofs. Every form can be made again.';
+  document.querySelectorAll<HTMLButtonElement>('[data-journal-view]').forEach((button) => {
+    const selected = button.dataset.journalView === journalView;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-selected', String(selected));
+  });
   list.replaceChildren();
+  if (journalView === 'atlas') {
+    renderFormationAtlas(list);
+    return;
+  }
+  const clues = grow.clues(currentSnapshot());
   const clueSection = document.createElement('section');
   clueSection.className = 'journal-clues';
   const clueHeading = document.createElement('div');
@@ -823,6 +1090,162 @@ function renderJournal() {
   for (const entry of entries) list.append(createJournalEntry(entry));
 }
 
+function renderFormationAtlas(list: HTMLDivElement) {
+  const activeCounts = new Map<FormationId, number>();
+  for (const occurrence of formationOccurrences) activeCounts.set(occurrence.id, (activeCounts.get(occurrence.id) ?? 0) + 1);
+  const formationUseCounts = citizens.formationUseCounts();
+
+  const summary = document.createElement('div');
+  summary.className = 'atlas-summary';
+  summary.innerHTML = `<strong>${knownFormations.size} of ${FORMATION_CATALOG.length}</strong><span>formations remembered · ${knownPlaceIdentities.size} of ${PLACE_IDENTITY_CATALOG.length} living places</span>`;
+  list.append(summary);
+  renderPlaceIdentityAtlas(list);
+
+  const formationHeading = document.createElement('div');
+  formationHeading.className = 'atlas-section-heading';
+  formationHeading.innerHTML = '<strong>Building formations</strong><span>The individual shapes that make a town’s vocabulary.</span>';
+  const grid = document.createElement('div');
+  grid.className = 'atlas-grid';
+  for (const formation of FORMATION_CATALOG) {
+    const learned = knownFormations.has(formation.id);
+    const active = activeCounts.get(formation.id) ?? 0;
+    const gathering = formationUseCounts.get(formation.id) ?? 0;
+    const card = document.createElement('button');
+    card.className = `atlas-card ${learned ? 'learned' : 'unknown'} ${active ? 'active-place' : ''}`;
+    card.disabled = !active;
+    if (active) card.dataset.formationId = formation.id;
+    card.setAttribute('aria-label', learned
+      ? `${formation.title}. ${active ? `${active} currently in town${gathering ? ` with ${gathering} visiting` : ''}; focus formation.` : 'Not currently in town.'}`
+      : `Undiscovered formation. ${formation.hint}`);
+    const illustration = document.createElement('span');
+    illustration.className = 'atlas-illustration';
+    illustration.setAttribute('aria-hidden', 'true');
+    illustration.append(createFormationSketch(formation.id));
+    const mark = document.createElement('span');
+    mark.className = 'atlas-mark';
+    mark.textContent = learned ? formation.mark : '?';
+    const copy = document.createElement('span');
+    copy.className = 'atlas-copy';
+    const family = document.createElement('small');
+    family.textContent = `${formation.family} · ${formation.tier > 1 ? `form ${formation.tier}` : 'first form'}`;
+    const title = document.createElement('strong');
+    title.textContent = learned ? formation.title : 'Uncharted form';
+    const description = document.createElement('span');
+    description.textContent = learned ? formation.description : formation.hint;
+    const influence = document.createElement('span');
+    influence.className = 'atlas-influence';
+    influence.textContent = learned ? formationInfluenceSummary(formation) : '';
+    const status = document.createElement('em');
+    status.textContent = active
+      ? `${active} in town${gathering ? ` · ${gathering} ${gathering === 1 ? 'visitor' : 'visitors'}` : ''} · focus`
+      : learned ? 'Remembered' : 'Not yet shaped';
+    copy.append(family, title, description);
+    if (learned) copy.append(influence);
+    copy.append(status);
+    card.append(illustration, mark, copy);
+    grid.append(card);
+  }
+  list.append(formationHeading, grid);
+}
+
+function renderPlaceIdentityAtlas(list: HTMLDivElement) {
+  const activeCounts = new Map<PlaceIdentityId, number>();
+  for (const occurrence of placeIdentityOccurrences) activeCounts.set(occurrence.id, (activeCounts.get(occurrence.id) ?? 0) + 1);
+  const useCounts = citizens.identityUseCounts();
+  const heading = document.createElement('div');
+  heading.className = 'atlas-section-heading identity-heading';
+  heading.innerHTML = '<strong>Living places</strong><span>Possibilities become clearer only after the town has shaped one of their ingredients.</span>';
+  const grid = document.createElement('div');
+  grid.className = 'identity-grid';
+  for (const identity of PLACE_IDENTITY_CATALOG) {
+    const learned = knownPlaceIdentities.has(identity.id);
+    const active = activeCounts.get(identity.id) ?? 0;
+    const gathering = useCounts.get(identity.id) ?? 0;
+    const progress = placeIdentityProgress(identity.id, formationOccurrences);
+    const following = followedPlaceIdentityId === identity.id;
+    const surfaced = learned || progress.state !== 'missing';
+    const canFollow = !active && (learned || progress.state === 'one-form' || progress.state === 'distant');
+    const card = document.createElement('button');
+    card.className = `identity-card ${learned ? 'learned' : surfaced ? 'surfaced' : 'unknown'} ${active ? 'active-place' : ''} ${following ? 'following' : ''}`;
+    if (active) card.dataset.placeIdentityId = identity.id;
+    else if (canFollow) card.dataset.followPlaceId = identity.id;
+    card.disabled = !active && !canFollow;
+    card.setAttribute('aria-pressed', String(following));
+    const visibleTitle = learned || surfaced ? identity.title : identity.mysteryTitle;
+    const visibleDescription = following
+      ? progress.hint
+      : learned ? identity.description
+      : surfaced ? progress.hint
+      : identity.rumor;
+    card.setAttribute('aria-label', `${visibleTitle}. ${visibleDescription} ${active
+      ? `${active} currently in town${gathering ? ` with ${gathering} visiting` : ''}; visit landmark.`
+      : following ? 'Currently following this clue.'
+      : canFollow ? 'Follow this clue.'
+      : 'Its formation recipe has not surfaced yet.'}`);
+    const mark = document.createElement('span');
+    mark.className = 'identity-mark';
+    mark.textContent = learned ? identity.mark : surfaced ? '◌' : '◇';
+    const copy = document.createElement('span');
+    copy.className = 'identity-copy';
+    const kicker = document.createElement('small');
+    kicker.textContent = learned ? 'emergent neighborhood' : surfaced ? 'a clue has surfaced' : 'harbor rumor';
+    const title = document.createElement('strong');
+    title.textContent = visibleTitle;
+    const description = document.createElement('span');
+    description.textContent = visibleDescription;
+    const influence = document.createElement('span');
+    influence.className = 'atlas-influence';
+    influence.textContent = learned ? `${identity.landmark.title}: ${identity.landmark.description} ${identity.landmark.effect} ${identity.influence}` : '';
+    const status = document.createElement('em');
+    status.textContent = active
+      ? `${active} in town${gathering ? ` · ${gathering} ${gathering === 1 ? 'visitor' : 'visitors'}` : ''} · focus`
+      : following ? `following · ${Math.round(progress.value * 100)}%`
+      : learned ? 'Remembered · follow to rebuild'
+      : surfaced ? 'Follow the surfaced clue'
+      : 'Listen for one of its forms';
+    copy.append(kicker, title, description);
+    if (learned) copy.append(influence);
+    copy.append(status);
+    card.append(mark, copy);
+    grid.append(card);
+  }
+  list.append(heading, grid);
+}
+
+function createFormationSketch(id: FormationId) {
+  const template = document.createElement('template');
+  template.innerHTML = `<svg viewBox="0 0 108 72" focusable="false" aria-hidden="true">
+    <g class="journal-sketch-lines">${FORMATION_SKETCHES[id]}</g>
+  </svg>`;
+  return template.content.firstElementChild!;
+}
+
+function setJournalView(view: 'stories' | 'atlas') {
+  journalView = view;
+  renderJournal();
+}
+
+function revisitFormation(id: FormationId) {
+  const occurrence = formationOccurrences.find((formation) => formation.id === id);
+  const definition = FORMATION_BY_ID.get(id);
+  if (!occurrence || !definition) return;
+  controls.target.lerp(city.worldPosition(occurrence.x, occurrence.z).setY(1), .55);
+  city.celebrateAt(occurrence.x, occurrence.z);
+  setJournalOpen(false);
+  showToast(`${definition.title}: shaped by the buildings around it.`);
+}
+
+function revisitPlaceIdentity(id: PlaceIdentityId) {
+  const occurrence = placeIdentityOccurrences.find((identity) => identity.id === id);
+  const definition = PLACE_IDENTITY_BY_ID.get(id);
+  if (!occurrence || !definition) return;
+  const landmark = placeLandmarkSocket(occurrence);
+  controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .55);
+  city.celebrateAt(landmark.x, landmark.z);
+  setJournalOpen(false);
+  showToast(`${definition.title}: visit its ${definition.landmark.title.toLowerCase()}, formed by neighboring shapes.`);
+}
+
 function createClueCard(clue: DiscoveryClue) {
   const button = document.createElement('button');
   const percent = Math.round(clue.progress * 100);
@@ -836,6 +1259,23 @@ function createClueCard(clue: DiscoveryClue) {
 
 function updateThreadStatus(snapshot = currentSnapshot()) {
   const panel = document.querySelector<HTMLElement>('#tide-thread')!;
+  if (followedPlaceIdentityId) {
+    const definition = PLACE_IDENTITY_BY_ID.get(followedPlaceIdentityId);
+    const placeProgress = placeIdentityProgress(followedPlaceIdentityId, formationOccurrences);
+    if (!definition || placeProgress.state === 'active') {
+      followedPlaceIdentityId = null;
+      panel.classList.remove('show');
+      return;
+    }
+    const checks = placeProgress.requirements.map((requirement, index) => `${placeProgress.found[index] ? '✓' : '○'} ${requirement}`).join(' · ');
+    const percent = Math.round(placeProgress.value * 100);
+    document.querySelector('#thread-title')!.textContent = `${definition.title} → ${definition.landmark.title}`;
+    document.querySelector('#thread-hint')!.textContent = `${checks}. ${placeProgress.hint}`;
+    document.querySelector<HTMLElement>('#thread-progress-fill')!.style.width = `${percent}%`;
+    panel.querySelector<HTMLElement>('[role="progressbar"]')!.setAttribute('aria-valuenow', String(percent));
+    panel.classList.add('show');
+    return;
+  }
   if (!followedThreadId || grow.discoveredIds().includes(followedThreadId)) {
     followedThreadId = null;
     panel.classList.remove('show');
@@ -857,6 +1297,7 @@ function updateThreadStatus(snapshot = currentSnapshot()) {
 
 function followThread(eventId: string) {
   followedThreadId = followedThreadId === eventId ? null : eventId;
+  if (followedThreadId) followedPlaceIdentityId = null;
   const snapshot = currentSnapshot();
   updateThreadStatus(snapshot);
   renderJournal();
@@ -866,6 +1307,22 @@ function followThread(eventId: string) {
   if (clue?.focus) controls.target.lerp(city.worldPosition(clue.focus.x, clue.focus.z).setY(1), .4);
   setJournalOpen(false);
   showToast(`Following “${clue?.title ?? 'a new thread'}”.`);
+}
+
+function followPlaceIdentity(id: PlaceIdentityId) {
+  followedPlaceIdentityId = followedPlaceIdentityId === id ? null : id;
+  if (followedPlaceIdentityId) followedThreadId = null;
+  placeIntroductionSeen = true;
+  updateSecondTideIntroduction();
+  updateThreadStatus();
+  renderJournal();
+  persistSoon();
+  if (!followedPlaceIdentityId) return;
+  const definition = PLACE_IDENTITY_BY_ID.get(id);
+  const progress = placeIdentityProgress(id, formationOccurrences);
+  if (progress.focus) controls.target.lerp(city.worldPosition(progress.focus.x, progress.focus.z).setY(1), .4);
+  setJournalOpen(false);
+  showToast(`Following ${definition?.title ?? 'a living place'}: shape its formations, then bring them close.`);
 }
 
 function revisitDiscovery(eventId: string) {
@@ -1031,6 +1488,7 @@ function setJournalOpen(open: boolean) {
   }
   scrim.classList.toggle('show', open);
   scrim.setAttribute('aria-hidden', String(!open));
+  if (!open) updateSecondTideIntroduction();
 }
 
 function setAboutOpen(open: boolean) {
@@ -1067,13 +1525,17 @@ function setPostcardOpen(open: boolean) {
 function canvasPng(inscription: string) {
   return new Promise<Blob>((resolve, reject) => {
     const hoverWasVisible = hover.visible;
+    const markersWereVisible = onboardingMarkers.visible;
     hover.visible = false;
+    onboardingMarkers.visible = false;
     renderer.render(scene, camera);
     void composePostcard(renderer.domElement, { inscription, date: postcardDate(), day }).then((blob) => {
       hover.visible = hoverWasVisible;
+      onboardingMarkers.visible = markersWereVisible;
       resolve(blob);
     }, (error) => {
       hover.visible = hoverWasVisible;
+      onboardingMarkers.visible = markersWereVisible;
       reject(error);
     });
   });
@@ -1171,6 +1633,13 @@ function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
     const citizen = citizens.card(hire.citizenId);
     showToast(`${citizen?.name ?? 'A neighbor'} has begun helping at ${hire.business.name}.`);
     playCue('door');
+  }
+  if (announce && update.opened[0]) {
+    const opened = update.opened[0];
+    const [x, z] = opened.cellKey.split(',').map(Number);
+    const affinity = placeBusinessAffinity(opened.type, { x, z }, formationOccurrences);
+    if (affinity.identity) showToast(`${opened.name} opens in ${affinity.identity.title}. The neighborhood suits the trade.`);
+    else if (affinity.formation) showToast(`${opened.name} opens near the ${affinity.formation.title.toLowerCase()}. The place suits the trade.`);
   }
   persistSoon();
   if (update.opened.length) evaluateDiscoveries();
@@ -1358,11 +1827,28 @@ document.querySelector('#observe-toggle')!.addEventListener('click', () => {
 });
 document.querySelector('#thread-close')!.addEventListener('click', () => {
   followedThreadId = null;
+  followedPlaceIdentityId = null;
   updateThreadStatus();
   persistSoon();
 });
+document.querySelector('#first-tide-close')!.addEventListener('click', dismissFirstTide);
+document.querySelector('#first-tide-atlas')!.addEventListener('click', () => {
+  const complete = onboardingStep() === 4;
+  setJournalView('atlas');
+  setJournalOpen(true);
+  if (complete) dismissFirstTide();
+});
+document.querySelector('#second-tide-close')!.addEventListener('click', dismissSecondTide);
+document.querySelector('#second-tide-atlas')!.addEventListener('click', () => {
+  dismissSecondTide();
+  setJournalView('atlas');
+  setJournalOpen(true);
+});
 document.querySelector('#journal-open')!.addEventListener('click', () => setJournalOpen(true));
 document.querySelector('#journal-close')!.addEventListener('click', () => setJournalOpen(false));
+document.querySelectorAll<HTMLButtonElement>('[data-journal-view]').forEach((button) => {
+  button.addEventListener('click', () => setJournalView(button.dataset.journalView === 'atlas' ? 'atlas' : 'stories'));
+});
 document.querySelector('#journal-scrim')!.addEventListener('click', (event) => {
   if (event.target === event.currentTarget) setJournalOpen(false);
 });
@@ -1372,6 +1858,12 @@ document.querySelector('#journal-list')!.addEventListener('click', (event) => {
   if (thread?.dataset.threadId) followThread(thread.dataset.threadId);
   const revisit = target.closest<HTMLButtonElement>('[data-revisit-id]');
   if (revisit?.dataset.revisitId) revisitDiscovery(revisit.dataset.revisitId);
+  const formation = target.closest<HTMLButtonElement>('[data-formation-id]');
+  if (formation?.dataset.formationId) revisitFormation(formation.dataset.formationId as FormationId);
+  const identity = target.closest<HTMLButtonElement>('[data-place-identity-id]');
+  if (identity?.dataset.placeIdentityId) revisitPlaceIdentity(identity.dataset.placeIdentityId as PlaceIdentityId);
+  const followPlace = target.closest<HTMLButtonElement>('[data-follow-place-id]');
+  if (followPlace?.dataset.followPlaceId) followPlaceIdentity(followPlace.dataset.followPlaceId as PlaceIdentityId);
 });
 document.querySelector('#about-open')!.addEventListener('click', () => setAboutOpen(true));
 document.querySelector('#about-close')!.addEventListener('click', () => setAboutOpen(false));
@@ -1463,14 +1955,18 @@ window.addEventListener('keydown', (event) => {
 
 const ambience = new HarborAmbience(seed, camera, city.cells.values());
 ambience.setDiscoveryState(grow.discoveredIds());
+ambience.setPlaceIdentities(placeIdentityOccurrences);
 ambience.setTown(city.cells.values(), businesses.all(), citizens.residents(), city.matureTreeAnchors(day * 24 + timeOfDay));
 scene.add(ambience.root);
 renderJournal();
 updateThreadStatus();
+updateFirstTideGuide();
+updateSecondTideIntroduction();
 
 function refreshAmbience() {
   const catsBefore = ambience.wildlifeStats();
   ambience.setTown(city.cells.values(), businesses.all(), citizens.residents(), city.matureTreeAnchors(day * 24 + timeOfDay));
+  ambience.setPlaceIdentities(placeIdentityOccurrences);
   ambience.setDiscoveryState(grow.discoveredIds());
   citizens.setDiscoveries(grow.discoveredIds());
   const catsAfter = ambience.wildlifeStats();
@@ -1613,7 +2109,7 @@ function animate() {
     applyBusinessUpdate(businesses.recordVisits(citizens.drainBusinessVisits(), residentState), true);
     const businessUpdate = businesses.update(residentState, city.cells, absoluteHours);
     applyBusinessUpdate(businessUpdate, true);
-    const craftingUpdate = crafting.update(businesses.all(), residentState, grow.discoveredIds(), absoluteHours);
+    const craftingUpdate = crafting.update(businesses.all(), residentState, grow.discoveredIds(), absoluteHours, formationOccurrences);
     if (craftingUpdate.delivery) citizens.beginDelivery(craftingUpdate.delivery.fromCellKey, craftingUpdate.delivery.toCellKey, craftingUpdate.delivery.good);
     if (craftingUpdate.milestone) {
       showToast(craftingUpdate.milestone);
@@ -1684,8 +2180,12 @@ function animate() {
     recoverySeconds = 0;
   }
   controls.update();
-  renderer.render(scene, camera);
-  if (profileFrame) recordPerformanceCost('render', profileStartedAt);
+  // Keep the WebGL surface still beneath the long, scrollable journal. On
+  // Chromium, repainting the canvas and an overlay scroller in the same frame
+  // can expose partially rasterized tiles while the Atlas is moving.
+  const journalOpen = document.querySelector('#journal-scrim')!.classList.contains('show');
+  if (!journalOpen) renderer.render(scene, camera);
+  if (profileFrame && !journalOpen) recordPerformanceCost('render', profileStartedAt);
   if (performanceUpdate > .75) {
     const info = renderer.info.render;
     const cpu = Object.values(performanceCosts).reduce((sum, duration) => sum + duration, 0);

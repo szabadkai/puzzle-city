@@ -1,4 +1,6 @@
 import type { BusinessSave, BusinessType, CraftGood, CraftingSave, CitizenSave } from './types';
+import type { FormationOccurrence } from './formations.ts';
+import { placeBusinessAffinity } from './place-identities.ts';
 
 type Ingredient = Partial<Record<CraftGood, number>>;
 
@@ -136,7 +138,13 @@ export class CraftingSystem {
     this.cursor = saved?.cursor ?? 0;
   }
 
-  update(businesses: readonly BusinessSave[], citizens: readonly CitizenSave[], discoveries: readonly string[], absoluteHours: number): CraftingUpdate {
+  update(
+    businesses: readonly BusinessSave[],
+    citizens: readonly CitizenSave[],
+    discoveries: readonly string[],
+    absoluteHours: number,
+    formations: readonly FormationOccurrence[] = [],
+  ): CraftingUpdate {
     if (absoluteHours - this.lastProducedAt < PRODUCTION_INTERVAL) return { changed: false };
     const hour = ((absoluteHours % 24) + 24) % 24;
     const discovered = new Set(discoveries);
@@ -152,19 +160,31 @@ export class CraftingSystem {
       if ((this.goods[recipe.output] ?? 0) >= CAPACITY) continue;
       if (!this.hasIngredients(recipe.inputs)) continue;
 
+      const baseAmount = recipe.amount ?? 1;
+      const sourceKey = worker?.homeKey ?? producer?.cellKey;
+      const [sourceX, sourceZ] = sourceKey?.split(',').map(Number) ?? [];
+      const affinity = producer && Number.isFinite(sourceX) && Number.isFinite(sourceZ)
+        ? placeBusinessAffinity(producer.type, { x: sourceX!, z: sourceZ! }, formations)
+        : { score: 0 };
+      const amount = baseAmount + (affinity.identity ? 2 : affinity.score > 0 ? 1 : 0);
+
       this.consume(recipe.inputs);
-      this.goods[recipe.output] = Math.min(CAPACITY, (this.goods[recipe.output] ?? 0) + (recipe.amount ?? 1));
+      this.goods[recipe.output] = Math.min(CAPACITY, (this.goods[recipe.output] ?? 0) + amount);
       this.lastProducedAt = absoluteHours;
       this.cursor = (index + 1) % RECIPES.length;
       const first = !this.completedRecipes.has(recipe.id);
       this.completedRecipes.add(recipe.id);
 
-      const sourceKey = worker?.homeKey ?? producer?.cellKey;
       const destination = recipe.deliveryTo?.flatMap((type) => businesses.filter((business) => business.type === type))[0];
       const delivery = sourceKey && destination && sourceKey !== destination.cellKey
-        ? { good: recipe.output, amount: recipe.amount ?? 1, fromCellKey: sourceKey, toCellKey: destination.cellKey }
+        ? { good: recipe.output, amount, fromCellKey: sourceKey, toCellKey: destination.cellKey }
         : undefined;
-      return { changed: true, delivery, milestone: first ? recipe.milestone : undefined };
+      const milestone = first
+        ? `${recipe.milestone}${affinity.identity
+          ? ` The ${affinity.identity.title.toLowerCase()} makes it a generous batch.`
+          : affinity.formation ? ` The nearby ${affinity.formation.title.toLowerCase()} makes it a fuller batch.` : ''}`
+        : undefined;
+      return { changed: true, delivery, milestone };
     }
     // Do not spin on a blocked economy every frame. A quarter-hour retry keeps
     // newly supplied chains responsive without turning shortages into pressure.
@@ -191,11 +211,11 @@ export class CraftingSystem {
       .join(' · ');
   }
 
-  businessStatus(type: BusinessType) {
+  businessStatus(type: BusinessType, cellKey?: string, formations: readonly FormationOccurrence[] = []) {
     const recipes = RECIPES.filter((recipe) => recipe.producer === type && Object.keys(recipe.inputs).length > 0);
     const visible = recipes.length ? recipes : RECIPES.filter((recipe) => recipe.producer === type);
     if (!visible.length) return null;
-    return visible.map((recipe) => {
+    const status = visible.map((recipe) => {
       const inputs = Object.keys(recipe.inputs).map((good) => craftGoodLabel(good as CraftGood));
       const chain = inputs.length ? `${inputs.join(' + ')} → ${craftGoodLabel(recipe.output)}` : `lands ${craftGoodLabel(recipe.output)}`;
       const waiting = Object.entries(recipe.inputs)
@@ -203,6 +223,13 @@ export class CraftingSystem {
         .map(([good]) => craftGoodLabel(good as CraftGood));
       return waiting.length ? `${chain} · waiting for ${waiting.join(' and ')}` : `${chain} · ready`;
     }).join('. ');
+    const [x, z] = cellKey?.split(',').map(Number) ?? [];
+    const affinity = Number.isFinite(x) && Number.isFinite(z)
+      ? placeBusinessAffinity(type, { x: x!, z: z! }, formations)
+      : { score: 0 };
+    if (affinity.identity) return `${status}. The ${affinity.identity.title.toLowerCase()} adds two extra items to each batch.`;
+    if (affinity.formation) return `${status}. The nearby ${affinity.formation.title.toLowerCase()} adds one extra item to each batch.`;
+    return status;
   }
 
   completedCount() { return this.completedRecipes.size; }

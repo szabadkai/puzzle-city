@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { businessLabel, businessOccupation, isBusinessOpen } from './businesses';
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenSave, type CraftGood, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenSave, type CraftGood, type FormationId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
 import { findPlazaAnchors } from './topology';
 import {
@@ -11,6 +11,8 @@ import {
   TERRACE_STEP_COUNT, terraceStepOutward, terraceStepWalkY, roofWalkY,
 } from './spatial';
 import { hasDock } from './water';
+import { detectFormations, FORMATION_BY_ID, formationGatheringActivity } from './formations';
+import { detectPlaceIdentities, PLACE_IDENTITY_BY_ID, placeIdentityActivity, placeLandmarkSocket } from './place-identities';
 
 const CELL = CELL_SIZE;
 const FLOOR = FLOOR_HEIGHT;
@@ -74,6 +76,9 @@ export class NavGraph {
   readonly plazas: string[] = [];
   readonly docks: string[] = [];
   readonly rooftops = new Map<string, string>();
+  readonly formationPlaces = new Map<string, FormationId>();
+  readonly identityPlaces = new Map<string, PlaceIdentityId>();
+  readonly identityLandmarkPlaces = new Map<string, PlaceIdentityId>();
   private readonly componentByNode = new Map<string, string>();
   private readonly nodesByComponent = new Map<string, NavNode[]>();
   private readonly nodeBuckets = new Map<string, NavNode[]>();
@@ -85,6 +90,8 @@ export class NavGraph {
     this.seed = seed;
     this.build();
     this.indexNavigation();
+    this.indexFormationPlaces();
+    this.indexPlaceIdentities();
   }
 
   private indexNavigation() {
@@ -109,6 +116,64 @@ export class NavGraph {
         for (const neighbor of member.links) pending.push(neighbor);
       }
       this.nodesByComponent.set(component, members);
+    }
+  }
+
+  private indexFormationPlaces() {
+    for (const occurrence of detectFormations(this.cells)) {
+      const definition = FORMATION_BY_ID.get(occurrence.id);
+      if (!definition) continue;
+      const elevated = definition.family === 'rooftop' || definition.family === 'terrace' || occurrence.id === 'roof-promenade';
+      const nearby = [...this.nodes.values()]
+        .filter((node) => Math.hypot(node.position.x - occurrence.x * CELL, node.position.z - occurrence.z * CELL) <= CELL * 2.35)
+        .filter((node) => elevated ? this.rooftops.has(node.key) : !this.rooftops.has(node.key))
+        .sort((a, b) => {
+          const distanceA = Math.hypot(a.position.x - occurrence.x * CELL, a.position.z - occurrence.z * CELL);
+          const distanceB = Math.hypot(b.position.x - occurrence.x * CELL, b.position.z - occurrence.z * CELL);
+          return distanceA - distanceB;
+        });
+      const representedComponents = new Set<string>();
+      for (const node of nearby) {
+        const component = this.componentByNode.get(node.key);
+        if (!component || representedComponents.has(component)) continue;
+        representedComponents.add(component);
+        this.formationPlaces.set(node.key, occurrence.id);
+        if (representedComponents.size >= 4) break;
+      }
+    }
+  }
+
+  private indexPlaceIdentities() {
+    for (const occurrence of detectPlaceIdentities(detectFormations(this.cells))) {
+      const nearby = [...this.nodes.values()]
+        .filter((node) => Math.hypot(node.position.x - occurrence.x * CELL, node.position.z - occurrence.z * CELL) <= CELL * 2.8)
+        .sort((a, b) => {
+          const distanceA = Math.hypot(a.position.x - occurrence.x * CELL, a.position.z - occurrence.z * CELL);
+          const distanceB = Math.hypot(b.position.x - occurrence.x * CELL, b.position.z - occurrence.z * CELL);
+          return distanceA - distanceB;
+        });
+      const representedComponents = new Set<string>();
+      for (const node of nearby) {
+        const component = this.componentByNode.get(node.key);
+        if (!component || representedComponents.has(component)) continue;
+        representedComponents.add(component);
+        this.identityPlaces.set(node.key, occurrence.id);
+        if (representedComponents.size >= 4) break;
+      }
+      const landmark = placeLandmarkSocket(occurrence);
+      const elevated = landmark.kind === 'roof-hall' || landmark.kind === 'signal-beacon';
+      const allNodes = [...this.nodes.values()];
+      const preferredNodes = allNodes.filter((node) => elevated ? this.rooftops.has(node.key) : !this.rooftops.has(node.key));
+      const landmarkNode = (preferredNodes.length ? preferredNodes : allNodes)
+        .sort((a, b) => {
+          const distanceA = Math.hypot(a.position.x - landmark.x * CELL, a.position.z - landmark.z * CELL);
+          const distanceB = Math.hypot(b.position.x - landmark.x * CELL, b.position.z - landmark.z * CELL);
+          return distanceA - distanceB;
+        })[0];
+      if (landmarkNode) {
+        this.identityPlaces.set(landmarkNode.key, occurrence.id);
+        this.identityLandmarkPlaces.set(landmarkNode.key, occurrence.id);
+      }
     }
   }
 
@@ -343,6 +408,51 @@ export class NavGraph {
   }
 
   rooftopLabel(key: string) { return this.rooftops.get(key) ?? null; }
+
+  formationNode(value: number, from: string) {
+    const options = [...this.formationPlaces]
+      .filter(([key]) => this.canReach(from, key));
+    if (!options.length) return undefined;
+    const [key, id] = options[Math.floor(value * options.length) % options.length];
+    const node = this.nodes.get(key);
+    return node ? { node, id } : undefined;
+  }
+
+  formationLabel(key: string) {
+    const id = this.formationPlaces.get(key);
+    return id ? FORMATION_BY_ID.get(id)?.title ?? null : null;
+  }
+
+  identityNode(value: number, from: string) {
+    const options = [...this.identityPlaces]
+      .filter(([key]) => this.canReach(from, key));
+    if (!options.length) return undefined;
+    const [key, id] = options[Math.floor(value * options.length) % options.length];
+    const node = this.nodes.get(key);
+    return node ? { node, id, landmark: this.identityLandmarkPlaces.has(key) } : undefined;
+  }
+
+  identityNodeFor(id: PlaceIdentityId, value: number, from: string, landmarkOnly = false) {
+    const options = [...this.identityPlaces]
+      .filter(([key, candidateId]) => candidateId === id && this.canReach(from, key))
+      .filter(([key]) => !landmarkOnly || this.identityLandmarkPlaces.has(key));
+    if (!options.length) return undefined;
+    const [key] = options[Math.floor(value * options.length) % options.length];
+    const node = this.nodes.get(key);
+    return node ? { node, id, landmark: this.identityLandmarkPlaces.has(key) } : undefined;
+  }
+
+  identityLabel(key: string) {
+    const id = this.identityPlaces.get(key);
+    const definition = id ? PLACE_IDENTITY_BY_ID.get(id) : undefined;
+    return definition ? (this.identityLandmarkPlaces.has(key) ? definition.landmark.title : definition.title) : null;
+  }
+
+  identityActivity(key: string, id: PlaceIdentityId, ageGroup?: string, occupation?: string) {
+    return this.identityLandmarkPlaces.has(key)
+      ? PLACE_IDENTITY_BY_ID.get(id)?.landmark.activity ?? placeIdentityActivity(id, ageGroup, occupation)
+      : placeIdentityActivity(id, ageGroup, occupation);
+  }
 
   canReach(from: string, to: string) {
     const component = this.componentByNode.get(from);
@@ -754,9 +864,16 @@ export class CitizenSystem {
     let target = home;
     const choice = hash(this.seed, Math.floor(absoluteHours * 4), this.citizens.indexOf(citizen), 1001);
     const businessVisit = this.chooseBusinessVisit(citizen, hour, choice, from.key);
+    const signaturePlace = this.signatureLandmarkVisit(citizen, hour, choice, from.key);
+    const identityPlace = signaturePlace ?? (hour >= 9 && hour < 21 && choice < .72
+      ? this.graph.identityNode((choice * 2.19 + this.citizens.indexOf(citizen) * .163) % 1, from.key)
+      : undefined);
     const rooftopChance = citizen.occupation === 'Fisher' ? 0 : citizen.occupation === 'Gardener' ? .62 : citizen.ageGroup === 'elder' ? .4 : .3;
-    const rooftop = hour >= 7 && hour < 21 && (citizen.ageGroup !== 'child' || hour >= 15) && choice < rooftopChance
+    const rooftop = !identityPlace && hour >= 7 && hour < 21 && (citizen.ageGroup !== 'child' || hour >= 15) && choice < rooftopChance
       ? this.graph.rooftopNode((choice * 3.17 + this.citizens.indexOf(citizen) * .137) % 1, from.key)
+      : undefined;
+    const formationPlace = !identityPlace && hour >= 9 && hour < 21 && choice < .58
+      ? this.graph.formationNode((choice * 2.73 + this.citizens.indexOf(citizen) * .193) % 1, from.key)
       : undefined;
     if (hour < 4.5 || (hour < 6 && citizen.occupation !== 'Fisher') || hour >= 22) {
       citizen.activity = 'sleeping at home';
@@ -788,37 +905,55 @@ export class CitizenSystem {
         target = businessVisit.target;
       } else {
         const work = this.professionRoutine(citizen, hour, choice, from.key);
-        citizen.activity = work?.activity ?? `working as a ${citizen.occupation.toLowerCase()}`;
-        target = work?.target ?? this.graph.randomNode(choice, from.key);
+        citizen.activity = work?.activity ?? (identityPlace
+          ? this.graph.identityActivity(identityPlace.node.key, identityPlace.id, citizen.ageGroup, citizen.occupation)
+          : formationPlace
+          ? formationGatheringActivity(formationPlace.id, citizen.ageGroup, citizen.occupation)
+          : `working as a ${citizen.occupation.toLowerCase()}`);
+        target = work?.target ?? identityPlace?.node ?? formationPlace?.node ?? this.graph.randomNode(choice, from.key);
       }
     } else if (hour < 14) {
       const plaza = choice < .34 ? this.graph.plazaNode(choice * 2.7, from.key) : undefined;
-      citizen.activity = businessVisit ? this.visitorActivity(businessVisit.business.type) : plaza ? 'sitting in the plaza' : 'looking for lunch';
-      target = businessVisit?.target ?? plaza ?? this.graph.randomNode(choice, from.key);
+      citizen.activity = businessVisit
+        ? this.visitorActivity(businessVisit.business.type)
+        : identityPlace
+          ? this.graph.identityActivity(identityPlace.node.key, identityPlace.id, citizen.ageGroup, citizen.occupation)
+          : formationPlace
+          ? formationGatheringActivity(formationPlace.id, citizen.ageGroup, citizen.occupation)
+          : plaza ? 'sitting in the plaza' : 'looking for lunch';
+      target = businessVisit?.target ?? identityPlace?.node ?? formationPlace?.node ?? plaza ?? this.graph.randomNode(choice, from.key);
     } else if (hour < 18) {
       if (businessVisit && choice > .55) {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
         target = businessVisit.target;
       } else {
-        const fishmonger = this.discoveries.has('harbor-cats') && (citizen.traits.includes('curious') || citizen.traits.includes('sociable')) && choice < .22
+        const fishmonger = !identityPlace && !formationPlace && this.discoveries.has('harbor-cats') && (citizen.traits.includes('curious') || citizen.traits.includes('sociable')) && choice < .22
           ? this.businesses.find((business) => business.type === 'fishmonger')
           : undefined;
         const catVisit = fishmonger ? this.graph.entrance(fishmonger.cellKey) : undefined;
-        const friendVisit = catVisit || citizen.traits.includes('quiet') ? null : this.chooseFriendVisit(citizen, choice, from.key);
-        citizen.activity = catVisit
+        const friendVisit = identityPlace || formationPlace || catVisit || citizen.traits.includes('quiet') ? null : this.chooseFriendVisit(citizen, choice, from.key);
+        citizen.activity = identityPlace
+          ? this.graph.identityActivity(identityPlace.node.key, identityPlace.id, citizen.ageGroup, citizen.occupation)
+          : formationPlace
+          ? formationGatheringActivity(formationPlace.id, citizen.ageGroup, citizen.occupation)
+          : catVisit
           ? 'stopping to greet the harbor cats'
           : friendVisit
             ? `visiting ${friendVisit.friend.name} at home`
             : citizen.traits.includes('quiet') ? 'watching the harbor' : 'walking past the neighbors’ doors';
-        target = catVisit ?? friendVisit?.target ?? this.graph.randomNode(choice, from.key);
+        target = identityPlace?.node ?? formationPlace?.node ?? catVisit ?? friendVisit?.target ?? this.graph.randomNode(choice, from.key);
       }
     } else if (hour < 21) {
       if (businessVisit) {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
         target = businessVisit.target;
       } else {
-        citizen.activity = citizen.traits.includes('sociable') ? 'taking an evening stroll' : 'heading home slowly';
-        target = this.graph.randomNode(choice, from.key);
+        citizen.activity = identityPlace
+          ? this.graph.identityActivity(identityPlace.node.key, identityPlace.id, citizen.ageGroup, citizen.occupation)
+          : formationPlace
+          ? formationGatheringActivity(formationPlace.id, citizen.ageGroup, citizen.occupation)
+          : citizen.traits.includes('sociable') ? 'taking an evening stroll' : 'heading home slowly';
+        target = identityPlace?.node ?? formationPlace?.node ?? this.graph.randomNode(choice, from.key);
       }
     } else {
       citizen.activity = 'walking home beneath the lanterns';
@@ -828,6 +963,26 @@ export class CitizenSystem {
     citizen.targetKey = target.key;
     citizen.path = this.graph.path(from.key, target.key);
     citizen.nextDecisionAt = absoluteHours + .35 + choice * .65;
+  }
+
+  private signatureLandmarkVisit(citizen: Citizen, hour: number, choice: number, from: string) {
+    const profession = citizen.occupation;
+    const candidates: Array<{ id: PlaceIdentityId; chance: number }> = [];
+    if (hour >= 6 && hour < 13 && ['Fisher', 'Cook', 'Fishmonger', 'Baker'].includes(profession)) candidates.push({ id: 'canal-market', chance: .86 });
+    if (hour >= 8 && hour < 18 && (profession === 'Gardener' || citizen.ageGroup === 'child')) candidates.push({ id: 'garden-commons', chance: .82 });
+    if (hour >= 8 && hour < 18 && ['Artisan', 'Potter', 'Weaver', 'Bookbinder'].includes(profession)) candidates.push({ id: 'makers-walk', chance: .84 });
+    if (hour >= 17 && hour < 22) candidates.push({ id: 'roof-village', chance: .78 });
+    if (hour >= 5.5 && hour < 12 && ['Fisher', 'Cartographer'].includes(profession)) candidates.push({ id: 'high-harbor', chance: .88 });
+    if (hour >= 18 && hour < 21.5) candidates.push({ id: 'lantern-square', chance: .9 });
+    if (!candidates.length) return undefined;
+    const start = Math.floor(choice * candidates.length) % candidates.length;
+    for (let offset = 0; offset < candidates.length; offset++) {
+      const candidate = candidates[(start + offset) % candidates.length];
+      if (choice > candidate.chance) continue;
+      const place = this.graph.identityNodeFor(candidate.id, (choice * 3.41 + offset * .29) % 1, from, true);
+      if (place) return place;
+    }
+    return undefined;
   }
 
   private professionRoutine(citizen: Citizen, hour: number, choice: number, from: string) {
@@ -1228,6 +1383,29 @@ export class CitizenSystem {
 
   walkingCount() { return this.citizens.filter((citizen) => citizen.path.length > 0).length; }
 
+  formationUseCounts() {
+    const counts = new Map<FormationId, number>();
+    for (const citizen of this.citizens) {
+      if (!citizen.targetKey) continue;
+      const id = this.graph.formationPlaces.get(citizen.targetKey);
+      const title = id ? FORMATION_BY_ID.get(id)?.title : undefined;
+      if (id && title && citizen.activity.toLowerCase().includes(title.toLowerCase())) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  identityUseCounts() {
+    const counts = new Map<PlaceIdentityId, number>();
+    for (const citizen of this.citizens) {
+      if (!citizen.targetKey) continue;
+      const id = this.graph.identityPlaces.get(citizen.targetKey);
+      const definition = id ? PLACE_IDENTITY_BY_ID.get(id) : undefined;
+      const title = this.graph.identityLandmarkPlaces.has(citizen.targetKey) ? definition?.landmark.title : definition?.title;
+      if (id && title && citizen.activity.toLowerCase().includes(title.toLowerCase())) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }
+
   private rebuildDebugGraph() {
     const wasVisible = this.debugRoot.visible;
     this.debugRoot.traverse((object) => {
@@ -1272,6 +1450,10 @@ export class CitizenSystem {
 
   private destinationLabel(citizen: Citizen) {
     if (!citizen.targetKey) return 'Staying here';
+    const identity = this.graph.identityLabel(citizen.targetKey);
+    if (identity && citizen.activity.toLowerCase().includes(identity.toLowerCase())) return identity;
+    const formation = this.graph.formationLabel(citizen.targetKey);
+    if (formation && citizen.activity.toLowerCase().includes(formation.toLowerCase())) return formation;
     if (this.graph.entrance(citizen.homeKey)?.key === citizen.targetKey) {
       return citizen.residentKind === 'visitor' ? 'Lodgings' : 'Home';
     }

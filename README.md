@@ -6,13 +6,15 @@ A small, polished sandbox city-building prototype inspired by effortless archite
 
 Click anywhere in the harbor to raise a foundation, click existing structures to build upward, and arrange neighboring pieces to discover courtyards, plazas, canals, arches, bridges, towers, arcaded rows, stepped terraces, shared rooftop courts, covered skybridges, docks, water stairs, and other procedural transformations. Many shapes keep growing: courtyards become cloisters and pavilions, arcades gain roof promenades, terraces gather gardens and lanterns, and water crossings can rise through five distinct forms. Foundations can stand alone as little islets or grow together into a continuous town.
 
+A four-step **First Tide** teaches that spatial language in the world itself: temporary golden ripples suggest pieces of a canal, sea arch, and shared-wall row without exposing or zoning the hidden grid. The journal's illustrated **Formation Atlas** records 18 architectural forms once discovered, preserves their clues after they are reshaped, and can refocus a form that still exists in the town. Its field-guide sketches show how crossings, streets, terraces, rooftops, courtyards, and landmarks take shape, with unfinished tracings for forms still waiting to be found. These are working places rather than badges: residents seek them out, compatible businesses favor nearby ground floors and may open sooner, and a well-sited workplace makes fuller production batches. Bring compatible forms close together and one of six higher-order **living places** can emerge—such as a Canal Market, Garden Commons, or Makers’ Walk. After the town knows three forms across two architectural families, a quiet **Second Tide** invitation opens progressively revealed combination clues without painting zones. Every living place grows its own exclusive physical landmark, from a Market Barge or Seed House to a Signal Beacon or Lantern Theatre. Each changes the town differently: merchants follow market awnings, planting trays spread from the Seed House, fired craftwork marks Makers’ Walk, rooftop neighbors gather, a survey boat reads the beacon, and nightly audiences find the theatre. Reshaping the source forms removes the landmark and its consequences naturally while preserving its memory.
+
 Every accessible home attracts a named resident. Taller homes support small households with children or elders. Citizens follow the town's quays and courtyards using A* routes, keep daily routines, form friendships and favorite-shop habits, and can be clicked to reveal their small lives and current destination. A full day passes in about eight minutes, with pause, normal, and fast simulation controls.
 
 As the population grows, residents may quietly turn their ground floor into a bakery, café, flower shop, workshop, bookstore, fishmonger, restaurant, tea house, inn, pottery studio, mill, smokehouse, weaver, or shipyard. Each has its own storefront details and opening hours. Repeat customers can become regulars, and a nearby adult regular may eventually stay on as a helper.
 
 Those workplaces form a persistent crafting town rather than a set of isolated decorations. Fish, herbs, and landed cargo travel through seventeen linked steps—milling grain, baking bread, fitting tools, firing tableware, weaving cloth, preserving fish, preparing tea and supper, provisioning the inn, improving fishing gear, and assembling a finished harbor export. Residents visibly carry the goods between reachable doors. Missing inputs simply make a workshop wait; Observe mode explains its chain without adding upkeep pressure or a permanent inventory dashboard.
 
-The town also keeps an observation journal. Fifty-two quiet one-shot discoveries connect its architecture, water topology, working boats, residents, friendships, time of day, town memory, businesses, gardens, wildlife, a mysterious traveler, and a lantern-lit finale. Six cooldown-backed moments can recur on later days as the town settles into recognizable habits, but each earns only one journal entry. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
+The town also keeps an observation journal. Fifty-eight quiet one-shot discoveries connect its architecture, living places, water topology, working boats, residents, friendships, time of day, town memory, businesses, gardens, wildlife, a mysterious traveler, and a lantern-lit finale. Six cooldown-backed moments can recur on later days as the town settles into recognizable habits, but each earns only one journal entry. Open **Journal** (or press `J`) to revisit the illustrated field notes the town has revealed.
 
 The journal also carries three **Whispers on the Tide**: nearby discoveries chosen from the live GROW condition graph. Follow one to keep its changing clue and progress in view while shaping the harbor. Completed observations can be revisited from their journal entry, refocusing the camera and inviting citizens or wildlife to briefly remember the moment.
 
@@ -40,9 +42,7 @@ npm run dev
 
 Create a production build with `npm run build`.
 
-Run the deterministic simulation checks with `npm run test:crafting`, `npm run test:memory`, and `npm run test:render-structure`.
-
-Run deterministic town-memory checks with `npm run test:memory`.
+Run the deterministic checks with `npm run test:formations`, `npm run test:crafting`, `npm run test:memory`, and `npm run test:render-structure`.
 
 The `main` branch is automatically deployed to GitHub Pages by GitHub Actions.
 

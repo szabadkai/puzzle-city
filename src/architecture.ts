@@ -1,5 +1,5 @@
-import { CARDINALS, type Cell, keyOf } from './types';
-import { hash } from './random';
+import { CARDINALS, type Cell, keyOf } from './types.ts';
+import { hash } from './random.ts';
 
 export type EmptyArchitectureFeature = 'narrow canal' | 'sea arch' | 'high bridge' | 'covered skybridge' | 'lantern gate';
 export type ArcadeFeature = 'arcade row' | 'roof promenade';

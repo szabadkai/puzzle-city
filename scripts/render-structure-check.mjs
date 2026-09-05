@@ -118,6 +118,25 @@ try {
   const ambience = new HarborAmbience(seed, new THREE.PerspectiveCamera(), cells);
   ambience.setTown(cells, businesses, citizens, city.matureTreeAnchors(240));
   ambience.setDiscoveryState(discoveries);
+  const behavioralPlaces = [
+    {
+      id: 'canal-market', x: 1, z: 0, formations: ['narrow-canal', 'arcade-row'],
+      members: [{ id: 'narrow-canal', x: 0, z: 0 }, { id: 'arcade-row', x: 2, z: 0 }],
+    },
+    {
+      id: 'high-harbor', x: 1, z: 0, formations: ['high-bridge', 'lookout-tower'],
+      members: [{ id: 'high-bridge', x: 2, z: 0 }, { id: 'lookout-tower', x: 0, z: 0 }],
+    },
+  ];
+  ambience.setPlaceIdentities(behavioralPlaces);
+  if (!ambience.activeFleet().includes('merchant boat')) throw new Error('The Canal Market did not attract merchant traffic.');
+  if (!ambience.activeFleet().includes('signal boat')) throw new Error('The Signal Beacon did not call its survey boat.');
+  const signalBoat = ambience.root.getObjectByName('signal-boat');
+  if (!signalBoat || ambience.memoryFromObject(signalBoat, 240, 0)?.title !== 'Beacon survey boat') {
+    throw new Error('The Signal Beacon survey boat cannot be inspected.');
+  }
+  ambience.setPlaceIdentities([]);
+  if (ambience.activeFleet().includes('signal boat')) throw new Error('The survey boat remained after the Signal Beacon disappeared.');
   ambience.update(1, .8, 12, 240, 0, 0);
 
   const turtleBatch = ambience.root.getObjectByName('harbor-turtles')?.children
@@ -226,6 +245,88 @@ try {
     .flatMap((group) => group.userData.architecturalTrees ?? [])
     .filter((tree) => tree.habitat === 'plaza');
   if (plazaTrees.length !== 2) throw new Error(`Harbor plaza produced ${plazaTrees.length} trees instead of 2.`);
+
+  const landmarkCases = [
+    {
+      id: 'canal-market', title: 'Market Barge', target: [0, 0], cells: [
+        { x: 0, z: -1, height: 2, color: 0, placedAt: 0 },
+        { x: 0, z: 1, height: 2, color: 0, placedAt: 0 },
+      ], members: [
+        { id: 'sea-arch', x: 0, z: 0, direction: 0 },
+        { id: 'arcade-row', x: 1, z: 0, direction: 1 },
+      ],
+    },
+    {
+      id: 'garden-commons', title: 'Seed House', target: [0, 0], cells: [
+        { x: 0, z: -1, height: 2, color: 1, placedAt: 0 },
+        { x: -1, z: 0, height: 2, color: 1, placedAt: 0 },
+        { x: 1, z: 0, height: 2, color: 1, placedAt: 0 },
+      ], members: [
+        { id: 'courtyard-garden', x: 0, z: 0 },
+        { id: 'stepped-terrace', x: 2, z: 0, direction: 1 },
+      ],
+    },
+    {
+      id: 'makers-walk', title: 'Guild Kiln', target: [0, 0], cells: [
+        { x: 0, z: 0, height: 2, color: 2, placedAt: 0 },
+      ], members: [
+        { id: 'arcade-row', x: 0, z: 0, direction: 1 },
+        { id: 'stepped-terrace', x: 2, z: 0, direction: 1 },
+      ],
+    },
+    {
+      id: 'roof-village', title: 'Roof Hall', target: [0, 0], cells: [
+        { x: 0, z: 0, height: 2, color: 3, placedAt: 0 },
+      ], members: [
+        { id: 'roof-promenade', x: 2, z: 0, direction: 1 },
+        { id: 'rooftop-court', x: 0, z: 0 },
+      ],
+    },
+    {
+      id: 'high-harbor', title: 'Signal Beacon', target: [0, 0], cells: [
+        { x: 0, z: 0, height: 3, color: 4, placedAt: 0 },
+      ], members: [
+        { id: 'high-bridge', x: 2, z: 0, direction: 1 },
+        { id: 'lookout-tower', x: 0, z: 0 },
+      ],
+    },
+    {
+      id: 'lantern-square', title: 'Lantern Theatre', target: [0, 0], cells: plazaCells,
+      members: [
+        { id: 'harbor-plaza', x: 0, z: 0 },
+        { id: 'rooftop-pavilion', x: 3, z: 0 },
+      ],
+    },
+  ];
+  for (const landmarkCase of landmarkCases) {
+    const landmarkCity = new CityRenderer(seed);
+    landmarkCity.load(landmarkCase.cells, 0);
+    const [first, second] = landmarkCase.members;
+    landmarkCity.setPlaceIdentities([{
+      id: landmarkCase.id,
+      x: Math.round((first.x + second.x) / 2),
+      z: Math.round((first.z + second.z) / 2),
+      formations: [first.id, second.id],
+      members: [first, second],
+    }], true);
+    const [targetX, targetZ] = landmarkCase.target;
+    const animatedLandmark = landmarkCity.root.children.find((child) => child.userData.cellX === targetX && child.userData.cellZ === targetZ);
+    if (!animatedLandmark || animatedLandmark.scale.y >= 1) throw new Error(`${landmarkCase.title} did not receive its arrival animation.`);
+    const memory = landmarkCity.memoryAt(targetX, targetZ, 0);
+    if (memory?.kind !== 'landmark' || memory.title !== landmarkCase.title || !memory.note.includes('It can only settle')) {
+      throw new Error(`${landmarkCase.title} did not replace its formation socket with an inspectable landmark.`);
+    }
+    if (landmarkCase.id === 'garden-commons' && !landmarkCity.root.children.some((child) => child.userData.seedHouseTrays)) {
+      throw new Error('The Seed House did not spread planting trays to nearby homes.');
+    }
+    if (landmarkCase.id === 'makers-walk' && !landmarkCity.root.children.some((child) => child.userData.guildKilnMarks)) {
+      throw new Error('The Guild Kiln did not spread fired craft marks to nearby façades.');
+    }
+    landmarkCity.setPlaceIdentities([]);
+    if (landmarkCity.memoryAt(targetX, targetZ, 0)?.kind === 'landmark') {
+      throw new Error(`${landmarkCase.title} remained after its source relationship was removed.`);
+    }
+  }
 
   const singleCell = { x: 0, z: 0, height: 1, color: 0, placedAt: 0 };
   const singleGraph = new NavGraph(new Map([['0,0', singleCell]]), seed);

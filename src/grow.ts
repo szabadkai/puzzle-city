@@ -1,10 +1,12 @@
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenKind, type CitizenSave, type JournalEntry, type JournalIllustration, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenKind, type CitizenSave, type JournalEntry, type JournalIllustration, type PlaceIdentityId, keyOf } from './types';
 import { analyzeWaterTopology } from './water';
 import { findPlazaAnchors } from './topology';
 import type { MemoryMetric, TownMemorySnapshot } from './memory';
+import { PLACE_IDENTITY_BY_ID, placeLandmarkSocket, type PlaceIdentityOccurrence } from './place-identities';
 
 export type TopologyFeature = 'courtyard' | 'arch' | 'bridge' | 'tower' | 'plaza';
 export type GridPoint = Readonly<{ x: number; z: number }>;
+export type PlaceSnapshot = Readonly<{ id: PlaceIdentityId; x: number; z: number; visitors: number }>;
 
 export type WorldSnapshot = Readonly<{
   cells: readonly Readonly<Cell>[];
@@ -17,6 +19,7 @@ export type WorldSnapshot = Readonly<{
   businessCounts: Readonly<Record<BusinessType, number>>;
   relationshipCount: number;
   water: Readonly<{ dockCount: number; canalCount: number; shelteredCount: number }>;
+  places: readonly PlaceSnapshot[];
   priorDiscoveries: readonly string[];
   memory: TownMemorySnapshot;
 }>;
@@ -38,12 +41,14 @@ export type DiscoveryCondition =
   | { kind: 'adjacency'; businessType: BusinessType; feature: TopologyFeature; within?: number }
   | { kind: 'citizen'; occupation?: string; trait?: string; ageGroup?: CitizenAgeGroup; residentKind?: CitizenKind; atLeast: number }
   | { kind: 'water'; feature: 'dock' | 'canal' | 'sheltered'; atLeast: number }
+  | { kind: 'place-identity'; identityId: PlaceIdentityId; atLeast: number; visitorsAtLeast?: number; businessType?: BusinessType }
   | { kind: 'memory'; metric: MemoryMetric; atLeast: number }
   | { kind: 'discovered'; eventId: string };
 
 export type DiscoveryFocus =
   | { kind: 'topology'; feature: TopologyFeature }
   | { kind: 'business'; businessType: BusinessType }
+  | { kind: 'place-identity'; identityId: PlaceIdentityId }
   | { kind: 'town' };
 
 export type DiscoveryEffect =
@@ -94,6 +99,8 @@ type SnapshotInput = {
   timeOfDay: number;
   priorDiscoveries: string[];
   memory?: TownMemorySnapshot;
+  placeIdentities?: readonly PlaceIdentityOccurrence[];
+  placeVisitorCounts?: ReadonlyMap<PlaceIdentityId, number>;
 };
 
 const BUSINESS_TYPES: readonly BusinessType[] = [
@@ -143,6 +150,15 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
     relationshipPairs.add([citizen.id, friendId].sort().join('|'));
   }
   const waterTopology = analyzeWaterTopology(cells, input.seed);
+  const places = (input.placeIdentities ?? []).map((place) => {
+    const landmark = placeLandmarkSocket(place);
+    return Object.freeze({
+      id: place.id,
+      x: landmark.x,
+      z: landmark.z,
+      visitors: input.placeVisitorCounts?.get(place.id) ?? 0,
+    });
+  });
   const memory = input.memory ?? Object.freeze({
     patinaCells: 0, growingTrees: 0, matureTrees: 0, oldestTreeHours: 0,
     oldestBuildingHours: 0, catPopulation: 0, catCapacity: 0, kittenCount: 0,
@@ -170,6 +186,7 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
       canalCount: waterTopology.canals.length,
       shelteredCount: waterTopology.sheltered.length,
     }),
+    places: Object.freeze(places),
     priorDiscoveries: Object.freeze([...input.priorDiscoveries]),
     memory: Object.freeze({ ...memory }),
   });
@@ -227,6 +244,15 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
           : snapshot.water.shelteredCount;
       return count >= condition.atLeast;
     }
+    case 'place-identity': return snapshot.places.filter((place) => {
+      if (place.id !== condition.identityId || place.visitors < (condition.visitorsAtLeast ?? 0)) return false;
+      if (!condition.businessType) return true;
+      return snapshot.businesses.some((business) => {
+        if (business.type !== condition.businessType) return false;
+        const [x, z] = business.cellKey.split(',').map(Number);
+        return Math.abs(x - place.x) + Math.abs(z - place.z) <= 4;
+      });
+    }).length >= condition.atLeast;
     case 'memory': return snapshot.memory[condition.metric] >= condition.atLeast;
     case 'discovered': return snapshot.priorDiscoveries.includes(condition.eventId);
     case 'time': {
@@ -339,6 +365,16 @@ function conditionProgress(condition: DiscoveryCondition, snapshot: WorldSnapsho
       } as const;
       return { value: ratio(current, condition.atLeast), hint: hints[condition.feature] };
     }
+    case 'place-identity': {
+      const matching = snapshot.places.filter((place) => place.id === condition.identityId);
+      const definition = PLACE_IDENTITY_BY_ID.get(condition.identityId);
+      if (!matching.length) return { value: 0, hint: definition?.hint ?? 'Bring the required formations close together.' };
+      if (condition.businessType && !evaluateCondition(condition, snapshot)) return { value: .68, hint: `Let a ${BUSINESS_LABELS[condition.businessType]} settle close to the ${definition?.title.toLowerCase() ?? 'living place'}.` };
+      const visitors = Math.max(0, ...matching.map((place) => place.visitors));
+      const target = condition.visitorsAtLeast ?? 0;
+      if (visitors < target) return { value: .78 + .2 * ratio(visitors, target), hint: `Let ${target - visitors} more ${target - visitors === 1 ? 'neighbor' : 'neighbors'} visit the ${definition?.landmark.title.toLowerCase() ?? 'landmark'}.` };
+      return { value: 1, hint: `${definition?.landmark.title ?? 'The landmark'} is alive with use.` };
+    }
     case 'memory': {
       const current = snapshot.memory[condition.metric];
       const hints: Record<MemoryMetric, string> = {
@@ -356,6 +392,7 @@ function conditionProgress(condition: DiscoveryCondition, snapshot: WorldSnapsho
 
 function prerequisitesMet(condition: DiscoveryCondition, snapshot: WorldSnapshot): boolean {
   if (condition.kind === 'discovered') return snapshot.priorDiscoveries.includes(condition.eventId);
+  if (condition.kind === 'place-identity') return snapshot.places.some((place) => place.id === condition.identityId);
   if (condition.kind === 'all') return condition.conditions.every((candidate) => prerequisitesMet(candidate, snapshot));
   if (condition.kind === 'any') return condition.conditions.some((candidate) => prerequisitesMet(candidate, snapshot));
   if (condition.kind === 'not') return prerequisitesMet(condition.condition, snapshot);
@@ -487,6 +524,11 @@ const natureEffects = (caption: string, tone: Extract<DiscoveryEffect, { kind: '
   { kind: 'city', action: 'decorate' },
   { kind: 'ambience', action: 'refresh' },
   { kind: 'citizens', action: 'notice', activity },
+  reveal(caption, tone),
+];
+const placeEffects = (caption: string, tone: Extract<DiscoveryEffect, { kind: 'presentation' }>['tone'], activity: string): readonly DiscoveryEffect[] => [
+  { kind: 'city', action: 'glimmer' },
+  { kind: 'citizens', action: 'gather', activity },
   reveal(caption, tone),
 ];
 
@@ -817,6 +859,80 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     ],
   },
   {
+    id: 'place-canal-market', repeatable: false, title: 'The First Basket Crosses', illustration: 'market',
+    note: 'A basket left the morning boat, crossed beneath the awning, and returned filled with bread and harbor news.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'canal-market', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'any', conditions: [{ kind: 'citizen', occupation: 'Fisher', atLeast: 1 }, { kind: 'place-identity', identityId: 'canal-market', businessType: 'fishmonger', atLeast: 1 }] },
+      { kind: 'time', after: 6, before: 13 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'canal-market' },
+    effects: placeEffects('The market barge trades its first basket across the water.', 'water', 'trading the first baskets at the market barge'),
+  },
+  {
+    id: 'place-garden-commons', repeatable: false, title: 'Seeds Between Floors', illustration: 'garden',
+    note: 'Cuttings passed from courtyard shade to sunny steps until nobody remembered which garden they had started in.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'garden-commons', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'any', conditions: [{ kind: 'citizen', occupation: 'Gardener', atLeast: 1 }, { kind: 'place-identity', identityId: 'garden-commons', businessType: 'flower-shop', atLeast: 1 }] },
+      { kind: 'time', after: 8, before: 18 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'garden-commons' },
+    effects: placeEffects('Neighbors begin exchanging cuttings through the seed house.', 'green', 'swapping cuttings inside the seed house'),
+  },
+  {
+    id: 'place-makers-walk', repeatable: false, title: 'A Sound Finds a Street', illustration: 'tools',
+    note: 'The kiln door opened, a loom answered, and the covered walk carried the rhythm of making from one doorstep to the next.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'makers-walk', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'any', conditions: [
+        { kind: 'place-identity', identityId: 'makers-walk', businessType: 'workshop', atLeast: 1 },
+        { kind: 'place-identity', identityId: 'makers-walk', businessType: 'pottery', atLeast: 1 },
+        { kind: 'place-identity', identityId: 'makers-walk', businessType: 'weaver', atLeast: 1 },
+      ] },
+      { kind: 'time', after: 8, before: 18 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'makers-walk' },
+    effects: placeEffects('The guild kiln gives the whole makers’ walk a working rhythm.', 'warm', 'sharing tools beside the guild kiln'),
+  },
+  {
+    id: 'place-roof-village', repeatable: false, title: 'Windows Across the Roofs', illustration: 'neighbors',
+    note: 'Two neighbors carried their cups upstairs. Soon the roof hall had become the shortest path between their evenings.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'roof-village', atLeast: 1, visitorsAtLeast: 2 },
+      { kind: 'time', after: 17, before: 22 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'roof-village' },
+    effects: placeEffects('Evening windows answer one another around the roof hall.', 'people', 'sharing evening tea in the roof hall'),
+  },
+  {
+    id: 'place-high-harbor', repeatable: false, title: 'Two Horizons Meet', illustration: 'bridge',
+    note: 'One signal came from the open water and another from the roofs. At the beacon, they became a route home.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'high-harbor', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'any', conditions: [{ kind: 'citizen', occupation: 'Fisher', atLeast: 1 }, { kind: 'place-identity', identityId: 'high-harbor', businessType: 'shipyard', atLeast: 1 }] },
+      { kind: 'time', after: 5, before: 11 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'high-harbor' },
+    effects: placeEffects('The signal beacon answers a sail beyond the crossing.', 'water', 'reading the morning signals from the beacon'),
+  },
+  {
+    id: 'place-lantern-square', repeatable: false, title: 'The First Evening Belongs Here', illustration: 'lanterns',
+    note: 'The little stage lit one lamp, then another. Chairs turned toward it as naturally as flowers turn toward morning.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'lantern-square', atLeast: 1, visitorsAtLeast: 2 },
+      { kind: 'any', conditions: [
+        { kind: 'place-identity', identityId: 'lantern-square', businessType: 'restaurant', atLeast: 1 },
+        { kind: 'place-identity', identityId: 'lantern-square', businessType: 'tea-house', atLeast: 1 },
+        { kind: 'place-identity', identityId: 'lantern-square', businessType: 'cafe', atLeast: 1 },
+        { kind: 'place-identity', identityId: 'lantern-square', businessType: 'inn', atLeast: 1 },
+      ] },
+      { kind: 'time', after: 18, before: 22.5 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'lantern-square' },
+    effects: placeEffects('The lantern theatre draws the square into its first evening.', 'warm', 'gathering for the lantern theatre'),
+  },
+  {
     id: 'town-remembers', repeatable: false, title: 'The Town Remembers', illustration: 'town',
     note: 'Stone, garden, bridge, work, and friendship now hold one another together. The town has a memory of its own.',
     condition: all(discovered('sheltered-courtyard'), discovered('high-bridge'), discovered('lookout-tower'), discovered('familiar-faces'), discovered('harbor-market'), { kind: 'population', atLeast: 7 }), focus: { kind: 'town' },
@@ -929,6 +1045,10 @@ export function resolveFocus(focus: DiscoveryFocus, snapshot: WorldSnapshot): Gr
     if (!business) return null;
     const [x, z] = business.cellKey.split(',').map(Number);
     return { x, z };
+  }
+  if (focus.kind === 'place-identity') {
+    const place = snapshot.places.find((candidate) => candidate.id === focus.identityId);
+    return place ? { x: place.x, z: place.z } : null;
   }
   const cell = snapshot.cells[0];
   return cell ? { x: cell.x, z: cell.z } : null;

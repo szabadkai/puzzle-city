@@ -1,5 +1,5 @@
-import type { Cell } from './types';
-import { keyOf } from './types';
+import type { Cell } from './types.ts';
+import { keyOf } from './types.ts';
 
 export type PlazaAnchor = Readonly<{ x: number; z: number }>;
 

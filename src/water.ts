@@ -22,6 +22,128 @@ export type WaterTopology = Readonly<{
   sheltered: readonly WaterPoint[];
 }>;
 
+/**
+ * Find a cardinal water-cell path from one side of a dock to open water.
+ * Keeping the path on cell centres prevents the vessel curve from taking a
+ * visual shortcut through a detached island or a later-built block.
+ */
+export function createDockNavigationPath(cells: Iterable<Cell>, dock: ShorelineEdge, side: -1 | 1) {
+  const cellList = [...cells];
+  const blocked = new Set(cellList.map((cell) => keyOf(cell.x, cell.z)));
+  const occupied = new Map(cellList.map((cell) => [keyOf(cell.x, cell.z), cell]));
+
+  // Plazas and almost-enclosed courtyards render as solid ground even though
+  // they do not have Cell records, so boats must route around those as well.
+  for (const anchor of findPlazaAnchors(occupied)) {
+    blocked.add(keyOf(anchor.x, anchor.z));
+    blocked.add(keyOf(anchor.x + 1, anchor.z));
+    blocked.add(keyOf(anchor.x, anchor.z + 1));
+    blocked.add(keyOf(anchor.x + 1, anchor.z + 1));
+  }
+  for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
+    if (blocked.has(keyOf(x, z))) continue;
+    const landSides = CARDINALS.filter(([dx, dz]) => occupied.has(keyOf(x + dx, z + dz))).length;
+    if (landSides >= 3) blocked.add(keyOf(x, z));
+  }
+
+  const outwardX = dock.water.x - dock.land.x;
+  const outwardZ = dock.water.z - dock.land.z;
+  const lateralX = outwardZ;
+  const lateralZ = -outwardX;
+  const start = {
+    x: dock.water.x + lateralX * side,
+    z: dock.water.z + lateralZ * side,
+  };
+  if (blocked.has(keyOf(start.x, start.z))) return Object.freeze([]) as readonly WaterPoint[];
+
+  const minCellX = Math.min(dock.land.x, ...cellList.map((cell) => cell.x));
+  const maxCellX = Math.max(dock.land.x, ...cellList.map((cell) => cell.x));
+  const minCellZ = Math.min(dock.land.z, ...cellList.map((cell) => cell.z));
+  const maxCellZ = Math.max(dock.land.z, ...cellList.map((cell) => cell.z));
+  const openWaterPadding = 12;
+  const lateralOffset = 3 * side;
+  const goal = {
+    x: outwardX < 0 ? minCellX - openWaterPadding
+      : outwardX > 0 ? maxCellX + openWaterPadding
+        : dock.land.x + lateralX * lateralOffset,
+    z: outwardZ < 0 ? minCellZ - openWaterPadding
+      : outwardZ > 0 ? maxCellZ + openWaterPadding
+        : dock.land.z + lateralZ * lateralOffset,
+  };
+  const searchMinX = Math.min(minCellX - openWaterPadding, start.x, goal.x) - 2;
+  const searchMaxX = Math.max(maxCellX + openWaterPadding, start.x, goal.x) + 2;
+  const searchMinZ = Math.min(minCellZ - openWaterPadding, start.z, goal.z) - 2;
+  const searchMaxZ = Math.max(maxCellZ + openWaterPadding, start.z, goal.z) + 2;
+  const goalKey = keyOf(goal.x, goal.z);
+  const startKey = keyOf(start.x, start.z);
+  const open: WaterPoint[] = [start];
+  const openKeys = new Set([startKey]);
+  const closed = new Set<string>();
+  const cameFrom = new Map<string, string>();
+  const points = new Map<string, WaterPoint>([[startKey, start]]);
+  const cost = new Map<string, number>([[startKey, 0]]);
+  const estimate = (point: WaterPoint) => Math.abs(point.x - goal.x) + Math.abs(point.z - goal.z);
+
+  while (open.length) {
+    let bestIndex = 0;
+    let bestScore = Infinity;
+    for (let index = 0; index < open.length; index++) {
+      const point = open[index];
+      const score = (cost.get(keyOf(point.x, point.z)) ?? Infinity) + estimate(point);
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+    const current = open.splice(bestIndex, 1)[0];
+    const currentKey = keyOf(current.x, current.z);
+    openKeys.delete(currentKey);
+    if (currentKey === goalKey) {
+      const path: WaterPoint[] = [current];
+      let cursor = currentKey;
+      while (cameFrom.has(cursor)) {
+        cursor = cameFrom.get(cursor)!;
+        path.unshift(points.get(cursor)!);
+      }
+      const simplified = path.filter((point, index) => {
+        if (index === 0 || index === path.length - 1) return true;
+        const before = path[index - 1];
+        const after = path[index + 1];
+        const straightAlongX = before.z === point.z && point.z === after.z;
+        const straightAlongZ = before.x === point.x && point.x === after.x;
+        return !straightAlongX && !straightAlongZ;
+      });
+      return Object.freeze(simplified.map((point) => Object.freeze({ ...point })));
+    }
+    closed.add(currentKey);
+
+    // Trying outward and the selected berth side first gives equally short
+    // paths a stable, harbor-like shape without changing collision behavior.
+    const directions = [
+      [outwardX, outwardZ],
+      [lateralX * side, lateralZ * side],
+      [-lateralX * side, -lateralZ * side],
+      [-outwardX, -outwardZ],
+    ] as const;
+    for (const [dx, dz] of directions) {
+      const next = { x: current.x + dx, z: current.z + dz };
+      if (next.x < searchMinX || next.x > searchMaxX || next.z < searchMinZ || next.z > searchMaxZ) continue;
+      const nextKey = keyOf(next.x, next.z);
+      if (blocked.has(nextKey) || closed.has(nextKey)) continue;
+      const nextCost = (cost.get(currentKey) ?? 0) + 1;
+      if (nextCost >= (cost.get(nextKey) ?? Infinity)) continue;
+      cameFrom.set(nextKey, currentKey);
+      points.set(nextKey, next);
+      cost.set(nextKey, nextCost);
+      if (!openKeys.has(nextKey)) {
+        open.push(next);
+        openKeys.add(nextKey);
+      }
+    }
+  }
+  return Object.freeze([]) as readonly WaterPoint[];
+}
+
 export function hasDock(cell: Cell, direction: number, seed: number) {
   return cell.height === 1 && hash(seed, cell.x, cell.z, 200 + direction) > .74;
 }

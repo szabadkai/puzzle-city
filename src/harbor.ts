@@ -3,7 +3,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BusinessSave, Cell, CitizenSave, CraftGood, PlaceIdentityId } from './types';
 import type { PlaceIdentityOccurrence } from './place-identities';
 import { hash } from './random';
-import { analyzeWaterTopology, createShorelineRoute, WORLD_CELL_SIZE, type WaterTopology } from './water';
+import {
+  analyzeWaterTopology, createDockNavigationPath, createShorelineRoute, WORLD_CELL_SIZE,
+  type ShorelineEdge, type WaterPoint, type WaterTopology,
+} from './water';
 import { FaunaSystem, type WildlifeAction, type WildlifeKind, type WildlifeMemoryInspection } from './fauna';
 
 export function createWaterRoute(cells: Iterable<Cell>, seed: number, lane = 0) {
@@ -229,6 +232,11 @@ export class HarborAmbience {
   private merchantLoadedExport = false;
   private merchantShippedCycle = Number.NaN;
   private merchantWasOnDuty = false;
+  private importDock?: ShorelineEdge;
+  private merchantInboundRoute?: THREE.CurvePath<THREE.Vector3>;
+  private merchantOutboundRoute?: THREE.CurvePath<THREE.Vector3>;
+  private readonly merchantArrivalPoint = new THREE.Vector3();
+  private readonly merchantDeparturePoint = new THREE.Vector3();
   private topology!: WaterTopology;
   private readonly townCenter = new THREE.Vector3();
 
@@ -276,6 +284,7 @@ export class HarborAmbience {
     this.businesses = businesses.map((business) => ({ ...business }));
     this.citizens = citizens.map((citizen) => ({ ...citizen, traits: [...citizen.traits], relationships: [...citizen.relationships] }));
     this.topology = analyzeWaterTopology(this.cells, this.seed);
+    this.configureMerchantJourney();
     if (this.cells.length) this.townCenter.set(
       this.cells.reduce((sum, cell) => sum + cell.x * WORLD_CELL_SIZE, 0) / this.cells.length,
       0,
@@ -663,27 +672,105 @@ export class HarborAmbience {
   private refreshFleetVisibility() {
     if (!this.topology) return;
     const hasDock = this.topology.docks.length > 0;
+    const hasImportDock = Boolean(this.importDock);
     const hasInn = this.businesses.some((business) => business.type === 'inn');
     const hasFisher = this.citizens.some((citizen) => citizen.occupation === 'Fisher');
     for (const boat of this.fleet) {
       if (boat.kind === 'rowboat') boat.eligible = this.cells.length > 0;
       if (boat.kind === 'fishing boat') boat.eligible = hasDock && hasFisher && this.discoveries.has('fishing-boat');
-      if (boat.kind === 'merchant boat') boat.eligible = (hasDock && this.discoveries.has('merchant-arrival')) || this.placeIdentities.has('canal-market');
+      if (boat.kind === 'merchant boat') boat.eligible = (hasImportDock && this.discoveries.has('merchant-arrival')) || this.placeIdentities.has('canal-market');
       if (boat.kind === 'signal boat') boat.eligible = this.placeIdentities.has('high-harbor');
       if (boat.kind === 'ferry') boat.eligible = this.placeIdentities.has('ferry-quarter') || (hasDock && hasInn && this.discoveries.has('ferry-route'));
       boat.model.visible = boat.eligible;
     }
-    this.importYard.visible = hasDock && this.discoveries.has('merchant-arrival');
+    this.importYard.visible = hasImportDock && this.discoveries.has('merchant-arrival');
   }
 
   private preferredImportDock() {
-    if (!this.topology?.docks.length) return undefined;
+    return this.importDock;
+  }
+
+  private configureMerchantJourney() {
+    this.importDock = undefined;
+    this.merchantInboundRoute = undefined;
+    this.merchantOutboundRoute = undefined;
+    if (!this.topology?.docks.length) return;
     const sheltered = new Set(this.topology.sheltered.map((point) => `${point.x},${point.z}`));
-    return [...this.topology.docks].sort((a, b) => {
-      const shelterDifference = Number(sheltered.has(`${b.water.x},${b.water.z}`)) - Number(sheltered.has(`${a.water.x},${a.water.z}`));
+    const occupied = new Set(this.cells.map((cell) => `${cell.x},${cell.z}`));
+    const candidates = this.topology.docks.map((dock) => {
+      const outwardX = dock.water.x - dock.land.x;
+      const outwardZ = dock.water.z - dock.land.z;
+      const lateralX = outwardZ;
+      const lateralZ = -outwardX;
+      const openSides = [-1, 1].filter((side) => !occupied.has(`${dock.water.x + lateralX * side},${dock.water.z + lateralZ * side}`)).length;
+      return { dock, openSides };
+    }).sort((a, b) => {
+      const navigationDifference = b.openSides - a.openSides;
+      if (navigationDifference) return navigationDifference;
+      const { dock: dockA } = a;
+      const { dock: dockB } = b;
+      const shelterDifference = Number(sheltered.has(`${dockB.water.x},${dockB.water.z}`)) - Number(sheltered.has(`${dockA.water.x},${dockA.water.z}`));
       if (shelterDifference) return shelterDifference;
-      return hash(this.seed, b.land.x, b.land.z, 2370 + b.direction) - hash(this.seed, a.land.x, a.land.z, 2370 + a.direction);
-    })[0];
+      return hash(this.seed, dockB.land.x, dockB.land.z, 2370 + dockB.direction)
+        - hash(this.seed, dockA.land.x, dockA.land.z, 2370 + dockA.direction);
+    });
+    let selected: { dock: ShorelineEdge; positive: readonly WaterPoint[]; negative: readonly WaterPoint[] } | undefined;
+    for (const { dock } of candidates) {
+      const positive = createDockNavigationPath(this.cells, dock, 1);
+      const negative = createDockNavigationPath(this.cells, dock, -1);
+      if (positive.length || negative.length) {
+        selected = { dock, positive, negative };
+        break;
+      }
+    }
+    if (!selected) return;
+    this.importDock = selected.dock;
+    const inboundSide: -1 | 1 = selected.positive.length ? 1 : -1;
+    const outboundSide: -1 | 1 = selected.negative.length ? -1 : inboundSide;
+    const inboundPath = inboundSide === 1 ? selected.positive : selected.negative;
+    const outboundPath = outboundSide === 1 ? selected.positive : selected.negative;
+    this.merchantArrivalPoint.copy(this.merchantBerthPoint(selected.dock, inboundSide));
+    this.merchantDeparturePoint.copy(this.merchantBerthPoint(selected.dock, outboundSide));
+    this.merchantInboundRoute = this.createMerchantWaterCurve(selected.dock, inboundSide, this.merchantArrivalPoint, inboundPath);
+    this.merchantOutboundRoute = this.createMerchantWaterCurve(selected.dock, outboundSide, this.merchantDeparturePoint, outboundPath);
+  }
+
+  private merchantBerthPoint(dock: ShorelineEdge, side: -1 | 1) {
+    const outward = new THREE.Vector3(dock.water.x - dock.land.x, 0, dock.water.z - dock.land.z);
+    const lateral = new THREE.Vector3(outward.z, 0, -outward.x);
+    return new THREE.Vector3(dock.land.x * WORLD_CELL_SIZE, -.08, dock.land.z * WORLD_CELL_SIZE)
+      .addScaledVector(outward, WORLD_CELL_SIZE * 1.29)
+      .addScaledVector(lateral, 1.38 * side);
+  }
+
+  private createMerchantWaterCurve(dock: ShorelineEdge, side: -1 | 1, berth: THREE.Vector3, path: readonly WaterPoint[]) {
+    const outward = new THREE.Vector3(dock.water.x - dock.land.x, 0, dock.water.z - dock.land.z);
+    const lateral = new THREE.Vector3(outward.z, 0, -outward.x);
+    const points = [
+      berth.clone(),
+      berth.clone().addScaledVector(lateral, side * .48),
+      ...path.map((point) => new THREE.Vector3(point.x * WORLD_CELL_SIZE, -.08, point.z * WORLD_CELL_SIZE)),
+    ].filter((point, index, all) => index === 0 || point.distanceToSquared(all[index - 1]) > .0001);
+    const curve = new THREE.CurvePath<THREE.Vector3>();
+    let cursor = points[0];
+    const cornerRadius = WORLD_CELL_SIZE * .18;
+    for (let index = 1; index < points.length - 1; index++) {
+      const before = points[index - 1];
+      const corner = points[index];
+      const after = points[index + 1];
+      const incoming = corner.clone().sub(before).normalize();
+      const outgoing = after.clone().sub(corner).normalize();
+      if (incoming.dot(outgoing) > .999) continue;
+      const radius = Math.min(cornerRadius, corner.distanceTo(before) * .32, corner.distanceTo(after) * .32);
+      const cornerStart = corner.clone().addScaledVector(incoming, -radius);
+      const cornerEnd = corner.clone().addScaledVector(outgoing, radius);
+      if (cursor.distanceToSquared(cornerStart) > .0001) curve.add(new THREE.LineCurve3(cursor, cornerStart));
+      curve.add(new THREE.QuadraticBezierCurve3(cornerStart, corner, cornerEnd));
+      cursor = cornerEnd;
+    }
+    const end = points[points.length - 1];
+    if (cursor.distanceToSquared(end) > .0001) curve.add(new THREE.LineCurve3(cursor, end));
+    return curve;
   }
 
   private positionImportYard() {
@@ -809,8 +896,10 @@ export class HarborAmbience {
 
   private updateMerchantJourney(boat: BoatActor, time: number, hour: number) {
     const dock = this.preferredImportDock();
-    const onDuty = Boolean(dock) && boat.eligible && this.boatOnShift(boat.kind, hour);
-    if (!dock || !onDuty) {
+    const inboundRoute = this.merchantInboundRoute;
+    const outboundRoute = this.merchantOutboundRoute;
+    const onDuty = Boolean(dock && inboundRoute && outboundRoute) && boat.eligible && this.boatOnShift(boat.kind, hour);
+    if (!dock || !inboundRoute || !outboundRoute || !onDuty) {
       boat.model.visible = false;
       this.merchantDocked = false;
       this.merchantWasOnDuty = false;
@@ -843,33 +932,23 @@ export class HarborAmbience {
     this.merchantDocked = phase >= dockStart && phase < dockEnd;
     if (this.merchantDocked && (this.cargoState['harbor-goods'] ?? 0) > 0) this.merchantLoadedExport = true;
 
-    const outward = new THREE.Vector3(dock.water.x - dock.land.x, 0, dock.water.z - dock.land.z);
-    const lateral = new THREE.Vector3(outward.z, 0, -outward.x);
-    const land = new THREE.Vector3(dock.land.x * WORLD_CELL_SIZE, 0, dock.land.z * WORLD_CELL_SIZE);
-    const yardCenter = land.clone().addScaledVector(outward, WORLD_CELL_SIZE * .77);
-    const dockPoint = yardCenter.clone().addScaledVector(outward, .58).addScaledVector(lateral, 1.38);
-    dockPoint.y = -.08;
-    const inboundOutside = land.clone().addScaledVector(outward, 28).addScaledVector(lateral, 6);
-    const inboundControl = dockPoint.clone().addScaledVector(outward, 3.2).addScaledVector(lateral, 3.4);
-    const outboundControl = dockPoint.clone().addScaledVector(outward, 3.2).addScaledVector(lateral, -3.4);
-    const outboundOutside = land.clone().addScaledVector(outward, 28).addScaledVector(lateral, -6);
-    inboundOutside.y = inboundControl.y = outboundControl.y = outboundOutside.y = -.08;
-
     const direction = new THREE.Vector3();
     if (phase < dockStart) {
-      const progress = phase / dockStart;
-      this.quadraticPoint(inboundOutside, inboundControl, dockPoint, progress, boat.model.position);
-      this.quadraticTangent(inboundOutside, inboundControl, dockPoint, progress, direction);
+      const routeProgress = 1 - phase / dockStart;
+      inboundRoute.getPointAt(routeProgress, boat.model.position);
+      inboundRoute.getTangentAt(routeProgress, direction).multiplyScalar(-1);
     } else if (phase < dockEnd) {
-      boat.model.position.copy(dockPoint);
-      direction.copy(lateral).multiplyScalar(-1);
+      const dockProgress = (phase - dockStart) / (dockEnd - dockStart);
+      boat.model.position.lerpVectors(this.merchantArrivalPoint, this.merchantDeparturePoint, dockProgress);
+      direction.copy(this.merchantDeparturePoint).sub(this.merchantArrivalPoint);
+      if (direction.lengthSq() <= .0001) inboundRoute.getTangentAt(0, direction).multiplyScalar(-1);
     } else if (phase < outsideAt) {
-      const progress = (phase - dockEnd) / (outsideAt - dockEnd);
-      this.quadraticPoint(dockPoint, outboundControl, outboundOutside, progress, boat.model.position);
-      this.quadraticTangent(dockPoint, outboundControl, outboundOutside, progress, direction);
+      const routeProgress = (phase - dockEnd) / (outsideAt - dockEnd);
+      outboundRoute.getPointAt(routeProgress, boat.model.position);
+      outboundRoute.getTangentAt(routeProgress, direction);
     } else {
-      boat.model.position.copy(outboundOutside);
-      direction.copy(outward);
+      outboundRoute.getPointAt(1, boat.model.position);
+      outboundRoute.getTangentAt(1, direction);
     }
 
     boat.model.visible = phase < outsideAt;
@@ -884,23 +963,6 @@ export class HarborAmbience {
       exportDeparture = true;
     }
     return exportDeparture;
-  }
-
-  private quadraticPoint(a: THREE.Vector3, control: THREE.Vector3, b: THREE.Vector3, amount: number, target: THREE.Vector3) {
-    const inverse = 1 - amount;
-    return target.set(
-      inverse * inverse * a.x + 2 * inverse * amount * control.x + amount * amount * b.x,
-      inverse * inverse * a.y + 2 * inverse * amount * control.y + amount * amount * b.y,
-      inverse * inverse * a.z + 2 * inverse * amount * control.z + amount * amount * b.z,
-    );
-  }
-
-  private quadraticTangent(a: THREE.Vector3, control: THREE.Vector3, b: THREE.Vector3, amount: number, target: THREE.Vector3) {
-    return target.set(
-      2 * (1 - amount) * (control.x - a.x) + 2 * amount * (b.x - control.x),
-      0,
-      2 * (1 - amount) * (control.z - a.z) + 2 * amount * (b.z - control.z),
-    ).normalize();
   }
 
   private updateMerchantCargo(boat: BoatActor, incoming: boolean, outgoing: boolean) {

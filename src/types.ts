@@ -99,6 +99,8 @@ export type BusinessType =
   | 'fishmonger' | 'restaurant' | 'tea-house' | 'inn' | 'pottery'
   | 'mill' | 'smokehouse' | 'weaver' | 'shipyard';
 
+export type BusinessProsperityTier = 0 | 1 | 2;
+
 export type CraftGood =
   | 'fish' | 'grain' | 'flour' | 'bread' | 'herbs' | 'tea'
   | 'timber' | 'tools' | 'clay' | 'tableware' | 'fiber' | 'cloth'
@@ -120,6 +122,10 @@ export type BusinessSave = {
   openedAt: number;
   employeeIds?: string[];
   visitCount?: number;
+  /** Recent custom and production. It fades over simulated time. */
+  prosperityScore?: number;
+  prosperityUpdatedAt?: number;
+  prosperityTier?: BusinessProsperityTier;
   /** The living place that first drew this trade here. Kept as neighborhood history. */
   placeIdentityId?: PlaceIdentityId;
 };

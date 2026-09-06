@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { CityRenderer, type CityMemoryInspection } from './city';
 import { CitizenSystem } from './citizens';
-import { BusinessSystem, type BusinessUpdate } from './businesses';
+import { BusinessSystem, businessProsperityTier, townProsperityLevel, type BusinessUpdate } from './businesses';
 import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type DiscoveryClue, type DiscoveryEffect, type TriggeredDiscovery } from './grow';
 import { HarborAmbience, type HarborMemoryInspection } from './harbor';
 import { weatherAt, type TownMemorySnapshot } from './memory';
@@ -1232,7 +1232,8 @@ function updateGrowInspector() {
   const selected = hoveredCell ? `${hoveredCell.x},${hoveredCell.z}: ${city.topologyLabel(hoveredCell.x, hoveredCell.z)}` : 'none';
   const nav = citizens.navStats();
   const fauna = ambience.wildlifeStats();
-  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · craft: ${crafting.completedCount()}/${crafting.recipeCount()} chains, ${crafting.summary() || 'waiting for materials'} · memory: ${snapshot.memory.growingTrees} growing/${snapshot.memory.matureTrees} mature trees, oldest ${Math.floor(snapshot.memory.oldestBuildingHours)}h, ${snapshot.memory.raining ? `rain ${snapshot.memory.rainIntensity.toFixed(2)}` : 'dry'} · fleet: ${fleet.join(', ') || 'none'} · fauna: ${fauna.birds} birds, ${fauna.gulls} gulls (${fauna.gullModes.flying} flying/${fauna.gullModes.feeding} feeding/${fauna.gullModes.perching} perched/${fauna.gullModes.scattering} scattering), ${fauna.fish} fish, ${fauna.crabs} crabs, ${fauna.turtles} turtles, ${fauna.cats}/${fauna.catCapacity} cats (${fauna.kittens} kittens, ${fauna.migratingCats} leaving), ${fauna.butterflies} butterflies · passing: ${fauna.whale} whale, ${fauna.dolphins} dolphins, ${fauna.squids} squids, ${fauna.tuna} tuna · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
+  const prosperityLabel = ['quiet', 'comfortable', 'flourishing'][townProsperityLevel(snapshot.businesses)];
+  summary.textContent = `Day ${snapshot.day} ${snapshot.timeOfDay.toFixed(2)} · speed ${simulationSpeed}× · ${snapshot.cells.length} cells · ${snapshot.population} citizens · ${snapshot.businesses.length} shops · prosperity ${prosperityLabel} · ${snapshot.relationshipCount} relationships · ${snapshot.water.dockCount} docks · ${snapshot.water.canalCount} canals · ${snapshot.water.shelteredCount} sheltered water · craft: ${crafting.completedCount()}/${crafting.recipeCount()} chains, ${crafting.summary() || 'waiting for materials'} · memory: ${snapshot.memory.growingTrees} growing/${snapshot.memory.matureTrees} mature trees, oldest ${Math.floor(snapshot.memory.oldestBuildingHours)}h, ${snapshot.memory.raining ? `rain ${snapshot.memory.rainIntensity.toFixed(2)}` : 'dry'} · fleet: ${fleet.join(', ') || 'none'} · fauna: ${fauna.birds} birds, ${fauna.gulls} gulls (${fauna.gullModes.flying} flying/${fauna.gullModes.feeding} feeding/${fauna.gullModes.perching} perched/${fauna.gullModes.scattering} scattering), ${fauna.fish} fish, ${fauna.crabs} crabs, ${fauna.turtles} turtles, ${fauna.cats}/${fauna.catCapacity} cats (${fauna.kittens} kittens, ${fauna.migratingCats} leaving), ${fauna.butterflies} butterflies · passing: ${fauna.whale} whale, ${fauna.dolphins} dolphins, ${fauna.squids} squids, ${fauna.tuna} tuna · nav: ${nav.nodes} nodes/${nav.links} links · selected: ${selected} · ${complete}/${oneShotEvents.length} discoveries · ${repeatableEvents.length} recurring moments`;
   const eligibleTitle = document.createElement('span');
   eligibleTitle.textContent = 'Eligible next';
   const eligibleList = document.createElement('p');
@@ -1247,7 +1248,10 @@ function updateGrowInspector() {
   const businessesTitle = document.createElement('span');
   businessesTitle.textContent = 'Businesses';
   const businessList = document.createElement('p');
-  businessList.textContent = snapshot.businesses.map((business) => `${business.name} · ${business.visitCount ?? 0} visits · ${(business.employeeIds ?? []).length} helpers`).join('\n') || 'none';
+  businessList.textContent = snapshot.businesses.map((business) => {
+    const prosperity = ['quiet', 'comfortable', 'flourishing'][businessProsperityTier(business)];
+    return `${business.name} · ${business.visitCount ?? 0} visits · ${(business.employeeIds ?? []).length} helpers · ${prosperity}`;
+  }).join('\n') || 'none';
   const effectsTitle = document.createElement('span');
   effectsTitle.textContent = 'Recent committed effects';
   const effects = document.createElement('p');
@@ -2126,7 +2130,7 @@ async function loadPostcard(file: File) {
 function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
   if (!update.changed) return;
   const current = businesses.all();
-  const visibleChange = update.opened.length > 0 || update.closed.length > 0 || update.hired.length > 0;
+  const visibleChange = update.opened.length > 0 || update.closed.length > 0 || update.hired.length > 0 || update.prosperityChanged === true;
   city.setBusinesses(current);
   if (visibleChange) {
     citizens.setBusinesses(current);
@@ -2676,13 +2680,16 @@ function animate() {
   }
   if (businessCheckElapsed > .5) {
     const residentState = citizens.residents();
-    applyBusinessUpdate(businesses.recordVisits(citizens.drainBusinessVisits(), residentState), true);
+    applyBusinessUpdate(businesses.recordVisits(citizens.drainBusinessVisits(), residentState, absoluteHours), true);
     const businessUpdate = businesses.update(residentState, city.cells, absoluteHours);
     applyBusinessUpdate(businessUpdate, true);
     const craftingUpdate = crafting.update(
       businesses.all(), residentState, grow.discoveredIds(), absoluteHours, formationOccurrences,
       ambience.activeImportSourceCellKey(),
     );
+    if (craftingUpdate.producerBusinessId) {
+      applyBusinessUpdate(businesses.recordProduction(craftingUpdate.producerBusinessId, absoluteHours), false);
+    }
     if (craftingUpdate.arrival) ambience.beginImport(craftingUpdate.arrival.good);
     if (craftingUpdate.delivery) citizens.beginDelivery(craftingUpdate.delivery.fromCellKey, craftingUpdate.delivery.toCellKey, craftingUpdate.delivery.good);
     if (craftingUpdate.milestone) {
@@ -2721,6 +2728,15 @@ function animate() {
   }
   const harborUpdate = ambience.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, weather.intensity);
   if (harborUpdate.fireworkBurst && audioContext?.state === 'running') playCue('firework', harborUpdate.fireworkBurst);
+  if (harborUpdate.prosperityMarketOpened) {
+    citizens.gatherAt(
+      harborUpdate.prosperityMarketOpened.x,
+      harborUpdate.prosperityMarketOpened.z,
+      'browsing the market-day stalls',
+    );
+    showToast('The town has set out its surplus for market day.');
+    playCue('chatter');
+  }
   if (harborUpdate.exportDeparture) {
     const shipped = crafting.shipHarborGoods(harborUpdate.exportDeparture.capacity);
     if (shipped > 0) {

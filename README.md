@@ -20,6 +20,8 @@ Every reachable home gets a named resident. Taller homes can hold small househol
 
 As the population rises, residents open bakeries, cafes, workshops, inns, and other businesses on accessible ground floors. Seventeen production steps connect the working harbor. Fish and herbs come from town. Merchant boats bring grain, timber, clay, and fiber to a dock. Workers carry those supplies to shops, and finished export crates leave the real inventory when the merchant sails away.
 
+Recent customers and successful production make prosperity visible. Comfortable shops set extra goods outside, flourishing shops raise a pennant, and customers carry parcels home. When several trades flourish together, a fair-weather market opens every few days at a harbor plaza or along an arcade. Its stalls pack away again that afternoon, and quiet shops gradually lose their extra displays.
+
 The journal records 72 one-time observations and six daily habits. Its stories cover architecture, work, weather, friendships, wildlife, and a traveler who arrives late in the game. Five longer stories light the Harbor Lanterns. Light all five, build a Lantern Square, and visit it between 19:00 and 23:00 for the finale. The sandbox stays open afterward.
 
 The harbor keeps changing between discoveries. Trees mature over several simulated days. Foot traffic wears paths smooth. Rain brings in laundry and sends animals under cover. Boats follow the shoreline, cats gather near fishmongers and inns, and fish prefer sheltered water. The game saves the simulation clock when you close it, so nothing advances while you are away.

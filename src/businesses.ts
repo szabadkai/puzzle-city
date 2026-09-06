@@ -1,4 +1,12 @@
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenSave, keyOf } from './types';
+import {
+  CARDINALS,
+  type BusinessProsperityTier,
+  type BusinessSave,
+  type BusinessType,
+  type Cell,
+  type CitizenSave,
+  keyOf,
+} from './types';
 import { hash, pick } from './random';
 import {
   detectFormations,
@@ -21,7 +29,35 @@ export type BusinessUpdate = {
   opened: BusinessSave[];
   closed: BusinessSave[];
   hired: Array<{ business: BusinessSave; citizenId: string }>;
+  prosperityChanged?: boolean;
 };
+
+const PROSPERITY_HALF_LIFE_HOURS = 48;
+const PROSPERITY_COMFORTABLE_SCORE = 3;
+const PROSPERITY_FLOURISHING_SCORE = 8;
+
+function prosperityTier(score: number, employeeCount: number): BusinessProsperityTier {
+  const effectiveScore = score + Math.min(1, employeeCount) * 2;
+  if (effectiveScore >= PROSPERITY_FLOURISHING_SCORE) return 2;
+  if (effectiveScore >= PROSPERITY_COMFORTABLE_SCORE) return 1;
+  return 0;
+}
+
+export function businessProsperityTier(business: BusinessSave): BusinessProsperityTier {
+  return business.prosperityTier ?? prosperityTier(
+    business.prosperityScore ?? 0,
+    business.employeeIds?.length ?? 0,
+  );
+}
+
+export function townProsperityLevel(businesses: readonly BusinessSave[]): BusinessProsperityTier {
+  const tiers = businesses.map(businessProsperityTier);
+  const flourishing = tiers.filter((tier) => tier === 2).length;
+  const total = tiers.reduce<number>((sum, tier) => sum + tier, 0);
+  if (businesses.length >= 4 && flourishing >= 1 && total >= 6) return 2;
+  if (businesses.length >= 2 && total >= 2) return 1;
+  return 0;
+}
 
 const RECIPES: readonly BusinessRecipe[] = [
   {
@@ -188,6 +224,12 @@ export class BusinessSystem {
       ...business,
       employeeIds: [...(business.employeeIds ?? [])],
       visitCount: business.visitCount ?? 0,
+      prosperityScore: business.prosperityScore ?? Math.min(8, (business.visitCount ?? 0) * .35),
+      prosperityUpdatedAt: business.prosperityUpdatedAt ?? -1,
+      prosperityTier: business.prosperityTier ?? prosperityTier(
+        Math.min(8, (business.visitCount ?? 0) * .35),
+        business.employeeIds?.length ?? 0,
+      ),
     }));
   }
 
@@ -211,16 +253,25 @@ export class BusinessSystem {
       usedOwners.add(replacement.id);
       changed = true;
     }
+    let prosperityChanged = false;
     for (const business of this.businesses) {
+      const previousTier = businessProsperityTier(business);
       const employees = (business.employeeIds ?? []).filter((id) => citizenIds.has(id) && !usedOwners.has(id));
       if (employees.length !== (business.employeeIds?.length ?? 0)) changed = true;
       business.employeeIds = employees;
+      business.prosperityTier = prosperityTier(business.prosperityScore ?? 0, employees.length);
+      prosperityChanged = business.prosperityTier !== previousTier || prosperityChanged;
     }
-    return { changed, opened: [], closed, hired: [] };
+    return { changed, opened: [], closed, hired: [], prosperityChanged };
   }
 
   update(citizens: CitizenSave[], cells: Map<string, Cell>, absoluteHours: number): BusinessUpdate {
     const result = this.maintain(citizens, cells);
+    for (const business of this.businesses) {
+      if (!this.refreshProsperity(business, absoluteHours)) continue;
+      result.changed = true;
+      result.prosperityChanged = true;
+    }
     if (this.nextOpeningAt === 0) this.nextOpeningAt = absoluteHours + .08;
     if (absoluteHours < this.nextOpeningAt) return result;
     this.nextOpeningAt = absoluteHours + .3;
@@ -236,7 +287,13 @@ export class BusinessSystem {
 
     for (const recipe of recipes) {
       const business = this.tryOpenRecipe(recipe, citizens, cells, absoluteHours, formations);
-      if (business) return { changed: true, opened: [business], closed: result.closed, hired: result.hired };
+      if (business) return {
+        changed: true,
+        opened: [business],
+        closed: result.closed,
+        hired: result.hired,
+        prosperityChanged: result.prosperityChanged,
+      };
     }
     return result;
   }
@@ -301,6 +358,9 @@ export class BusinessSystem {
       openedAt: absoluteHours,
       employeeIds: [],
       visitCount: 0,
+      prosperityScore: 0,
+      prosperityUpdatedAt: absoluteHours,
+      prosperityTier: 0,
       placeIdentityId: placeAffinity.identity?.id,
     };
     for (const existing of this.businesses) existing.employeeIds = (existing.employeeIds ?? []).filter((id) => id !== chosen.citizen.id);
@@ -308,18 +368,20 @@ export class BusinessSystem {
     return business;
   }
 
-  recordVisits(visits: Array<{ businessId: string; citizenId: string }>, citizens: CitizenSave[]): BusinessUpdate {
+  recordVisits(visits: Array<{ businessId: string; citizenId: string }>, citizens: CitizenSave[], absoluteHours: number): BusinessUpdate {
     if (!visits.length) return { changed: false, opened: [], closed: [], hired: [] };
     const citizenById = new Map(citizens.map((citizen) => [citizen.id, citizen]));
     const owned = new Set(this.businesses.map((business) => business.ownerId));
     const employed = new Set(this.businesses.flatMap((business) => business.employeeIds ?? []));
     const hired: Array<{ business: BusinessSave; citizenId: string }> = [];
     let changed = false;
+    let prosperityChanged = false;
     for (const visit of visits) {
       const business = this.businesses.find((candidate) => candidate.id === visit.businessId);
       const citizen = citizenById.get(visit.citizenId);
       if (!business || !citizen) continue;
       business.visitCount = (business.visitCount ?? 0) + 1;
+      prosperityChanged = this.addProsperity(business, 1, absoluteHours) || prosperityChanged;
       changed = true;
       if (citizen.residentKind === 'visitor') continue;
       if ((business.employeeIds?.length ?? 0) >= 1 || (business.visitCount ?? 0) < 7) continue;
@@ -327,11 +389,42 @@ export class BusinessSystem {
       const [shopX, shopZ] = business.cellKey.split(',').map(Number);
       const [homeX, homeZ] = citizen.homeKey.split(',').map(Number);
       if (Math.abs(shopX - homeX) + Math.abs(shopZ - homeZ) > 4) continue;
+      const previousTier = businessProsperityTier(business);
       business.employeeIds = [citizen.id];
+      business.prosperityTier = prosperityTier(business.prosperityScore ?? 0, 1);
+      prosperityChanged = business.prosperityTier !== previousTier || prosperityChanged;
       employed.add(citizen.id);
       hired.push({ business, citizenId: citizen.id });
     }
-    return { changed, opened: [], closed: [], hired };
+    return { changed, opened: [], closed: [], hired, prosperityChanged };
+  }
+
+  recordProduction(businessId: string | undefined, absoluteHours: number): BusinessUpdate {
+    const business = businessId ? this.businesses.find((candidate) => candidate.id === businessId) : undefined;
+    if (!business) return { changed: false, opened: [], closed: [], hired: [] };
+    const prosperityChanged = this.addProsperity(business, 1.75, absoluteHours);
+    return { changed: true, opened: [], closed: [], hired: [], prosperityChanged };
+  }
+
+  private addProsperity(business: BusinessSave, amount: number, absoluteHours: number) {
+    const before = businessProsperityTier(business);
+    this.refreshProsperity(business, absoluteHours);
+    business.prosperityScore = Math.min(14, (business.prosperityScore ?? 0) + amount);
+    business.prosperityUpdatedAt = absoluteHours;
+    business.prosperityTier = prosperityTier(business.prosperityScore, business.employeeIds?.length ?? 0);
+    return business.prosperityTier !== before;
+  }
+
+  private refreshProsperity(business: BusinessSave, absoluteHours: number) {
+    const before = businessProsperityTier(business);
+    const updatedAt = business.prosperityUpdatedAt ?? -1;
+    if (updatedAt >= 0 && absoluteHours > updatedAt) {
+      const elapsed = absoluteHours - updatedAt;
+      business.prosperityScore = (business.prosperityScore ?? 0) * Math.pow(.5, elapsed / PROSPERITY_HALF_LIFE_HOURS);
+    }
+    business.prosperityUpdatedAt = absoluteHours;
+    business.prosperityTier = prosperityTier(business.prosperityScore ?? 0, business.employeeIds?.length ?? 0);
+    return business.prosperityTier !== before;
   }
 
   all() { return this.businesses; }

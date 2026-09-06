@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { BusinessSave, Cell, CitizenSave, CraftGood, PlaceIdentityId } from './types';
+import { CARDINALS, type BusinessSave, type Cell, type CitizenSave, type CraftGood, type PlaceIdentityId } from './types';
+import { townProsperityLevel } from './businesses';
+import { detectFormations } from './formations';
 import { placeLandmarkSocket, type PlaceIdentityOccurrence } from './place-identities';
 import { hash } from './random';
 import { roofWalkY } from './spatial';
 import { isWalkableRoof } from './architecture';
+import { findPlazaAnchors } from './topology';
 import {
   analyzeWaterTopology, createDockNavigationPath, createShorelineRoute, WORLD_CELL_SIZE,
   type ShorelineEdge, type WaterPoint, type WaterTopology,
@@ -215,6 +218,7 @@ export type HarborMemoryInspection = WildlifeMemoryInspection | BoatMemoryInspec
 export type HarborUpdate = Readonly<{
   exportDeparture?: { good: 'harbor-goods'; capacity: number };
   fireworkBurst?: number;
+  prosperityMarketOpened?: { x: number; z: number };
 }>;
 
 type BoatActor = {
@@ -274,6 +278,8 @@ export class HarborAmbience {
   private rooftopCrowdBatches!: FestivalCrowdBatches;
   private rooftopLanterns!: THREE.InstancedMesh;
   private readonly rooftopPartyLights: THREE.PointLight[] = [];
+  private readonly prosperityMarket: THREE.Group;
+  private prosperityMarketAnchor: { x: number; z: number } | null = null;
   private readonly festivalRootTransform = new THREE.Object3D();
   private readonly festivalPartTransform = new THREE.Object3D();
   private readonly festivalCombinedMatrix = new THREE.Matrix4();
@@ -348,6 +354,9 @@ export class HarborAmbience {
     this.rooftopCrowd.name = 'lantern-rooftop-dancers';
     this.rooftopCrowd.visible = false;
     this.root.add(this.rooftopCrowd);
+    this.prosperityMarket = this.createProsperityMarket();
+    this.prosperityMarket.visible = false;
+    this.root.add(this.prosperityMarket);
     this.rain = this.createRain();
     this.rain.name = 'passing-rain';
     this.rain.visible = false;
@@ -377,6 +386,7 @@ export class HarborAmbience {
     this.fauna.setTown(this.cells, this.businesses, matureTreeAnchors);
     this.syncVesselOccupants();
     this.positionImportYard();
+    this.syncProsperityMarketAnchor();
     this.syncLanternSquareAnchors();
     this.syncLanternFinaleVisibility();
     this.refreshFleetVisibility();
@@ -445,6 +455,43 @@ export class HarborAmbience {
     const finaleParty = discovered && ['gathering', 'water', 'fireworks'].includes(this.lanternFinaleStage);
     this.festivalCrowd.visible = Boolean(this.lanternSquareCenter) && (squareParty || finaleParty);
     this.rooftopCrowd.visible = Boolean(this.rooftopPartyCenter) && (squareParty || finaleParty);
+  }
+
+  private syncProsperityMarketAnchor() {
+    this.prosperityMarketAnchor = null;
+    this.prosperityMarket.visible = false;
+    const cells = new Map(this.cells.map((cell) => [`${cell.x},${cell.z}`, cell]));
+    const plazas = findPlazaAnchors(cells);
+    const arcade = detectFormations(cells).filter((formation) => formation.id === 'arcade-row');
+    const plazaStalls = this.prosperityMarket.getObjectByName('prosperity-market-plaza-stalls');
+    const arcadeStall = this.prosperityMarket.getObjectByName('prosperity-market-arcade-stall');
+    if (plazas.length) {
+      const anchor = plazas[Math.floor(hash(this.seed, plazas.length, 0, 9420) * plazas.length) % plazas.length];
+      const x = anchor.x + .5;
+      const z = anchor.z + .5;
+      this.prosperityMarket.position.set(x * WORLD_CELL_SIZE, .2, z * WORLD_CELL_SIZE);
+      this.prosperityMarket.rotation.y = 0;
+      this.prosperityMarketAnchor = { x, z };
+      if (plazaStalls) plazaStalls.visible = true;
+      if (arcadeStall) arcadeStall.visible = false;
+      return;
+    }
+    if (!arcade.length) return;
+    const formation = arcade[Math.floor(hash(this.seed, arcade.length, 1, 9421) * arcade.length) % arcade.length];
+    const cell = cells.get(`${formation.x},${formation.z}`);
+    if (!cell) return;
+    const exposed = CARDINALS.map((offset, direction) => ({ offset, direction }))
+      .filter(({ offset: [dx, dz] }) => !cells.has(`${cell.x + dx},${cell.z + dz}`));
+    const front = exposed[Math.floor(hash(this.seed, cell.x, cell.z, 9422) * exposed.length) % exposed.length];
+    if (!front) return;
+    const [dx, dz] = front.offset;
+    const worldX = cell.x * WORLD_CELL_SIZE + dx * 1.55;
+    const worldZ = cell.z * WORLD_CELL_SIZE + dz * 1.55;
+    this.prosperityMarket.position.set(worldX, .2, worldZ);
+    this.prosperityMarket.rotation.y = Math.PI - front.direction * Math.PI / 2;
+    this.prosperityMarketAnchor = { x: worldX / WORLD_CELL_SIZE, z: worldZ / WORLD_CELL_SIZE };
+    if (plazaStalls) plazaStalls.visible = false;
+    if (arcadeStall) arcadeStall.visible = true;
   }
 
   setPlaceIdentities(identities: readonly PlaceIdentityOccurrence[]) {
@@ -566,6 +613,19 @@ export class HarborAmbience {
     this.lastTimeOfDay = timeOfDay;
     this.lastRainIntensity = rainIntensity;
     this.syncLanternFinaleVisibility();
+    const marketWasOpen = this.prosperityMarket.visible;
+    const marketDay = Math.floor(absoluteHours / 24);
+    const marketOffset = Math.floor(hash(this.seed, 0, 0, 9440) * 3);
+    const marketOpen = Boolean(this.prosperityMarketAnchor)
+      && townProsperityLevel(this.businesses) === 2
+      && (marketDay + marketOffset) % 3 === 0
+      && timeOfDay >= 9.5
+      && timeOfDay < 16
+      && rainIntensity < .45;
+    this.prosperityMarket.visible = marketOpen;
+    const prosperityMarketOpened = marketOpen && !marketWasOpen && this.prosperityMarketAnchor
+      ? { ...this.prosperityMarketAnchor }
+      : undefined;
     let exportDeparture: HarborUpdate['exportDeparture'];
     for (const boat of this.fleet) {
       if (boat.kind === 'merchant boat' && this.discoveries.has('merchant-arrival') && this.preferredImportDock()) {
@@ -605,7 +665,7 @@ export class HarborAmbience {
     if (this.festivalCrowd.visible) this.updateFestivalCrowd(time, false);
     if (this.rooftopCrowd.visible) this.updateFestivalCrowd(time, true);
     this.updateRain(time, rainIntensity);
-    return { exportDeparture, fireworkBurst };
+    return { exportDeparture, fireworkBurst, prosperityMarketOpened };
   }
 
   private createRain() {
@@ -1683,6 +1743,77 @@ export class HarborAmbience {
       light.name = `firework-flash-${index + 1}`;
       return light;
     });
+  }
+
+  private createProsperityMarket() {
+    const root = new THREE.Group();
+    root.name = 'prosperity-market-day';
+    const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .96, side: THREE.DoubleSide });
+    const colors = {
+      wood: new THREE.Color(0x704938),
+      cream: new THREE.Color(0xe7d4a8),
+      red: new THREE.Color(0xb85445),
+      blue: new THREE.Color(0x4e7880),
+      green: new THREE.Color(0x668458),
+    };
+    const buildStalls = (name: string, stalls: Array<{ x: number; cloth: THREE.Color; goods: THREE.Color }>) => {
+      const geometries: THREE.BufferGeometry[] = [];
+      const position = new THREE.Vector3();
+      const rotation = new THREE.Euler();
+      const quaternion = new THREE.Quaternion();
+      const scale = new THREE.Vector3(1, 1, 1);
+      const matrix = new THREE.Matrix4();
+      const add = (geometry: THREE.BufferGeometry, color: THREE.Color, x: number, y: number, z: number, rotationX = 0) => {
+        position.set(x, y, z);
+        rotation.set(rotationX, 0, 0);
+        quaternion.setFromEuler(rotation);
+        matrix.compose(position, quaternion, scale);
+        geometry.applyMatrix4(matrix);
+        const vertices = geometry.getAttribute('position').count;
+        const vertexColors = new Float32Array(vertices * 3);
+        for (let index = 0; index < vertices; index++) {
+          vertexColors[index * 3] = color.r;
+          vertexColors[index * 3 + 1] = color.g;
+          vertexColors[index * 3 + 2] = color.b;
+        }
+        geometry.setAttribute('color', new THREE.BufferAttribute(vertexColors, 3));
+        geometries.push(geometry);
+      };
+      for (const stall of stalls) {
+        const z = .35;
+        add(new THREE.BoxGeometry(.86, .18, .5), colors.wood, stall.x, .36, z);
+        add(new THREE.BoxGeometry(.78, .08, .42), colors.cream, stall.x, .5, z);
+        for (const postX of [-.39, .39]) {
+          add(new THREE.CylinderGeometry(.018, .022, .92, 6), colors.wood, stall.x + postX, .91, z + .16);
+        }
+        for (let index = 0; index < 5; index++) {
+          add(new THREE.BoxGeometry(.18, .075, .62), index % 2 ? colors.cream : stall.cloth,
+            stall.x + (index - 2) * .18, 1.36, z + .05, -.09);
+        }
+        for (let index = 0; index < 4; index++) {
+          add(new THREE.CylinderGeometry(.055, .075, .12 + index % 2 * .04, 7), index % 2 ? stall.goods : colors.cream,
+            stall.x - .27 + index * .18, .62, z - .02 + index % 2 * .04);
+        }
+        add(new THREE.PlaneGeometry(.48, .24), stall.cloth, stall.x, 1.22, z + .38, -.08);
+      }
+      const geometry = mergeGeometries(geometries, false);
+      for (const part of geometries) part.dispose();
+      const mesh = new THREE.Mesh(geometry!, material);
+      mesh.name = name;
+      mesh.receiveShadow = true;
+      return mesh;
+    };
+
+    const plaza = buildStalls('prosperity-market-plaza-stalls', [
+      { x: -.95, cloth: colors.red, goods: colors.green },
+      { x: .95, cloth: colors.blue, goods: colors.red },
+    ]);
+    const arcade = buildStalls('prosperity-market-arcade-stall', [
+      { x: 0, cloth: colors.red, goods: colors.green },
+    ]);
+    arcade.visible = false;
+    root.add(plaza, arcade);
+    return root;
   }
 
   private createFestivalCrowd(rooftop: boolean) {

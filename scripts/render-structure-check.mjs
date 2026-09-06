@@ -93,6 +93,9 @@ try {
     openedAt: 1,
     employeeIds: [],
     visitCount: 20,
+    prosperityScore: index < 4 ? 10 : index < 6 ? 4 : 0,
+    prosperityUpdatedAt: 240,
+    prosperityTier: index < 4 ? 2 : index < 6 ? 1 : 0,
   }));
   const citizens = Array.from({ length: 16 }, (_, index) => {
     const home = cells[index % cells.length];
@@ -162,6 +165,8 @@ try {
   const renderedShopfronts = new Set(city.root.children.map((group) => group.userData.businessFacade).filter(Boolean));
   const missingShopfronts = businessTypes.filter((type) => !renderedShopfronts.has(type));
   if (missingShopfronts.length) throw new Error(`Businesses are missing distinct shopfronts: ${missingShopfronts.join(', ')}.`);
+  const prosperousShopfronts = city.root.children.filter((group) => (group.userData.businessProsperityTier ?? 0) > 0);
+  if (prosperousShopfronts.length !== 6) throw new Error(`Recent trade produced ${prosperousShopfronts.length} prosperous shop displays instead of 6.`);
   for (const shop of city.root.children.filter((group) => group.userData.businessFacade)) {
     const direction = shop.userData.businessApronDirection;
     if ((shop.userData.domesticGroundFacadeDirections ?? []).includes(direction)) {
@@ -274,6 +279,28 @@ try {
   if (fireworks.visible || festivalDancers.visible || rooftopDancers.visible) {
     throw new Error('Lantern Square fireworks or dancers remained active outside the evening celebration.');
   }
+  const plazaMarketCells = [
+    [0, -1], [1, -1], [0, 2], [1, 2], [-1, 0], [-1, 1],
+  ].map(([x, z], index) => ({ x, z, height: 1, color: index, placedAt: 0, foundedAt: 0, renovatedAt: 0 }));
+  const marketAmbience = new HarborAmbience(seed, new THREE.PerspectiveCamera(), plazaMarketCells);
+  marketAmbience.setTown(plazaMarketCells, businesses, citizens, []);
+  const marketOffset = Math.floor(hash(seed, 0, 0, 9440) * 3);
+  const marketDay = 3 + (3 - marketOffset) % 3;
+  const marketUpdate = marketAmbience.update(1, .8, 11, marketDay * 24 + 11, 0, 0);
+  const market = marketAmbience.root.getObjectByName('prosperity-market-day');
+  if (!market?.visible || !marketUpdate.prosperityMarketOpened) {
+    throw new Error('A flourishing town did not open its scheduled plaza market.');
+  }
+  if (!market.getObjectByName('prosperity-market-plaza-stalls')?.visible) {
+    throw new Error('A plaza market did not use both of its bounded stalls.');
+  }
+  let marketDraws = 0;
+  market.traverse((object) => {
+    if (object instanceof THREE.Mesh && object.visible) marketDraws += 1;
+  });
+  if (marketDraws !== 1) throw new Error(`The open market uses ${marketDraws} draw calls instead of 1.`);
+  marketAmbience.update(2, .8, 11, marketDay * 24 + 11.1, 0, .7);
+  if (market.visible) throw new Error('Market-day stalls stayed open through heavy rain.');
   const behavioralPlaces = [
     {
       id: 'canal-market', x: 1, z: 0, formations: ['narrow-canal', 'arcade-row'],
@@ -548,7 +575,7 @@ try {
     drawGroups += sectionDraws;
   }
 
-  if (drawGroups > 100) throw new Error(`Full-feature scene has ${drawGroups} visible draw groups; budget is 100.`);
+  if (drawGroups > 100) throw new Error(`Full-feature scene has ${drawGroups} visible draw groups; budget is 100. ${JSON.stringify(byRoot)}`);
 
   const plazaCells = [
     [0, -1], [1, -1], [0, 2], [1, 2], [-1, 0], [-1, 1], [2, 0], [2, 1],

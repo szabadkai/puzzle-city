@@ -37,6 +37,7 @@ export type CraftingUpdate = {
   delivery?: CraftDelivery;
   arrival?: CraftArrival;
   milestone?: string;
+  producerBusinessId?: string;
 };
 
 const CAPACITY = 12;
@@ -198,7 +199,7 @@ export class CraftingSystem {
           ? ` The ${affinity.identity.title.toLowerCase()} makes it a generous batch.`
           : affinity.formation ? ` The nearby ${affinity.formation.title.toLowerCase()} makes it a fuller batch.` : ''}`
         : undefined;
-      return { changed: true, delivery, arrival, milestone };
+      return { changed: true, delivery, arrival, milestone, producerBusinessId: producer?.id };
     }
     // Do not spin on a blocked economy every frame. A quarter-hour retry keeps
     // newly supplied chains responsive without turning shortages into pressure.

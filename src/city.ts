@@ -389,7 +389,9 @@ export class CityRenderer {
     for (const key of affected) {
       const before = previous.get(key);
       const after = this.businesses.get(key);
-      if (before?.type === after?.type && before?.name === after?.name) continue;
+      if (before?.type === after?.type
+        && before?.name === after?.name
+        && (before?.prosperityTier ?? 0) === (after?.prosperityTier ?? 0)) continue;
       const [x, z] = key.split(',').map(Number);
       this.rebuildPiece(x, z);
     }
@@ -820,6 +822,11 @@ export class CityRenderer {
       const business = this.businesses.get(keyOf(x, z));
       const activeIdentity = PLACE_IDENTITY_BY_ID.get(group?.userData.placeInfluence as PlaceIdentityId);
       const foundingIdentity = business?.placeIdentityId ? PLACE_IDENTITY_BY_ID.get(business.placeIdentityId) : undefined;
+      const prosperity = business?.prosperityTier === 2
+        ? `${business.name}'s full pavement display reflects a flourishing run of custom and production.`
+        : business?.prosperityTier === 1
+          ? `${business.name} has begun setting extra goods outside after a comfortable run of trade.`
+          : '';
       const details = activeIdentity && group?.userData.placeInfluenceTrace
         ? `${activeIdentity.title} added these details: ${activeIdentity.trace}`
         : 'Neighboring buildings and water determine its shape.';
@@ -834,7 +841,7 @@ export class CityRenderer {
         title: business?.name ?? this.topologyLabel(x, z),
         ageHours,
         ageLabel: describeAge(ageHours),
-        detail: details,
+        detail: [details, prosperity].filter(Boolean).join(' '),
         note: [history, construction].filter(Boolean).join(' '),
       };
     }
@@ -1543,7 +1550,64 @@ export class CityRenderer {
     if (business.type === 'smokehouse') this.addSmokehouseDetails(group, dir, dx, dz, lateral, accent);
     if (business.type === 'weaver') this.addWeaverDetails(group, dir, dx, dz, lateral, accent);
     if (business.type === 'shipyard') this.addShipyardDetails(group, dir, dx, dz, lateral, accent);
+    if ((business.prosperityTier ?? 0) > 0) this.addProsperousBusinessDetails(group, cell, business, dir, dx, dz, lateral, accent);
     this.addBusinessPoster(group, dir, dx, dz, lateral, business.type, colors[business.type]);
+  }
+
+  private addProsperousBusinessDetails(
+    group: THREE.Group,
+    cell: Cell,
+    business: BusinessSave,
+    dir: Direction,
+    dx: number,
+    dz: number,
+    lateral: THREE.Vector3,
+    accent: THREE.Material,
+  ) {
+    const tier = business.prosperityTier ?? 0;
+    const side = hash(this.seed, cell.x, cell.z, 9410) > .5 ? .76 : -.76;
+    const place = (object: THREE.Object3D, sideOffset: number, outward: number, y: number) => {
+      this.detailPosition(object, dx, dz, lateral, sideOffset, outward, y);
+      group.add(object);
+      return object;
+    };
+
+    const counter = shadow(this.orientedBox(.68, .3, .34, dir, this.wood), false);
+    place(counter, side, 1.67, .25);
+    const tray = shadow(this.orientedBox(.76, .07, .42, dir, accent), false);
+    place(tray, side, 1.68, .44);
+
+    const wares = tier === 2 ? 4 : 2;
+    const warmGoods = ['bakery', 'mill', 'inn'].includes(business.type);
+    const roundGoods = ['cafe', 'flower-shop', 'restaurant', 'tea-house', 'pottery'].includes(business.type);
+    const longGoods = ['bakery', 'fishmonger', 'smokehouse', 'weaver', 'shipyard'].includes(business.type);
+    for (let index = 0; index < wares; index++) {
+      const offset = side + (index - (wares - 1) / 2) * .16;
+      let ware: THREE.Mesh;
+      if (longGoods) {
+        ware = new THREE.Mesh(new THREE.CapsuleGeometry(.04, .1, 2, 5), business.type === 'weaver' ? accent : warmGoods ? this.cream : this.metal);
+        ware.rotation.z = Math.PI / 2;
+        ware.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      } else if (roundGoods) {
+        ware = new THREE.Mesh(new THREE.CylinderGeometry(.055, .07, .11, 7), index % 2 ? accent : this.cream);
+      } else {
+        ware = this.orientedBox(.11, .14 + index % 2 * .04, .08, dir, index % 2 ? accent : this.cream);
+      }
+      ware.name = `prosperity-ware-${business.type}-${index}`;
+      place(ware, offset, 1.7, .55 + index % 2 * .025);
+    }
+
+    if (tier === 2) {
+      const pole = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.018, .022, .72, 6), this.wood), false);
+      place(pole, -side, 1.62, 1.4);
+      const pennant = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.4, .28), accent), false);
+      place(pennant, -side + Math.sign(side) * .2, 1.64, 1.63);
+      pennant.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      pennant.rotation.z = Math.sign(side) * -.12;
+      pennant.name = `prosperity-pennant-${business.type}`;
+    }
+
+    group.userData.businessProsperityTier = tier;
   }
 
   private orientedBox(width: number, height: number, depth: number, dir: Direction, material: THREE.Material) {

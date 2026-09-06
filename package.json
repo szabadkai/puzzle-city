@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:crafting": "node --experimental-strip-types scripts/crafting-check.mjs",
+    "test:prosperity": "node --experimental-strip-types scripts/prosperity-check.mjs",
     "test:memory": "node --experimental-strip-types scripts/memory-check.mjs",
     "test:lanterns": "node --experimental-strip-types scripts/lanterns-check.mjs",
     "test:formations": "node --experimental-strip-types scripts/formations-check.mjs",

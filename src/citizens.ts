@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { businessLabel, businessOccupation, isBusinessOpen } from './businesses';
+import { businessLabel, businessOccupation, businessProsperityTier, isBusinessOpen } from './businesses';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenSave, type ConfluenceId, type CraftGood, type FormationId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
 import { findPlazaAnchors } from './topology';
@@ -24,7 +24,9 @@ const BRIDGE_Y = HIGH_CROSSING_WALK_Y;
 const NAMES = ['Mei', 'Ren', 'Aiko', 'Hana', 'Jun', 'Mina', 'Sora', 'Tomo', 'Yuna', 'Bo', 'Kiko', 'Nori', 'Aya', 'Kenji', 'Momo', 'Lin', 'Haru', 'Emi'];
 const TRAITS = ['sociable', 'quiet', 'ambitious', 'curious', 'artistic', 'industrious', 'dreamy', 'patient', 'adventurous'];
 const OCCUPATIONS = ['Baker', 'Fisher', 'Gardener', 'Teacher', 'Bookbinder', 'Caretaker', 'Cartographer', 'Cook'];
-const CLOTHES = [0xc9564d, 0xd99a42, 0x457b78, 0x536c92, 0xa75e77, 0x718551];
+// Four clothing batches leave room for parcel cargo and a one-draw market stall
+// while retaining distinct warm and cool citizen colors.
+const CLOTHES = [0xc9564d, 0xd99a42, 0x457b78, 0x536c92];
 const MAX_RENDERED_CITIZENS = 512;
 
 type NavNode = {
@@ -49,6 +51,8 @@ type Citizen = CitizenSave & {
   activity: string;
   stepPhase: number;
   carryingGood: CraftGood | null;
+  pendingParcelBusinessId: string | null;
+  carryingParcel: boolean;
 };
 
 export type CitizenCard = {
@@ -710,6 +714,13 @@ export class CitizenSystem {
       }
     }
     this.businesses = businesses.map((business) => ({ ...business, employeeIds: [...(business.employeeIds ?? [])] }));
+    const businessIds = new Set(businesses.map((business) => business.id));
+    for (const citizen of this.citizens) {
+      if (citizen.pendingParcelBusinessId && !businessIds.has(citizen.pendingParcelBusinessId)) {
+        citizen.pendingParcelBusinessId = null;
+        citizen.carryingParcel = false;
+      }
+    }
     for (const business of businesses) {
       const owner = this.citizens.find((citizen) => citizen.id === business.ownerId);
       if (owner && owner.occupation !== 'Fisher') owner.occupation = businessOccupation(business.type);
@@ -842,6 +853,8 @@ export class CitizenSystem {
       activity: movingIn ? 'moving in' : 'watching the tide',
       stepPhase: hash(this.seed, this.citizens.length, 0, 906) * Math.PI * 2,
       carryingGood: null,
+      pendingParcelBusinessId: null,
+      carryingParcel: false,
     });
   }
 
@@ -949,7 +962,7 @@ export class CitizenSystem {
       this.setActorPart(this.armInstances, arms++, citizen.model, citizen.leftArm);
       this.setActorPart(this.armInstances, arms++, citizen.model, citizen.rightArm);
       if (citizen.hat) this.setActorPart(this.hatInstances, hats++, citizen.model, citizen.hat);
-      if (citizen.carryingGood) this.setActorPart(this.cargoInstances, cargo++, citizen.model, this.cargoTransform);
+      if (citizen.carryingGood || citizen.carryingParcel) this.setActorPart(this.cargoInstances, cargo++, citizen.model, this.cargoTransform);
     }
     this.bodyInstances.forEach((batch, index) => {
       batch.count = bodyCounts[index];
@@ -995,7 +1008,11 @@ export class CitizenSystem {
     const formationPlace = !confluencePlace && !identityPlace && hour >= 9 && hour < 21 && choice < .58
       ? this.graph.formationNode((choice * 2.73 + this.citizens.indexOf(citizen) * .193) % 1, from.key)
       : undefined;
-    if (hour < 4.5 || (hour < 6 && citizen.occupation !== 'Fisher') || hour >= 22) {
+    if (citizen.carryingParcel && home) {
+      const shop = this.businesses.find((business) => business.id === citizen.pendingParcelBusinessId);
+      citizen.activity = `carrying a parcel home${shop ? ` from ${shop.name}` : ''}`;
+      target = home;
+    } else if (hour < 4.5 || (hour < 6 && citizen.occupation !== 'Fisher') || hour >= 22) {
       citizen.activity = 'sleeping at home';
     } else if (rooftopPartyTarget && !businessVisit?.owned) {
       citizen.activity = citizen.ageGroup === 'child'
@@ -1201,6 +1218,19 @@ export class CitizenSystem {
     citizen.businessVisits[business.id] = (citizen.businessVisits[business.id] ?? 0) + 1;
     if ((citizen.businessVisits[business.id] ?? 0) >= 3) citizen.favoriteBusinessId = business.id;
     this.pendingBusinessVisits.push({ businessId: business.id, citizenId: citizen.id });
+    const tier = businessProsperityTier(business);
+    const parcelChance = tier === 2 ? .82 : tier === 1 ? .52 : 0;
+    if (!citizen.pendingParcelBusinessId
+      && !citizen.carryingGood
+      && hash(this.seed, Math.floor(this.currentHours * 4), this.citizens.indexOf(citizen), 1502) < parcelChance) {
+      citizen.pendingParcelBusinessId = business.id;
+      const entrance = this.graph.entrance(business.cellKey);
+      if (entrance && citizen.model.position.distanceToSquared(entrance.position) < .01) {
+        citizen.carryingParcel = true;
+        citizen.activity = `collecting a parcel from ${business.name}`;
+        citizen.nextDecisionAt = this.currentHours + .08;
+      }
+    }
   }
 
   private chooseFriendVisit(citizen: Citizen, choice: number, from: string) {
@@ -1325,6 +1355,20 @@ export class CitizenSystem {
         citizen.activity = `delivered the ${citizen.carryingGood.replace('-', ' ')}`;
         citizen.carryingGood = null;
         citizen.nextDecisionAt = Math.max(citizen.nextDecisionAt, this.currentHours + .12);
+      } else if (!citizen.path.length && citizen.pendingParcelBusinessId) {
+        const shop = this.businesses.find((business) => business.id === citizen.pendingParcelBusinessId);
+        const shopEntrance = shop ? this.graph.entrance(shop.cellKey) : undefined;
+        const homeEntrance = this.graph.entrance(citizen.homeKey);
+        if (!citizen.carryingParcel && shopEntrance?.key === citizen.targetKey) {
+          citizen.carryingParcel = true;
+          citizen.activity = `collecting a parcel from ${shop?.name ?? 'the shop'}`;
+          citizen.nextDecisionAt = Math.min(citizen.nextDecisionAt, this.currentHours + .08);
+        } else if (citizen.carryingParcel && homeEntrance?.key === citizen.targetKey) {
+          citizen.carryingParcel = false;
+          citizen.pendingParcelBusinessId = null;
+          citizen.activity = 'putting away a parcel from the shops';
+          citizen.nextDecisionAt = Math.max(citizen.nextDecisionAt, this.currentHours + .12);
+        }
       }
     }
   }

@@ -97,13 +97,13 @@ const identityPairs = [
   [{ id: 'high-bridge', x: 40, z: 0 }, { id: 'lookout-tower', x: 43, z: 0 }],
   [{ id: 'harbor-plaza', x: 50, z: 0 }, { id: 'cloister-garden', x: 53, z: 0 }],
   [{ id: 'narrow-canal', x: 60, z: 0 }, { id: 'harbor-plaza', x: 63, z: 0 }],
-  [{ id: 'sea-arch', x: 70, z: 0 }, { id: 'cloister-garden', x: 73, z: 0 }],
-  [{ id: 'arcade-row', x: 80, z: 0 }, { id: 'courtyard-garden', x: 83, z: 0 }],
-  [{ id: 'terraced-garden', x: 90, z: 0 }, { id: 'rooftop-pavilion', x: 93, z: 0 }],
+  [{ id: 'sea-arch', x: 70, z: 0 }, { id: 'cloister-garden', x: 72, z: 0 }],
+  [{ id: 'arcade-row', x: 80, z: 0 }, { id: 'courtyard-garden', x: 82, z: 0 }],
+  [{ id: 'terraced-garden', x: 90, z: 0 }, { id: 'rooftop-pavilion', x: 92, z: 0 }],
   [{ id: 'lantern-stair', x: 100, z: 0 }, { id: 'harbor-plaza', x: 103, z: 0 }],
   [{ id: 'arcade-row', x: 110, z: 0 }, { id: 'lookout-tower', x: 113, z: 0 }],
   [{ id: 'hanging-roof-garden', x: 120, z: 0 }, { id: 'lookout-tower', x: 123, z: 0 }],
-  [{ id: 'stepped-terrace', x: 130, z: 0 }, { id: 'rooftop-court', x: 133, z: 0 }],
+  [{ id: 'stepped-terrace', x: 130, z: 0 }, { id: 'rooftop-court', x: 132, z: 0 }],
 ];
 const allIdentityForms = identityPairs.flat();
 assert.deepEqual(
@@ -123,6 +123,10 @@ assert.equal(detectPlaceIdentities([
   { id: 'narrow-canal', x: 0, z: 0 },
   { id: 'arcade-row', x: 8, z: 0 },
 ]).length, 0, 'compatible forms do not combine when they are too far apart');
+assert.equal(detectPlaceIdentities([
+  { id: 'narrow-canal', x: 0, z: 0 },
+  { id: 'arcade-row', x: 3, z: 0 },
+]).length, 0, 'ordinary living places no longer emerge from formations merely sharing a district');
 assert.deepEqual(
   detectPlaceIdentities([{ id: 'narrow-canal', x: 0, z: 0 }, { id: 'harbor-plaza', x: 2, z: 0 }]).map((place) => place.id),
   ['ferry-quarter'],
@@ -170,6 +174,11 @@ const chainedExchange = [
   { id: 'harbor-plaza', x: 8, z: 0 },
 ];
 assert.equal(detectConfluences(chainedExchange).length, 0, 'a confluence requires every pair to be close, not merely a connected chain');
+assert.equal(detectConfluences([
+  { id: 'narrow-canal', x: 0, z: 0 },
+  { id: 'arcade-row', x: 3, z: 0 },
+  { id: 'harbor-plaza', x: 1, z: 3 },
+]).length, 0, 'a district-scale triangle does not accidentally become a confluence');
 assert.equal(confluenceProgress('grand-exchange', chainedExchange).state, 'distant', 'the confluence clue distinguishes three distant forms from a completed cluster');
 assert.equal(confluenceProgress('grand-exchange', confluenceTriples[0]).state, 'active', 'the confluence clue completes when all three forms converge');
 const grandExchange = detectConfluences(confluenceTriples[0])[0];

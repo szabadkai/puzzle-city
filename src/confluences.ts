@@ -1,5 +1,5 @@
 import { FORMATION_BY_ID, type FormationOccurrence } from './formations.ts';
-import type { ConfluenceCharter, ConfluenceId, FormationId, PlaceIdentityId } from './types.ts';
+import type { ConfluenceId, FormationId, PlaceIdentityId } from './types.ts';
 import type { PlaceIdentityOccurrence } from './place-identities.ts';
 
 export type ConfluenceLandmarkKind =
@@ -41,7 +41,7 @@ export type ConfluenceOccurrence = Readonly<{
 
 export type ConfluenceProgress = Readonly<{
   value: number;
-  state: 'missing' | 'partial' | 'distant' | 'ready' | 'active';
+  state: 'missing' | 'partial' | 'distant' | 'active';
   requirements: readonly [string, string, string];
   found: readonly [boolean, boolean, boolean];
   hint: string;
@@ -66,7 +66,7 @@ export const CONFLUENCE_CATALOG: readonly ConfluenceDefinition[] = [
     hint: 'Bring a water crossing, arcade row, and harbor plaza into one close cluster.',
     mysteryTitle: 'Three routes, one arrival',
     rumor: 'Boat crews, shopkeepers, and people waiting in the square all seem to be describing the same missing place.',
-    requirements: ['water crossing', 'arcade row', 'harbor plaza'], range: 5,
+    requirements: ['water crossing', 'arcade row', 'harbor plaza'], range: 3,
     places: ['canal-market', 'ferry-quarter'],
     landmark: { kind: 'exchange-pier', title: 'Exchange Pier', description: 'A broad roofed pier joins passenger steps, cargo tables, and the square’s public route.', activity: 'meeting boats beneath the exchange pier', effect: 'Merchant and passenger arrivals share one busy timetable and occasionally bring unusual harbor goods.' },
   },
@@ -76,7 +76,7 @@ export const CONFLUENCE_CATALOG: readonly ConfluenceDefinition[] = [
     hint: 'Bring a sea arch, cloister garden, and terraced garden close together.',
     mysteryTitle: 'A garden held by three waters',
     rumor: 'The cloister keeps finding shells below and petals above, as though two gardens are trying to meet there.',
-    requirements: ['sea arch', 'cloister garden', 'terraced garden'], range: 4,
+    requirements: ['sea arch', 'cloister garden', 'terraced garden'], range: 3,
     places: ['tidepool-cloister', 'garden-commons'],
     landmark: { kind: 'rain-temple', title: 'Rain Temple', description: 'A tiered open shrine gathers rain into planted shell basins at the cloister’s heart.', activity: 'tending the rain temple basins', effect: 'After showers, crabs, butterflies, and gardeners share the sanctuary around a rare tide bloom.' },
   },
@@ -86,7 +86,7 @@ export const CONFLUENCE_CATALOG: readonly ConfluenceDefinition[] = [
     hint: 'Bring an arcade row, courtyard garden, and stepped terrace close together.',
     mysteryTitle: 'A house the whole town builds',
     rumor: 'Lessons leave the garden as sketches, then return from the workshops as useful things.',
-    requirements: ['arcade row', 'courtyard garden', 'stepped terrace'], range: 4,
+    requirements: ['arcade row', 'courtyard garden', 'stepped terrace'], range: 3,
     places: ['story-court', 'garden-commons', 'makers-walk'],
     landmark: { kind: 'commons-hall', title: 'Commons Hall', description: 'An open hall of worktables, shelves, and planters settles where all three neighborhood paths meet.', activity: 'learning and making in the commons hall', effect: 'Teachers, children, gardeners, and artisans begin sharing lessons and small communal projects.' },
   },
@@ -96,7 +96,7 @@ export const CONFLUENCE_CATALOG: readonly ConfluenceDefinition[] = [
     hint: 'Bring a lantern stair, harbor plaza, and rooftop pavilion close together.',
     mysteryTitle: 'An evening waiting to begin',
     rumor: 'The square has a stage and the stair has lights, but the rooftops still seem to be waiting for a signal.',
-    requirements: ['lantern stair', 'harbor plaza', 'rooftop pavilion'], range: 5,
+    requirements: ['lantern stair', 'harbor plaza', 'rooftop pavilion'], range: 3,
     places: ['bell-steps', 'lantern-square'],
     landmark: { kind: 'festival-pavilion', title: 'Festival Pavilion', description: 'A tall public canopy combines a stage, civic bell, and rooftop viewing gallery.', activity: 'preparing the festival pavilion', effect: 'On certain evenings, ribbons and residents process down the stair toward a performance in the square.' },
   },
@@ -106,7 +106,7 @@ export const CONFLUENCE_CATALOG: readonly ConfluenceDefinition[] = [
     hint: 'Bring a high water crossing, lookout tower, and hanging roof garden close together.',
     mysteryTitle: 'A signal beyond the horizon',
     rumor: 'The beacon watches ships by day, while the highest flowers appear to watch something else after dark.',
-    requirements: ['high water crossing', 'lookout tower', 'hanging roof garden'], range: 5,
+    requirements: ['high water crossing', 'lookout tower', 'hanging roof garden'], range: 3,
     places: ['high-harbor', 'star-garden'],
     landmark: { kind: 'observatory-beacon', title: 'Observatory Beacon', description: 'Brass sky rings and a harbor lamp crown the lookout above the hanging garden.', activity: 'reading sea and sky from the observatory beacon', effect: 'Its signals guide the survey boat after dark and offer the town an early hint of tomorrow’s weather.' },
   },
@@ -116,7 +116,7 @@ export const CONFLUENCE_CATALOG: readonly ConfluenceDefinition[] = [
     hint: 'Bring an arcade row, terraced garden, and rooftop pavilion close together.',
     mysteryTitle: 'A pattern climbing the roofs',
     rumor: 'Workshop sketches keep reappearing as colored threads in the upper garden, each time a little larger.',
-    requirements: ['arcade row', 'terraced garden', 'rooftop pavilion'], range: 4,
+    requirements: ['arcade row', 'terraced garden', 'rooftop pavilion'], range: 3,
     places: ['makers-walk', 'windloom-quarter'],
     landmark: { kind: 'banner-house', title: 'Banner House', description: 'A broad dye loft and roof loom stretch ceremonial cloth above the working lane.', activity: 'raising new cloth at the banner house', effect: 'Finished banners gradually appear along the town’s busiest routes before festivals.' },
   },
@@ -126,7 +126,7 @@ export const CONFLUENCE_CATALOG: readonly ConfluenceDefinition[] = [
     hint: 'Bring an arcade row, courtyard garden, and lookout tower close together.',
     mysteryTitle: 'A tower full of remembered roads',
     rumor: 'Letters pass through the arcade and stories gather in the court, but neither yet has a place to stay.',
-    requirements: ['arcade row', 'courtyard garden', 'lookout tower'], range: 5,
+    requirements: ['arcade row', 'courtyard garden', 'lookout tower'], range: 3,
     places: ['story-court', 'messengers-row'],
     landmark: { kind: 'harbor-archive', title: 'Harbor Archive', description: 'A many-windowed record room crowns the lookout with shelves for letters, maps, and town stories.', activity: 'reading the harbor archive', effect: 'Couriers and teachers contribute small records that become new fragments of the town’s journal.' },
   },
@@ -178,19 +178,10 @@ export function detectConfluences(formations: readonly FormationOccurrence[]): r
   return Object.freeze(found);
 }
 
-export function confluenceProgress(
-  id: ConfluenceId,
-  formations: readonly FormationOccurrence[],
-  activeConfluences: readonly ConfluenceOccurrence[] = [],
-): ConfluenceProgress {
+export function confluenceProgress(id: ConfluenceId, formations: readonly FormationOccurrence[]): ConfluenceProgress {
   const definition = CONFLUENCE_BY_ID.get(id)!;
-  const active = activeConfluences.find((occurrence) => occurrence.id === id);
+  const active = detectConfluences(formations).find((occurrence) => occurrence.id === id);
   if (active) return Object.freeze({ value: 1, state: 'active', requirements: definition.requirements, found: [true, true, true] as const, hint: `${definition.landmark.title} has settled here.`, focus: { x: active.x, z: active.z } });
-  const ready = detectConfluences(formations).find((occurrence) => occurrence.id === id);
-  if (ready) {
-    const landmark = confluenceLandmarkSocket(ready);
-    return Object.freeze({ value: .96, state: 'ready', requirements: definition.requirements, found: [true, true, true] as const, hint: `All three forms align. Dedicate their ${definition.landmark.title.toLowerCase()} in the Atlas.`, focus: { x: landmark.x, z: landmark.z } });
-  }
   const roles = ([0, 1, 2] as const).map((role) => formations.filter((formation) => roleMatches(id, role, formation)));
   const found = roles.map((matches) => matches.length > 0) as [boolean, boolean, boolean];
   const foundCount = found.filter(Boolean).length;
@@ -223,23 +214,6 @@ export function confluenceLandmarkSocket(occurrence: ConfluenceOccurrence): Conf
     return member.id === 'lookout-tower';
   }) ?? occurrence.members[0];
   return Object.freeze({ confluenceId: occurrence.id, ...definition.landmark, x: preferred.x, z: preferred.z });
-}
-
-export function confluenceCharterFor(occurrence: ConfluenceOccurrence): ConfluenceCharter {
-  const landmark = confluenceLandmarkSocket(occurrence);
-  return Object.freeze({ id: occurrence.id, x: landmark.x, z: landmark.z });
-}
-
-export function confluenceMatchesCharter(occurrence: ConfluenceOccurrence, charter: ConfluenceCharter) {
-  const landmark = confluenceLandmarkSocket(occurrence);
-  return occurrence.id === charter.id && landmark.x === charter.x && landmark.z === charter.z;
-}
-
-export function charteredConfluences(
-  candidates: readonly ConfluenceOccurrence[],
-  charters: readonly ConfluenceCharter[],
-) {
-  return Object.freeze(candidates.filter((candidate) => charters.some((charter) => confluenceMatchesCharter(candidate, charter))));
 }
 
 export function confluenceSupersedesPlace(confluence: ConfluenceOccurrence, place: PlaceIdentityOccurrence) {

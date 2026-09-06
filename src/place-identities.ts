@@ -87,7 +87,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives nearby waterside trades first claim on new ground floors and fuller production batches.',
     trace: 'Painted awnings, cargo hooks, and market baskets spread along the nearby waterfront.',
     businesses: ['fishmonger', 'restaurant', 'inn', 'mill', 'smokehouse'],
-    requirements: ['water crossing', 'arcade row'], range: 4, influenceRadius: 4,
+    requirements: ['water crossing', 'arcade row'], range: 2, influenceRadius: 4,
     landmark: { kind: 'market-barge', title: 'Market Barge', description: 'A bright trading boat can only settle where a working street reaches a sheltered crossing.', activity: 'trading news and baskets at the market barge', effect: 'Its painted awning draws merchant boats into the harbor before the wider trade route is known.' },
   },
   {
@@ -99,7 +99,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives nearby garden trades first claim on new ground floors and fuller production batches.',
     trace: 'Seed trays, window boxes, and exchanged cuttings spread from doorway to rooftop.',
     businesses: ['flower-shop', 'tea-house', 'cafe', 'pottery', 'restaurant'],
-    requirements: ['courtyard', 'terrace or shared rooftop'], range: 4, influenceRadius: 4,
+    requirements: ['courtyard', 'terrace or shared rooftop'], range: 2, influenceRadius: 4,
     landmark: { kind: 'seed-house', title: 'Seed House', description: 'A communal growing house replaces the ordinary courtyard garden where planted levels meet.', activity: 'swapping cuttings inside the seed house', effect: 'Seed trays and window boxes begin appearing on nearby homes.' },
   },
   {
@@ -111,7 +111,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives nearby makers first claim on new ground floors and fuller production batches.',
     trace: 'Fired address plaques, clay vessels, and tool racks begin marking the working lane.',
     businesses: ['workshop', 'weaver', 'pottery', 'bookstore'],
-    requirements: ['arcade row', 'stepped terrace'], range: 4, influenceRadius: 4,
+    requirements: ['arcade row', 'stepped terrace'], range: 2, influenceRadius: 4,
     landmark: { kind: 'guild-kiln', title: 'Guild Kiln', description: 'A shared kiln and work yard appear only where an arcade and stepped working route overlap.', activity: 'sharing tools beside the guild kiln', effect: 'Fired plaques and clay vessels mark the nearby workshop façades.' },
   },
   {
@@ -123,7 +123,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives quiet social trades first claim below the connected roofs and fuller production batches.',
     trace: 'Shared tea tables, cushions, and little laundry lines turn nearby roofs into lived-in rooms.',
     businesses: ['cafe', 'bookstore', 'tea-house', 'inn'],
-    requirements: ['roof promenade', 'shared rooftop court'], range: 4, influenceRadius: 4,
+    requirements: ['roof promenade', 'shared rooftop court'], range: 2, influenceRadius: 4,
     landmark: { kind: 'roof-hall', title: 'Roof Hall', description: 'A little common hall replaces the ordinary roof-court planter when upper streets become a neighborhood.', activity: 'sharing tea in the roof hall', effect: 'Neighbors favor the hall at dusk, making rooftop friendships form through ordinary meetings.' },
   },
   {
@@ -135,7 +135,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives harbor-building trades first claim below the overlook and fuller production batches.',
     trace: 'Signal pennants and small wind vanes answer the beacon from surrounding roofs.',
     businesses: ['shipyard', 'workshop', 'inn'],
-    requirements: ['high water crossing', 'lookout or elevated shared roof'], range: 5, influenceRadius: 5,
+    requirements: ['high water crossing', 'lookout or elevated shared roof'], range: 3, influenceRadius: 5,
     landmark: { kind: 'signal-beacon', title: 'Signal Beacon', description: 'A harbor signal can settle only where a high crossing meets a clear overlook.', activity: 'reading the harbor signals from the signal beacon', effect: 'A small survey boat begins tracing the outer water by the beacon’s signals.' },
   },
   {
@@ -147,7 +147,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives evening trades first claim around the square and fuller production batches.',
     trace: 'Paired doorway lanterns and handbills spread outward along the evening approaches.',
     businesses: ['restaurant', 'tea-house', 'cafe', 'inn', 'bookstore'],
-    requirements: ['harbor plaza', 'tier-two courtyard or rooftop'], range: 5, influenceRadius: 5,
+    requirements: ['harbor plaza', 'tier-two courtyard or rooftop'], range: 3, influenceRadius: 5,
     landmark: { kind: 'lantern-theatre', title: 'Lantern Theatre', description: 'A tiny public stage replaces the ordinary plaza centerpiece where evening routes gather.', activity: 'watching the lantern theatre prepare for evening', effect: 'Its lamps become an evening anchor and draw residents into a nightly audience.' },
   },
   {
@@ -159,7 +159,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives lodging, food, books, and waterside trades first claim near the passenger landing and fuller production batches.',
     trace: 'Painted route boards, waiting benches, and numbered mooring posts mark the nearby lanes.',
     businesses: ['inn', 'cafe', 'restaurant', 'bookstore', 'fishmonger'],
-    requirements: ['water crossing', 'harbor plaza'], range: 5, influenceRadius: 5,
+    requirements: ['water crossing', 'harbor plaza'], range: 3, influenceRadius: 5,
     landmark: { kind: 'ferry-house', title: 'Ferry House', description: 'A striped passenger shelter and landing settle where a water crossing meets the town square.', activity: 'waiting beneath the ferry house awning', effect: 'A passenger ferry begins making a daily harbor circuit while the quarter remains.' },
   },
   {
@@ -171,7 +171,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives tea, pottery, flowers, and quiet kitchens first claim around the wet garden and fuller production batches.',
     trace: 'Rain chains, shell basins, mossy tiles, and blue-green jars appear on neighboring walls.',
     businesses: ['tea-house', 'pottery', 'flower-shop', 'cafe', 'restaurant'],
-    requirements: ['sea arch', 'cloister garden'], range: 4, influenceRadius: 4,
+    requirements: ['sea arch', 'cloister garden'], range: 2, influenceRadius: 4,
     landmark: { kind: 'tide-cistern', title: 'Tide Cistern', description: 'A broad shell-lined cistern replaces the ordinary cloister tree where rain and sheltered seawater meet.', activity: 'listening to rain gather in the tide cistern', effect: 'Its basins gleam during showers and draw crabs into the quiet garden afterward.' },
   },
   {
@@ -183,7 +183,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives books, tea, flowers, and patient makers first claim near the court and fuller production batches.',
     trace: 'Book boxes, chalk drawings, notice boards, and small reading stools spread along the shaded approaches.',
     businesses: ['bookstore', 'tea-house', 'cafe', 'flower-shop', 'workshop'],
-    requirements: ['arcade row', 'courtyard garden'], range: 4, influenceRadius: 4,
+    requirements: ['arcade row', 'courtyard garden'], range: 2, influenceRadius: 4,
     landmark: { kind: 'reading-loggia', title: 'Reading Loggia', description: 'A roofed reading room grows across one side of the garden when an arcade brings the town’s footfall to it.', activity: 'sharing a story beneath the reading loggia', effect: 'Teachers bring children at midday and elders return to tell stories in the evening.' },
   },
   {
@@ -195,7 +195,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives weavers, makers, flowers, and books first claim beneath the colored roofs and fuller production batches.',
     trace: 'Dyed skeins, woven shades, pattern cards, and long strips of bright cloth spread across the upper paths.',
     businesses: ['weaver', 'workshop', 'flower-shop', 'bookstore'],
-    requirements: ['terraced garden', 'rooftop pavilion'], range: 4, influenceRadius: 5,
+    requirements: ['terraced garden', 'rooftop pavilion'], range: 2, influenceRadius: 5,
     landmark: { kind: 'wind-loom', title: 'Wind Loom', description: 'A tall communal loom settles on the pavilion roof where garden dyes can dry in open air.', activity: 'weaving colored cloth at the wind loom', effect: 'Its cloth changes the skyline in fair weather and is gathered safely when rain approaches.' },
   },
   {
@@ -207,7 +207,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives evening food, flowers, lodging, and tea first claim along the ceremonial route and fuller production batches.',
     trace: 'Bronze step plaques, tied ribbons, and small pools of amber light spread toward the square.',
     businesses: ['restaurant', 'cafe', 'flower-shop', 'inn', 'tea-house'],
-    requirements: ['lantern stair', 'harbor plaza'], range: 5, influenceRadius: 5,
+    requirements: ['lantern stair', 'harbor plaza'], range: 3, influenceRadius: 5,
     landmark: { kind: 'tide-bell', title: 'Tide Bell', description: 'A civic bell rises in the plaza where the highest lantern stair reaches public ground.', activity: 'meeting below the tide bell', effect: 'It rings at dawn and dusk, drawing nearby residents into brief town rituals.' },
   },
   {
@@ -219,7 +219,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives books, lodging, workshops, and cafés first claim along the message route and fuller production batches.',
     trace: 'Painted house numbers, letter boxes, route arrows, and tied message ribbons mark the nearby doors.',
     businesses: ['bookstore', 'inn', 'workshop', 'cafe'],
-    requirements: ['arcade row', 'lookout tower'], range: 5, influenceRadius: 4,
+    requirements: ['arcade row', 'lookout tower'], range: 3, influenceRadius: 4,
     landmark: { kind: 'post-house', title: 'Post House', description: 'A small sorting loft crowns the arcade where news from the lookout first reaches the street.', activity: 'sorting letters in the post house', effect: 'Visiting couriers begin leaving letters for residents to carry through town.' },
   },
   {
@@ -231,7 +231,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives books, tea, flowers, and lodging first claim below the night garden and fuller production batches.',
     trace: 'Blue lanterns, constellation tiles, brass pointers, and wind chimes appear across neighboring roofs.',
     businesses: ['bookstore', 'tea-house', 'flower-shop', 'inn'],
-    requirements: ['hanging roof garden', 'lookout tower'], range: 5, influenceRadius: 5,
+    requirements: ['hanging roof garden', 'lookout tower'], range: 3, influenceRadius: 5,
     landmark: { kind: 'star-dial', title: 'Star Dial', description: 'A brass sky dial crowns the lookout where the hanging garden keeps the horizon dark and clear.', activity: 'reading the night sky at the star dial', effect: 'Cartographers and dreamers gather on clear nights and read tomorrow’s weather in the stars.' },
   },
   {
@@ -243,7 +243,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     influence: 'It gives cafés, books, weaving, and flowers first claim beneath the playful roofs and fuller production batches.',
     trace: 'Windsocks, chalk games, ribbon tails, and bright paper diamonds spread across the nearby roofs.',
     businesses: ['cafe', 'bookstore', 'weaver', 'flower-shop'],
-    requirements: ['stepped terrace', 'rooftop court'], range: 4, influenceRadius: 4,
+    requirements: ['stepped terrace', 'rooftop court'], range: 2, influenceRadius: 4,
     landmark: { kind: 'kite-loft', title: 'Kite Loft', description: 'A little open workshop settles on the shared roof where the stepped route makes it easy to carry kites upward.', activity: 'flying kites from the kite loft', effect: 'Children claim the court on fair afternoons, while the kites fold away before showers.' },
   },
 ] as const;

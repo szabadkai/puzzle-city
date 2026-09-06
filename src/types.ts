@@ -30,8 +30,6 @@ export type SavedTown = {
   placeIdentities?: PlaceIdentityId[];
   /** Rare three-form places the town has discovered, even if later reshaped. */
   confluences?: ConfluenceId[];
-  /** Deliberately dedicated Confluence landmark sockets; geometry alone does not activate them. */
-  confluenceCharters?: ConfluenceCharter[];
   /** Optional living-place clue currently followed in the shared tide tracker. */
   followedPlaceIdentityId?: PlaceIdentityId;
   /** Optional three-form clue currently followed in the shared tide tracker. */
@@ -74,12 +72,6 @@ export type ConfluenceId =
   | 'celestial-beacon'
   | 'banner-guild'
   | 'archive-tower';
-
-export type ConfluenceCharter = Readonly<{
-  id: ConfluenceId;
-  x: number;
-  z: number;
-}>;
 
 export type JournalIllustration =
   | 'foundation' | 'rain' | 'garden' | 'arch' | 'bridge' | 'tower'

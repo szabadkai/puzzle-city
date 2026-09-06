@@ -10,6 +10,7 @@
     "test:crafting": "node --experimental-strip-types scripts/crafting-check.mjs",
     "test:memory": "node --experimental-strip-types scripts/memory-check.mjs",
     "test:formations": "node --experimental-strip-types scripts/formations-check.mjs",
+    "test:replayability": "node --experimental-strip-types scripts/replayability-check.mjs",
     "test:render-structure": "node scripts/render-structure-check.mjs"
   },
   "dependencies": {

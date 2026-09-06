@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, keyOf, type HarborProfileSave, type WorldPackId } from './types';
 import { hash, pick } from './random';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { plazaAnchorAt } from './topology';
@@ -25,6 +25,8 @@ import {
   type PlaceLandmarkKind,
   type PlaceLandmarkSocket,
 } from './place-identities';
+import { classicHarborProfile, constraintAt, isFoundationPosition } from './harbor-constraints.ts';
+import { worldPack, type WorldPackDefinition } from './world-packs.ts';
 
 const CELL = CELL_SIZE;
 const FLOOR = FLOOR_HEIGHT;
@@ -37,7 +39,8 @@ const SIGN_TEXT = ['茶', '花', '本', '湯', '魚', '宿'];
 type Direction = 0 | 1 | 2 | 3;
 
 export type CityMemoryInspection = Readonly<{
-  kind: 'building' | 'tree' | 'landmark';
+  kind: 'building' | 'tree' | 'landmark' | 'geography';
+  landmarkKind?: PlaceLandmarkKind;
   title: string;
   ageHours: number;
   ageLabel: string;
@@ -145,11 +148,14 @@ function createSignAtlas() {
 export class CityRenderer {
   readonly root = new THREE.Group();
   readonly cells = new Map<string, Cell>();
+  private readonly constraintRoot = new THREE.Group();
+  private readonly movingCurrentRoot = new THREE.Group();
   private readonly pieces = new Map<string, THREE.Group>();
   private readonly staticBatchRoot = new THREE.Group();
   private readonly businesses = new Map<string, BusinessSave>();
   private readonly discoveries = new Set<string>();
   private readonly placeLandmarks = new Map<string, readonly PlaceLandmarkSocket[]>();
+  private readonly expeditionKeepsakes = new Set<string>();
   private readonly nightGlowGeometry = new THREE.BufferGeometry();
   private readonly nightGlowMaterial = new THREE.PointsMaterial({
     color: 0xffb45f,
@@ -187,6 +193,8 @@ export class CityRenderer {
   private readonly roofVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.roofTexture, bumpMap: this.roofTexture, bumpScale: .035, roughness: .82, roughnessMap: this.roofTexture });
   private readonly accentVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92, side: THREE.DoubleSide });
   private readonly seed: number;
+  private readonly harborProfile: HarborProfileSave;
+  private readonly pack: WorldPackDefinition;
   private rainIntensity = -1;
   private materialDetail = true;
   private lastPatinaUpdateBucket = -1;
@@ -212,9 +220,15 @@ export class CityRenderer {
   private readonly sootPatina = new THREE.MeshStandardMaterial({ color: 0x443f3b, transparent: true, opacity: .38, roughness: 1, depthWrite: false, side: THREE.DoubleSide });
   private readonly rustPatina = new THREE.MeshStandardMaterial({ color: 0x985a3f, transparent: true, opacity: .46, roughness: 1, depthWrite: false, side: THREE.DoubleSide });
 
-  constructor(seed: number) {
+  constructor(seed: number, harborProfile: HarborProfileSave = classicHarborProfile(), worldPackId: WorldPackId = 'classic-harbor') {
     this.seed = seed;
+    this.harborProfile = harborProfile;
+    this.pack = worldPack(worldPackId);
     this.root.name = 'town';
+    this.constraintRoot.name = 'harbor-constraints';
+    this.constraintRoot.userData.nonPrintable = true;
+    this.movingCurrentRoot.name = 'deep-current-ribbons';
+    this.constraintRoot.add(this.movingCurrentRoot);
     this.staticBatchRoot.name = 'town-static-batches';
     this.nightGlowGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
     this.smokeGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
@@ -222,10 +236,88 @@ export class CityRenderer {
     this.nightGlows.renderOrder = 2;
     this.smokePoints.name = 'town-smoke-points';
     this.smokePoints.frustumCulled = false;
-    this.root.add(this.staticBatchRoot, this.nightGlows, this.smokePoints);
+    this.root.add(this.constraintRoot, this.staticBatchRoot, this.nightGlows, this.smokePoints);
+    this.buildHarborConstraints();
   }
 
   static cellSize() { return CELL; }
+
+  private buildHarborConstraints() {
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3(1, 1, 1);
+    const position = new THREE.Vector3();
+    const addInstances = (
+      name: string,
+      cells: readonly { x: number; z: number }[],
+      geometry: THREE.BufferGeometry,
+      material: THREE.Material,
+      parent: THREE.Group,
+      y: number,
+      configure?: (index: number, cell: { x: number; z: number }, rotation: THREE.Euler, size: THREE.Vector3) => void,
+    ) => {
+      if (!cells.length) {
+        geometry.dispose();
+        material.dispose();
+        return;
+      }
+      const mesh = new THREE.InstancedMesh(geometry, material, cells.length);
+      mesh.name = name;
+      mesh.receiveShadow = true;
+      const rotation = new THREE.Euler();
+      cells.forEach((cell, index) => {
+        rotation.set(0, 0, 0);
+        scale.set(1, 1, 1);
+        configure?.(index, cell, rotation, scale);
+        quaternion.setFromEuler(rotation);
+        position.set(cell.x * CELL, y, cell.z * CELL);
+        matrix.compose(position, quaternion, scale);
+        mesh.setMatrixAt(index, matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      parent.add(mesh);
+    };
+    const shoals = this.harborProfile.constraints.filter((cell) => cell.type === 'shoal');
+    const currents = this.harborProfile.constraints.filter((cell) => cell.type === 'deep-current');
+    const rocks = this.harborProfile.constraints.filter((cell) => cell.type === 'rock-outcrop');
+    const reefs = shoals.filter((cell) => cell.detail === 'reef');
+    addInstances(
+      'shallow-shoals', shoals,
+      new RoundedBoxGeometry(CELL * .94, .045, CELL * .94, 1, .12),
+      new THREE.MeshStandardMaterial({ color: this.pack.shoalColor, transparent: true, opacity: .58, roughness: .58, depthWrite: false }),
+      this.constraintRoot, -.268,
+    );
+    addInstances(
+      'moving-deep-currents', currents,
+      new THREE.ConeGeometry(.2, .92, 3),
+      new THREE.MeshBasicMaterial({ color: this.pack.currentColor, transparent: true, opacity: .68, depthWrite: false }),
+      this.movingCurrentRoot, -.245,
+      (index, cell, rotation, size) => {
+        rotation.set(Math.PI / 2, hash(this.seed, cell.x, cell.z, 8120) > .5 ? Math.PI / 2 : 0, 0);
+        size.set(.8 + index % 3 * .12, .8, .11);
+      },
+    );
+    addInstances(
+      'permanent-rock-outcrops', rocks,
+      new THREE.IcosahedronGeometry(.47, 1),
+      new THREE.MeshStandardMaterial({ color: this.pack.rockColor, roughness: 1 }),
+      this.constraintRoot, -.02,
+      (index, cell, rotation, size) => {
+        rotation.set(hash(this.seed, cell.x, cell.z, 8121) * .22, hash(this.seed, cell.x, cell.z, 8122) * Math.PI, 0);
+        size.set(.8 + index % 2 * .18, .62 + index % 3 * .08, .9);
+      },
+    );
+    addInstances(
+      'reef-details', reefs,
+      new THREE.ConeGeometry(.14, .26, 6),
+      new THREE.MeshStandardMaterial({ color: this.pack.reefColor, roughness: 1 }),
+      this.constraintRoot, -.09,
+      (index, cell, rotation, size) => {
+        rotation.y = hash(this.seed, cell.x, cell.z, 8123) * Math.PI;
+        size.set(1 + index % 2 * .45, .6 + index % 3 * .18, 1);
+      },
+    );
+  }
 
   load(cells: Cell[], absoluteHours = 0) {
     for (const cell of cells) {
@@ -318,6 +410,14 @@ export class CityRenderer {
     this.syncNightLights();
   }
 
+  setExpeditionKeepsakes(keepsakes: readonly string[]) {
+    const next = new Set(keepsakes);
+    if (next.size === this.expeditionKeepsakes.size && [...next].every((id) => this.expeditionKeepsakes.has(id))) return;
+    this.expeditionKeepsakes.clear();
+    for (const id of next) this.expeditionKeepsakes.add(id);
+    this.rebuildAll(false);
+  }
+
   private landmarkAt(x: number, z: number, kind?: PlaceLandmarkKind) {
     const landmarks = this.placeLandmarks.get(keyOf(x, z)) ?? [];
     return kind ? landmarks.find((landmark) => landmark.kind === kind) : landmarks[0];
@@ -363,7 +463,7 @@ export class CityRenderer {
   }
 
   isBuildable(x: number, z: number) {
-    return Math.hypot(x, z) <= 8.8;
+    return isFoundationPosition(this.harborProfile, x, z);
   }
 
   place(x: number, z: number, absoluteHours = 0) {
@@ -405,6 +505,8 @@ export class CityRenderer {
   serialize() { return [...this.cells.values()].map((cell) => ({ ...cell, placedAt: 0 })); }
 
   update(time: number, absoluteHours = 0) {
+    this.movingCurrentRoot.position.y = Math.sin(time * 1.7) * .025;
+    this.movingCurrentRoot.rotation.y = Math.sin(time * .22) * .012;
     let staticBatchChanged = false;
     // Patina growth is deliberately coarse. Rebuilding the town-wide static
     // batches every simulated half-hour caused a visible frame-time spike.
@@ -585,6 +687,7 @@ export class CityRenderer {
     const landmark = this.landmarkAt(x, z);
     if (landmark) return {
       kind: 'landmark',
+      landmarkKind: landmark.kind,
       title: landmark.title,
       ageHours: 0,
       ageLabel: 'A place-made landmark',
@@ -619,6 +722,24 @@ export class CityRenderer {
         ageLabel: describeAge(ageHours),
         detail: growth >= 1 ? 'Its canopy now shades the courtyard benches.' : `${Math.round(growth * 100)}% of its mature canopy.`,
         note: `Planted when the surrounding homes first sheltered this ground.`,
+      };
+    }
+    const geography = constraintAt(this.harborProfile, x, z);
+    if (geography) {
+      const descriptions = {
+        shoal: geography.detail === 'reef'
+          ? 'A reef-bright shallow shelf. This pack raises buildings here on open stilts.'
+          : 'Pale, sheltered shallows where a foundation can still settle.',
+        'deep-current': 'A visibly moving passage where foundations cannot settle. Buildings on opposite banks can still shape a crossing.',
+        'rock-outcrop': 'A permanent natural anchor. It supports construction and remains when the building is removed.',
+      } as const;
+      return {
+        kind: 'geography',
+        title: geography.type.replace('-', ' '),
+        ageHours: 0,
+        ageLabel: this.harborProfile.title,
+        detail: descriptions[geography.type],
+        note: this.pack.placementNote,
       };
     }
     return null;
@@ -920,6 +1041,19 @@ export class CityRenderer {
     group.userData.foundedAt = cell.foundedAt ?? 0;
     group.userData.renovatedAt = cell.renovatedAt ?? cell.foundedAt ?? 0;
 
+    const naturalCell = constraintAt(this.harborProfile, cell.x, cell.z);
+    if (this.pack.stiltedShoals && naturalCell?.type === 'shoal') {
+      for (const x of [-.64, .64]) for (const z of [-.64, .64]) {
+        const stilt = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.075, .1, .62, 7), this.wood));
+        stilt.position.set(x, -.02, z);
+        group.add(stilt);
+      }
+      const raisedDeck = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .99, .12, CELL * .99, 1, .06), this.wood));
+      raisedDeck.position.y = .08;
+      group.add(raisedDeck);
+      group.userData.stiltedFoundation = true;
+    }
+
     const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .97, .34, CELL * .97, 1, .12), this.stone));
     foundation.position.y = BASE_Y;
     group.add(foundation);
@@ -1105,6 +1239,7 @@ export class CityRenderer {
 
   private addAwning(group: THREE.Group, cell: Cell, dir: Direction, lateral: THREE.Vector3, px: number, pz: number) {
     const [dx, dz] = CARDINALS[dir];
+    const windLift = this.pack.prevailingWind.x * dx + this.pack.prevailingWind.z * dz;
     const colors = [0xb5463e, 0x3f7770, 0xd08b3e];
     const awningColor = pick(colors, hash(this.seed, cell.x, cell.z, 690 + dir));
     const awningMaterial = this.cachedMaterial(this.colorMaterials, awningColor, .9);
@@ -1112,7 +1247,7 @@ export class CityRenderer {
       const strip = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .42 : .24, .08, dir % 2 ? .24 : .42), i % 2 ? this.cream : awningMaterial), false);
       const offset = (i - 2) * .21;
       strip.position.set(px + dx * .21 + lateral.x * offset, 1.25, pz + dz * .21 + lateral.z * offset);
-      strip.rotation.set(lateral.z * -.13, 0, lateral.x * .13);
+      strip.rotation.set(lateral.z * (-.13 - windLift * .035), 0, lateral.x * (.13 + windLift * .035));
       group.add(strip);
     }
   }
@@ -1666,6 +1801,12 @@ export class CityRenderer {
       lantern.position.set(center + side, y + 1.03, center - .48);
       group.add(lantern);
     }
+    if (this.expeditionKeepsakes.has('expedition:roof-messenger')) {
+      const messageKite = new THREE.Mesh(new THREE.PlaneGeometry(.34, .34), this.flagMaterial);
+      messageKite.position.set(center + .65, y + 1.34, center - .18);
+      messageKite.rotation.z = Math.PI / 4;
+      group.add(messageKite);
+    }
     group.userData.placeLandmark = 'roof-hall';
   }
 
@@ -1689,6 +1830,13 @@ export class CityRenderer {
       const stool = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.12, .15, .2, 7), this.wood), false);
       stool.position.set(dx * .82 + lateral.x * side, .28, dz * .82 + lateral.z * side);
       group.add(stool);
+    }
+    if (this.expeditionKeepsakes.has('expedition:kiln-commission')) {
+      const clay = this.cachedMaterial(this.colorMaterials, 0xb8664d, .92);
+      const ornament = shadow(new THREE.Mesh(new THREE.TorusGeometry(.18, .045, 7, 16), clay), false);
+      ornament.position.set(dx * .74, 1.18, dz * .74);
+      ornament.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+      group.add(ornament);
     }
     group.userData.placeLandmark = 'guild-kiln';
   }
@@ -1745,6 +1893,12 @@ export class CityRenderer {
     const beacon = new THREE.Mesh(new THREE.SphereGeometry(.14, 10, 8), this.warmLight);
     beacon.position.y = y + 1.92;
     group.add(beacon);
+    if (this.expeditionKeepsakes.has('expedition:beacon-survey')) {
+      const chart = new THREE.Mesh(new THREE.PlaneGeometry(.48, .3), this.cream);
+      chart.position.set(.38, y + .72, .03);
+      chart.rotation.z = -.12;
+      group.add(chart);
+    }
     group.userData.placeLandmark = 'signal-beacon';
   }
 
@@ -2088,6 +2242,12 @@ export class CityRenderer {
     canopy.rotation.y = Math.PI / 4;
     canopy.scale.set(alongX ? 1 : .62, 1, alongX ? .62 : 1);
     group.add(canopy);
+    if (this.expeditionKeepsakes.has('expedition:market-exchange')) {
+      const visitingPennant = new THREE.Mesh(new THREE.PlaneGeometry(.42, .24), this.cachedMaterial(this.colorMaterials, 0x4f87a4, .86));
+      visitingPennant.position.set(alongX ? .72 : .18, 1.48, alongX ? .18 : .72);
+      visitingPennant.rotation.y = alongX ? 0 : Math.PI / 2;
+      group.add(visitingPennant);
+    }
     for (const side of [-.38, 0, .38]) {
       const basket = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.13, .17, .18, 8), side === 0 ? this.green : this.stoneDark), false);
       basket.position.set(alongX ? side : .12, .34, alongX ? .12 : side);
@@ -2118,6 +2278,12 @@ export class CityRenderer {
       sprout.position.set(x, .43 + Math.abs(x) * .08, 0);
       group.add(sprout);
     }
+    if (this.expeditionKeepsakes.has('expedition:seed-voyage')) {
+      const rareVine = shadow(new THREE.Mesh(new THREE.TorusKnotGeometry(.18, .035, 24, 4), this.blossom), false);
+      rareVine.position.set(.48, .72, -.3);
+      rareVine.scale.y = 1.7;
+      group.add(rareVine);
+    }
     group.userData.placeLandmark = 'seed-house';
   }
 
@@ -2143,6 +2309,13 @@ export class CityRenderer {
     screen.position.set(center, .86, center + .46);
     screen.rotation.y = Math.PI;
     group.add(roof, screen);
+    if (this.expeditionKeepsakes.has('expedition:theatre-visit')) {
+      for (const side of [-.34, 0, .34]) {
+        const tassel = new THREE.Mesh(new THREE.SphereGeometry(.065, 7, 5), side === 0 ? this.blossom : this.warmLight);
+        tassel.position.set(center + side, 1.29 - Math.abs(side) * .18, center + .39);
+        group.add(tassel);
+      }
+    }
     group.userData.placeLandmark = 'lantern-theatre';
   }
 
@@ -2187,6 +2360,16 @@ export class CityRenderer {
     const patch = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.72, .78, .12, 12), this.green));
     patch.position.y = .18;
     group.add(patch);
+    if (this.pack.id === 'trade-wind-isles') {
+      const rainBasin = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.23, .3, .22, 12), this.stoneDark));
+      rainBasin.position.set(-.48, .26, -.48);
+      const caughtRain = new THREE.Mesh(new THREE.CylinderGeometry(.19, .19, .025, 12), this.featureWaterMaterial);
+      caughtRain.position.set(-.48, .385, -.48);
+      const channel = shadow(new THREE.Mesh(new THREE.BoxGeometry(.08, .055, .72), this.stoneDark), false);
+      channel.position.set(-.48, .24, -.03);
+      group.add(rainBasin, caughtRain, channel);
+      group.userData.rainCatchingCourt = true;
+    }
     const treeGrowth = new THREE.Group();
     treeGrowth.name = 'growing-courtyard-tree';
     const trunk = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.1, .15, 1.25, 7), this.wood));

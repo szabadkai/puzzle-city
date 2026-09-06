@@ -8,7 +8,7 @@ import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type D
 import { HarborAmbience, type HarborMemoryInspection } from './harbor';
 import { weatherAt, type TownMemorySnapshot } from './memory';
 import { CraftingSystem } from './crafting';
-import { CARDINALS, keyOf, type FormationId, type JournalEntry, type JournalIllustration, type PlaceIdentityId, type SavedTown } from './types';
+import { CARDINALS, keyOf, type FormationId, type JournalEntry, type JournalIllustration, type PlaceIdentityId, type SavedTown, type TownPromiseId, type WorldPackId } from './types';
 import { FLOOR_HEIGHT } from './spatial';
 import { makeTidePostcard, readTidePostcard, TidePostcardError } from './tide-postcard';
 import { makeTownStl } from './town-stl';
@@ -32,11 +32,17 @@ import {
   placeLandmarkSocket,
   livingPlaceIntroductionReady,
   type PlaceIdentityOccurrence,
+  type PlaceLandmarkKind,
 } from './place-identities';
+import { classicHarborProfile, generateHarborProfile } from './harbor-constraints.ts';
+import { WORLD_PACKS, worldPack } from './world-packs.ts';
+import { ExpeditionSystem } from './expeditions.ts';
+import { offeredTownPromises, townPromiseProgress, TOWN_PROMISE_BY_ID, type TownPromiseSnapshot } from './town-promises.ts';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
 const MUSIC_MUTED_KEY = 'little-tides-music-muted';
+const NEXT_WORLD_PACK_KEY = 'little-tides-next-world-pack';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="hud">
@@ -84,6 +90,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <p class="card-role" id="memory-age"></p>
       <p id="memory-detail"></p>
       <p class="card-relationship" id="memory-note"></p>
+      <div class="memory-expedition" id="memory-expedition" hidden>
+        <p id="memory-expedition-status"></p>
+        <button id="expedition-confirm" disabled>Confirm departure</button>
+      </div>
     </aside>
     <aside class="tide-thread" id="tide-thread" aria-live="polite">
       <button class="thread-close" id="thread-close" aria-label="Stop following this thread">×</button>
@@ -165,6 +175,18 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <p class="music-credit">Music: <a href="https://opengameart.org/content/caketown-cuteplayful" target="_blank" rel="noreferrer">“Caketown - Cute/playful”</a> by Matthew Pablo, licensed <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.<br><a href="https://opengameart.org/content/free-contemplative-fantasy-music-pack" target="_blank" rel="noreferrer">“Déjà Vus”</a> by <a href="https://yannz41.itch.io" target="_blank" rel="noreferrer">YannZ</a>, licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Transcoded from MP3 to 64 kbps AAC. <a href="https://open.spotify.com/intl-it/artist/76CUcHd0t0XViSm9YBbHBw" target="_blank" rel="noreferrer">Spotify</a> · <a href="mailto:yziango@gmail.com">Contact</a>.</p>
       </section>
     </div>
+    <div class="new-tide-scrim" id="new-tide-scrim" aria-hidden="true">
+      <section class="new-tide-panel" role="dialog" aria-modal="true" aria-labelledby="new-tide-title">
+        <button class="new-tide-close" id="new-tide-close" aria-label="Keep the current town">×</button>
+        <span class="about-kicker">Choose the next shoreline</span>
+        <h2 id="new-tide-title">A new tide</h2>
+        <p>The world pack is part of the town and cannot change after its first foundation.</p>
+        <div class="world-pack-choices">
+          ${WORLD_PACKS.map((pack) => `<button data-world-pack="${pack.id}"><strong>${pack.title}</strong><span>${pack.description}</span><small>${pack.placementNote}</small></button>`).join('')}
+        </div>
+        <button class="new-tide-cancel" id="new-tide-cancel">Keep this town</button>
+      </section>
+    </div>
     <div class="postcard-scrim" id="postcard-scrim" aria-hidden="true">
       <section class="postcard-panel" role="dialog" aria-modal="true" aria-labelledby="postcard-title">
         <button class="postcard-close" id="postcard-close" aria-label="Close tide postcard">×</button>
@@ -185,6 +207,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
 const saved = loadTown();
 const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
+const queuedPackId = localStorage.getItem(NEXT_WORLD_PACK_KEY);
+const worldPackId: WorldPackId = saved?.worldPackId
+  ?? (!saved && queuedPackId === 'trade-wind-isles' ? 'trade-wind-isles' : 'classic-harbor');
+if (!saved) localStorage.removeItem(NEXT_WORLD_PACK_KEY);
+const harborProfile = saved?.version === 11 && saved.harborProfile
+  ? saved.harborProfile
+  : saved ? classicHarborProfile() : generateHarborProfile(seed, worldPackId);
+const activeWorldPack = worldPack(worldPackId);
 let timeOfDay = saved?.timeOfDay ?? 7.5;
 let day = saved?.day ?? 1;
 const restoredCatEntry = saved?.journal?.find((entry) => entry.eventId === 'harbor-cats');
@@ -318,7 +348,7 @@ water.rotation.x = -Math.PI / 2;
 water.position.y = -.31;
 scene.add(water);
 
-const city = new CityRenderer(seed);
+const city = new CityRenderer(seed, harborProfile, worldPackId);
 scene.add(city.root);
 if (saved) city.load(saved.cells, day * 24 + timeOfDay);
 let formationOccurrences: readonly FormationOccurrence[] = detectFormations(city.cells);
@@ -338,6 +368,11 @@ businesses.maintain(citizens.residents(), city.cells);
 city.setBusinesses(businesses.all());
 citizens.setBusinesses(businesses.all());
 const crafting = new CraftingSystem(saved?.crafting);
+const expeditions = new ExpeditionSystem(worldPackId, saved?.expeditions);
+let townPromiseId: TownPromiseId | null | undefined = saved?.townPromiseId;
+let townPromiseCompleted = saved?.townPromiseCompleted ?? false;
+if (townPromiseId && townPromiseCompleted) expeditions.rememberKeepsake(`promise:${townPromiseId}`);
+city.setExpeditionKeepsakes(expeditions.keepsakes());
 const grow = new GrowSystem(
   DISCOVERY_EVENTS,
   saved?.discoveries ?? [],
@@ -404,6 +439,7 @@ let followedThreadId: string | null = saved?.followedDiscoveryId ?? null;
 let followedPlaceIdentityId: PlaceIdentityId | null = saved?.followedPlaceIdentityId ?? null;
 let observeMode = false;
 let selectedMemoryReader: (() => CityMemoryInspection | HarborMemoryInspection | null) | null = null;
+let selectedExpeditionLandmark: PlaceLandmarkKind | null = null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   activePointers.add(event.pointerId);
@@ -586,7 +622,16 @@ function cityObservationAt(x: number, z: number, absoluteHours: number) {
   if (!memory || memory.kind !== 'building') return memory;
   const business = businesses.all().find((candidate) => candidate.cellKey === `${x},${z}`);
   const status = business ? crafting.businessStatus(business.type, business.cellKey, formationOccurrences) : null;
-  return status ? { ...memory, detail: status, note: `${memory.detail} ${memory.note}` } : memory;
+  const localPresentation = business ? activeWorldPack.businessPresentation[business.type] : undefined;
+  return status ? {
+    ...memory,
+    detail: localPresentation ? `${localPresentation}. ${status}` : status,
+    note: `${memory.detail} ${memory.note}`,
+  } : memory;
+}
+
+function activeLandmarkKinds() {
+  return new Set(placeIdentityOccurrences.map((occurrence) => placeLandmarkSocket(occurrence).kind));
 }
 
 function showMemoryCard(memory: CityMemoryInspection | HarborMemoryInspection) {
@@ -595,6 +640,21 @@ function showMemoryCard(memory: CityMemoryInspection | HarborMemoryInspection) {
   document.querySelector('#memory-age')!.textContent = memory.ageLabel;
   document.querySelector('#memory-detail')!.textContent = memory.detail;
   document.querySelector('#memory-note')!.textContent = memory.note;
+  const expeditionPanel = document.querySelector<HTMLElement>('#memory-expedition')!;
+  const expeditionButton = document.querySelector<HTMLButtonElement>('#expedition-confirm')!;
+  const landmarkKind = memory.kind === 'landmark' ? memory.landmarkKind ?? null : null;
+  selectedExpeditionLandmark = landmarkKind;
+  const readiness = landmarkKind
+    ? expeditions.readiness(landmarkKind, activeLandmarkKinds(), crafting.inventory(), ambience.expeditionRouteContext())
+    : null;
+  expeditionPanel.hidden = !readiness;
+  if (readiness) {
+    document.querySelector('#memory-expedition-status')!.textContent = `${readiness.route.title}. ${readiness.explanation}`;
+    expeditionButton.disabled = !readiness.ready;
+    expeditionButton.textContent = readiness.active
+      ? 'Voyage underway'
+      : readiness.completedBefore ? 'Confirm another voyage' : 'Confirm and send cargo';
+  }
   document.querySelector('#memory-card')!.classList.add('show');
 }
 
@@ -619,7 +679,29 @@ function hideCitizenCard() {
 
 function hideMemoryCard() {
   selectedMemoryReader = null;
+  selectedExpeditionLandmark = null;
   document.querySelector('#memory-card')!.classList.remove('show');
+}
+
+function confirmExpeditionDeparture() {
+  if (!selectedExpeditionLandmark) return;
+  const absoluteHours = day * 24 + timeOfDay;
+  const landmarks = activeLandmarkKinds();
+  const context = ambience.expeditionRouteContext();
+  const readiness = expeditions.readiness(selectedExpeditionLandmark, landmarks, crafting.inventory(), context);
+  if (!readiness?.ready) {
+    if (readiness) showToast(readiness.explanation);
+    return;
+  }
+  const departure = expeditions.confirmDeparture(selectedExpeditionLandmark, absoluteHours, landmarks, crafting.inventory(), context);
+  if (!departure) return;
+  if (!crafting.consumeConfirmed(departure.cargo)) throw new Error('Confirmed expedition cargo was not available.');
+  ambience.setExpeditionVoyage(departure.voyage, 0);
+  showToast(`${departure.route.vessel} departs. Time advances only while the town is running.`);
+  softTone(230, .18);
+  persistSoon();
+  const memory = selectedMemoryReader?.();
+  if (memory) showMemoryCard(memory);
 }
 
 function build(x: number, z: number) {
@@ -672,7 +754,7 @@ function persistSoon() {
 
 function currentTownData(): SavedTown {
   return {
-    version: 10,
+    version: 11,
     seed,
     cells: city.serialize(),
     timeOfDay,
@@ -690,6 +772,11 @@ function currentTownData(): SavedTown {
     placeIdentities: [...knownPlaceIdentities],
     onboardingDismissed,
     placeIntroductionSeen,
+    harborProfile,
+    worldPackId,
+    townPromiseId,
+    townPromiseCompleted,
+    expeditions: expeditions.serialize(),
   };
 }
 
@@ -701,7 +788,7 @@ function saveTown() {
 function loadTown(): SavedTown | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as SavedTown | null;
-    return parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3 || parsed?.version === 4 || parsed?.version === 5 || parsed?.version === 6 || parsed?.version === 7 || parsed?.version === 8 || parsed?.version === 9 || parsed?.version === 10 ? parsed : null;
+    return parsed && Number.isInteger(parsed.version) && parsed.version >= 1 && parsed.version <= 11 ? parsed : null;
   } catch {
     return null;
   }
@@ -749,6 +836,7 @@ function refreshFormations(announce: boolean) {
   updateFirstTideGuide();
   updateSecondTideIntroduction();
   updateThreadStatus();
+  evaluateTownPromise();
   if (document.querySelector('#journal-scrim')?.classList.contains('show')) renderJournal();
 }
 
@@ -779,7 +867,7 @@ function updateOnboardingMarkers(step: number) {
 
   const targets: { x: number; z: number; height?: number }[] = [];
   if (step === 0) {
-    targets.push({ x: 0, z: 0 });
+    targets.push({ ...harborProfile.firstTide });
   } else if (step === 1) {
     for (const home of city.cells.values()) {
       for (const [dx, dz] of CARDINALS) {
@@ -838,10 +926,12 @@ function updateFirstTideGuide() {
     ['Let buildings meet', 'Choose a nearby ripple. A shared wall will reshape both buildings.'],
     ['The harbor is yours', 'Shapes create places. Right-click—or choose Remove—to take a floor back whenever you like.'],
   ] as const;
-  document.querySelector('#first-tide-progress')!.textContent = step === 4 ? 'First tide complete' : `First tide · ${step + 1} of 4`;
+  document.querySelector('#first-tide-progress')!.textContent = step === 4 ? `${harborProfile.title} · First tide complete` : `${harborProfile.title} · ${step + 1} of 4`;
   document.querySelector('#first-tide-title')!.textContent = copy[step][0];
   document.querySelector('#first-tide-hint')!.textContent = copy[step][1];
-  document.querySelector('#first-tide-atlas')!.textContent = step === 4 ? 'Explore Formation Atlas' : 'Open Formation Atlas';
+  document.querySelector('#first-tide-atlas')!.textContent = step === 4
+    ? townPromiseId === undefined ? 'Choose a town promise' : 'Explore Formation Atlas'
+    : 'Open Formation Atlas';
   panel.classList.toggle('complete', step === 4);
   panel.classList.add('show');
   updateOnboardingMarkers(step);
@@ -1097,8 +1187,9 @@ function renderFormationAtlas(list: HTMLDivElement) {
 
   const summary = document.createElement('div');
   summary.className = 'atlas-summary';
-  summary.innerHTML = `<strong>${knownFormations.size} of ${FORMATION_CATALOG.length}</strong><span>formations remembered · ${knownPlaceIdentities.size} of ${PLACE_IDENTITY_CATALOG.length} living places</span>`;
+  summary.innerHTML = `<strong>${knownFormations.size} of ${FORMATION_CATALOG.length}</strong><span>${activeWorldPack.title} · ${harborProfile.title} · ${knownPlaceIdentities.size} of ${PLACE_IDENTITY_CATALOG.length} living places</span>`;
   list.append(summary);
+  renderTownPromiseAtlas(list);
   renderPlaceIdentityAtlas(list);
 
   const formationHeading = document.createElement('div');
@@ -1146,6 +1237,96 @@ function renderFormationAtlas(list: HTMLDivElement) {
     grid.append(card);
   }
   list.append(formationHeading, grid);
+}
+
+function currentTownPromiseSnapshot(): TownPromiseSnapshot {
+  return Object.freeze({
+    profile: harborProfile,
+    cells: Object.freeze([...city.cells.values()].map((cell) => ({ ...cell }))),
+    formations: formationOccurrences,
+    places: placeIdentityOccurrences,
+    businesses: businesses.all(),
+  });
+}
+
+function evaluateTownPromise(announce = true) {
+  if (!townPromiseId || townPromiseCompleted) return;
+  const progress = townPromiseProgress(townPromiseId, currentTownPromiseSnapshot());
+  if (!progress.complete) return;
+  townPromiseCompleted = true;
+  expeditions.rememberKeepsake(`promise:${townPromiseId}`);
+  city.setExpeditionKeepsakes(expeditions.keepsakes());
+  const promise = TOWN_PROMISE_BY_ID.get(townPromiseId);
+  if (announce && promise) {
+    showToast(`${promise.title} is kept. ${promise.reward}`);
+    softTone(430, .16);
+    window.setTimeout(() => softTone(650, .2), 90);
+  }
+  persistSoon();
+}
+
+function chooseTownPromise(id: TownPromiseId | null) {
+  if (townPromiseId) return;
+  townPromiseId = id;
+  townPromiseCompleted = false;
+  if (id) {
+    const promise = TOWN_PROMISE_BY_ID.get(id);
+    showToast(`This tide promises: ${promise?.title ?? id}. There is no deadline.`);
+    evaluateTownPromise(false);
+  } else {
+    showToast('This tide remains unpromised. You can choose later from the Atlas.');
+  }
+  renderJournal();
+  persistSoon();
+}
+
+function renderTownPromiseAtlas(list: HTMLDivElement) {
+  const section = document.createElement('section');
+  section.className = 'promise-section';
+  const heading = document.createElement('div');
+  heading.className = 'atlas-section-heading';
+  heading.innerHTML = '<strong>Town promise</strong><span>Optional direction, never a deadline or a failure.</span>';
+  section.append(heading);
+  if (onboardingStep() < 4) {
+    const quiet = document.createElement('p');
+    quiet.className = 'promise-quiet';
+    quiet.textContent = 'Finish the First Tide and three possibilities suited to this harbor will appear here.';
+    section.append(quiet);
+    list.append(section);
+    return;
+  }
+  if (townPromiseId) {
+    const promise = TOWN_PROMISE_BY_ID.get(townPromiseId);
+    const progress = townPromiseProgress(townPromiseId, currentTownPromiseSnapshot());
+    if (promise) {
+      const card = document.createElement('article');
+      card.className = `promise-card chosen ${townPromiseCompleted ? 'complete' : ''}`;
+      card.innerHTML = `<small>${townPromiseCompleted ? 'Promise kept' : `${Math.round(progress.value * 100)}% shaped`}</small><strong>${promise.title}</strong><span>${promise.description}</span><em>${townPromiseCompleted ? promise.reward : progress.summary}</em>`;
+      section.append(card);
+    }
+  } else {
+    if (townPromiseId === null) {
+      const quiet = document.createElement('p');
+      quiet.className = 'promise-quiet';
+      quiet.textContent = 'This tide is unpromised. The possibilities remain here if one begins to feel right later.';
+      section.append(quiet);
+    }
+    const choices = document.createElement('div');
+    choices.className = 'promise-choices';
+    for (const promise of offeredTownPromises(seed, harborProfile)) {
+      const button = document.createElement('button');
+      button.dataset.townPromiseId = promise.id;
+      button.innerHTML = `<small>Optional promise</small><strong>${promise.title}</strong><span>${promise.description}</span><em>${promise.reward}</em>`;
+      choices.append(button);
+    }
+    const leave = document.createElement('button');
+    leave.className = 'promise-leave';
+    leave.dataset.townUnpromised = 'true';
+    leave.textContent = 'Leave the tide unpromised';
+    choices.append(leave);
+    section.append(choices);
+  }
+  list.append(section);
 }
 
 function renderPlaceIdentityAtlas(list: HTMLDivElement) {
@@ -1505,6 +1686,28 @@ function setAboutOpen(open: boolean) {
   }
 }
 
+function setNewTideOpen(open: boolean) {
+  const scrim = document.querySelector<HTMLElement>('#new-tide-scrim')!;
+  scrim.classList.toggle('show', open);
+  scrim.setAttribute('aria-hidden', String(!open));
+  if (open) {
+    setJournalOpen(false);
+    setAboutOpen(false);
+    setTouchGuideOpen(false);
+    window.setTimeout(() => scrim.querySelector<HTMLButtonElement>('[data-world-pack]')?.focus(), 50);
+  } else if (scrim.contains(document.activeElement)) {
+    document.querySelector<HTMLButtonElement>('#reset')!.focus();
+  }
+}
+
+function beginNewTide(packId: WorldPackId) {
+  const pack = worldPack(packId);
+  if (!confirm(`Let this town drift away and begin a new ${pack.title} tide?`)) return;
+  localStorage.setItem(NEXT_WORLD_PACK_KEY, packId);
+  localStorage.removeItem(STORAGE_KEY);
+  location.reload();
+}
+
 function setPostcardOpen(open: boolean) {
   const scrim = document.querySelector<HTMLElement>('#postcard-scrim')!;
   const openButton = document.querySelector<HTMLButtonElement>('#postcard-open')!;
@@ -1642,6 +1845,7 @@ function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
     else if (affinity.formation) showToast(`${opened.name} opens near the ${affinity.formation.title.toLowerCase()}. The place suits the trade.`);
   }
   persistSoon();
+  evaluateTownPromise(announce);
   if (update.opened.length) evaluateDiscoveries();
 }
 
@@ -1809,14 +2013,19 @@ document.addEventListener('pointerdown', (event) => {
 mobileHeaderQuery.addEventListener('change', () => setTopActionsOpen(false));
 setTopActionsOpen(false);
 
-document.querySelector('#reset')!.addEventListener('click', () => {
-  if (!confirm('Let this town drift away and begin with a new tide?')) return;
-  localStorage.removeItem(STORAGE_KEY);
-  location.reload();
+document.querySelector('#reset')!.addEventListener('click', () => setNewTideOpen(true));
+document.querySelector('#new-tide-close')!.addEventListener('click', () => setNewTideOpen(false));
+document.querySelector('#new-tide-cancel')!.addEventListener('click', () => setNewTideOpen(false));
+document.querySelector('#new-tide-scrim')!.addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) setNewTideOpen(false);
+});
+document.querySelectorAll<HTMLButtonElement>('[data-world-pack]').forEach((button) => {
+  button.addEventListener('click', () => beginNewTide(button.dataset.worldPack as WorldPackId));
 });
 
 document.querySelector('#card-close')!.addEventListener('click', hideCitizenCard);
 document.querySelector('#memory-card-close')!.addEventListener('click', hideMemoryCard);
+document.querySelector('#expedition-confirm')!.addEventListener('click', confirmExpeditionDeparture);
 document.querySelector('#observe-toggle')!.addEventListener('click', () => {
   observeMode = !observeMode;
   const button = document.querySelector<HTMLButtonElement>('#observe-toggle')!;
@@ -1864,6 +2073,9 @@ document.querySelector('#journal-list')!.addEventListener('click', (event) => {
   if (identity?.dataset.placeIdentityId) revisitPlaceIdentity(identity.dataset.placeIdentityId as PlaceIdentityId);
   const followPlace = target.closest<HTMLButtonElement>('[data-follow-place-id]');
   if (followPlace?.dataset.followPlaceId) followPlaceIdentity(followPlace.dataset.followPlaceId as PlaceIdentityId);
+  const promise = target.closest<HTMLButtonElement>('[data-town-promise-id]');
+  if (promise?.dataset.townPromiseId) chooseTownPromise(promise.dataset.townPromiseId as TownPromiseId);
+  if (target.closest<HTMLButtonElement>('[data-town-unpromised]')) chooseTownPromise(null);
 });
 document.querySelector('#about-open')!.addEventListener('click', () => setAboutOpen(true));
 document.querySelector('#about-close')!.addEventListener('click', () => setAboutOpen(false));
@@ -1950,13 +2162,15 @@ window.addEventListener('keydown', (event) => {
     setJournalOpen(false);
     setTouchGuideOpen(false);
     setAboutOpen(false);
+    setNewTideOpen(false);
   }
 });
 
-const ambience = new HarborAmbience(seed, camera, city.cells.values());
+const ambience = new HarborAmbience(seed, camera, city.cells.values(), harborProfile, worldPackId);
 ambience.setDiscoveryState(grow.discoveredIds());
 ambience.setPlaceIdentities(placeIdentityOccurrences);
 ambience.setTown(city.cells.values(), businesses.all(), citizens.residents(), city.matureTreeAnchors(day * 24 + timeOfDay));
+ambience.setExpeditionVoyage(expeditions.voyage(), expeditions.voyageProgress(day * 24 + timeOfDay));
 scene.add(ambience.root);
 renderJournal();
 updateThreadStatus();
@@ -2050,6 +2264,16 @@ function animate() {
     day += 1;
   }
   const absoluteHours = day * 24 + timeOfDay;
+  const expeditionReturn = expeditions.update(absoluteHours);
+  if (expeditionReturn) {
+    city.setExpeditionKeepsakes(expeditions.keepsakes());
+    showToast(`${expeditionReturn.route.vessel} returns with ${expeditionReturn.reward}.`);
+    softTone(390, .16);
+    window.setTimeout(() => softTone(590, .23), 90);
+    renderer.shadowMap.needsUpdate = true;
+    persistSoon();
+  }
+  ambience.setExpeditionVoyage(expeditions.voyage(), expeditions.voyageProgress(absoluteHours));
   const weather = weatherAt(seed, absoluteHours);
   if (weather.raining !== lastRaining) {
     lastRaining = weather.raining;

@@ -31,6 +31,7 @@ try {
   const { HarborAmbience } = await server.ssrLoadModule('/src/harbor.ts');
   const { hash } = await server.ssrLoadModule('/src/random.ts');
   const { hasWaterStairs } = await server.ssrLoadModule('/src/water.ts');
+  const { generateHarborProfile } = await server.ssrLoadModule('/src/harbor-constraints.ts');
   const { walkableSteppedTerrace } = await server.ssrLoadModule('/src/architecture.ts');
   const {
     CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_WALK_Y, QUAY_PATH_OFFSET,
@@ -235,6 +236,48 @@ try {
   }
 
   if (drawGroups > 100) throw new Error(`Full-feature scene has ${drawGroups} visible draw groups; budget is 100.`);
+
+  const tradeSeed = 3;
+  const tradeProfile = generateHarborProfile(tradeSeed, 'trade-wind-isles');
+  const tradeCells = cells.filter((cell) => !tradeProfile.constraints.some((constraint) =>
+    constraint.x === cell.x && constraint.z === cell.z && constraint.type === 'deep-current'));
+  const tradeCity = new CityRenderer(tradeSeed, tradeProfile, 'trade-wind-isles');
+  tradeCity.load(tradeCells, 240);
+  tradeCity.setBusinesses(businesses);
+  tradeCity.setDiscoveryState(discoveries);
+  tradeCity.setExpeditionKeepsakes(['expedition:market-exchange', 'expedition:seed-voyage']);
+  const shoal = tradeProfile.constraints.find((constraint) => constraint.type === 'shoal');
+  const mechanicsCity = new CityRenderer(tradeSeed, tradeProfile, 'trade-wind-isles');
+  if (!shoal || !mechanicsCity.place(shoal.x, shoal.z, 240)) throw new Error('Trade-Wind shoal did not accept a foundation.');
+  const stiltedPiece = mechanicsCity.root.children.find((child) => child.userData.cellX === shoal.x && child.userData.cellZ === shoal.z);
+  if (!stiltedPiece?.userData.stiltedFoundation) throw new Error('Trade-Wind shoal foundation was not visibly stilted.');
+  const current = tradeProfile.constraints.find((constraint) => constraint.type === 'deep-current');
+  if (!current || mechanicsCity.place(current.x, current.z, 240)) throw new Error('A foundation settled in a deep current.');
+  const rock = tradeProfile.constraints.find((constraint) => constraint.type === 'rock-outcrop');
+  if (!rock || !mechanicsCity.place(rock.x, rock.z, 240) || !mechanicsCity.remove(rock.x, rock.z, 241) || !mechanicsCity.isBuildable(rock.x, rock.z)) {
+    throw new Error('Permanent rock anchor did not support construction and return after removal.');
+  }
+  const tradeAmbience = new HarborAmbience(tradeSeed, new THREE.PerspectiveCamera(), tradeCity.cells.values(), tradeProfile, 'trade-wind-isles');
+  tradeAmbience.setTown(tradeCity.cells.values(), businesses, citizens, tradeCity.matureTreeAnchors(240));
+  tradeAmbience.setDiscoveryState(discoveries);
+  tradeAmbience.setExpeditionVoyage({ routeId: 'market-exchange', departedAt: 240, returnsAt: 252 }, .35);
+  tradeAmbience.update(1, .8, 12, 244, 0, 0);
+  let activeExpeditionDraws = 0;
+  const activeByRoot = {};
+  for (const section of [tradeCity.root, people.root, tradeAmbience.root]) {
+    let sectionDraws = 0;
+    section.traverse((object) => {
+      let visible = object.visible;
+      for (let parent = object.parent; parent && visible && parent !== section; parent = parent.parent) visible = visible && parent.visible;
+      if (!visible || (!(object instanceof THREE.Mesh) && !(object instanceof THREE.Points))) return;
+      if (object instanceof THREE.InstancedMesh && object.count === 0) return;
+      if (object instanceof THREE.Points && object.geometry.getAttribute('position')?.count === 0) return;
+      sectionDraws += Array.isArray(object.material) ? object.material.length : 1;
+    });
+    activeByRoot[section.name] = sectionDraws;
+    activeExpeditionDraws += sectionDraws;
+  }
+  if (activeExpeditionDraws > 106) throw new Error(`Active constrained expedition scene has ${activeExpeditionDraws} draw groups (${JSON.stringify(activeByRoot)}); target is at most 106.`);
 
   const plazaCells = [
     [0, -1], [1, -1], [0, 2], [1, 2], [-1, 0], [-1, 1], [2, 0], [2, 1],

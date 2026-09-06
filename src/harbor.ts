@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { BusinessSave, Cell, CitizenSave, PlaceIdentityId } from './types';
+import type { ActiveVoyageSave, BusinessSave, Cell, CitizenSave, HarborProfileSave, PlaceIdentityId, WorldPackId } from './types';
 import type { PlaceIdentityOccurrence } from './place-identities';
 import { hash } from './random';
 import { analyzeWaterTopology, createShorelineRoute, WORLD_CELL_SIZE, type WaterTopology } from './water';
 import { FaunaSystem, type WildlifeAction, type WildlifeKind, type WildlifeMemoryInspection } from './fauna';
+import { classicHarborProfile } from './harbor-constraints.ts';
+import { worldPack, type WorldPackDefinition } from './world-packs.ts';
 
 export function createWaterRoute(cells: Iterable<Cell>, seed: number, lane = 0) {
   return createShorelineRoute(cells, seed, lane);
@@ -101,10 +103,30 @@ export class HarborAmbience {
   private placeIdentities = new Set<PlaceIdentityId>();
   private topology!: WaterTopology;
   private readonly townCenter = new THREE.Vector3();
+  private readonly expeditionBoat: THREE.Group;
+  private expeditionRoute: THREE.CatmullRomCurve3;
+  private expeditionVoyage?: ActiveVoyageSave;
+  private expeditionProgress = 0;
+  private readonly profile: HarborProfileSave;
+  private readonly pack: WorldPackDefinition;
 
-  constructor(private readonly seed: number, camera: THREE.Camera, cells: Iterable<Cell>) {
+  constructor(
+    private readonly seed: number,
+    camera: THREE.Camera,
+    cells: Iterable<Cell>,
+    profile: HarborProfileSave = classicHarborProfile(),
+    worldPackId: WorldPackId = 'classic-harbor',
+  ) {
+    this.profile = profile;
+    this.pack = worldPack(worldPackId);
+    this.expeditionRoute = createWaterRoute([], seed, 2.45);
     this.root.name = 'harbor-ambience';
     this.createFleet();
+    this.expeditionBoat = this.createExpeditionBoat();
+    this.expeditionBoat.name = 'active-expedition-vessel';
+    this.expeditionBoat.visible = false;
+    addPickSphere(this.expeditionBoat, .95);
+    this.root.add(this.expeditionBoat);
     this.fauna = new FaunaSystem(seed);
     this.root.add(this.fauna.root);
     this.setTown(cells);
@@ -150,6 +172,7 @@ export class HarborAmbience {
       this.cells.reduce((sum, cell) => sum + cell.z * WORLD_CELL_SIZE, 0) / this.cells.length,
     );
     this.fleet.forEach((boat, index) => { boat.route = createWaterRoute(this.cells, this.seed, index * .42); });
+    this.expeditionRoute = createWaterRoute(this.cells, this.seed, 2.45);
     this.fauna.setTown(this.cells, this.businesses, matureTreeAnchors);
     this.refreshFleetVisibility();
   }
@@ -172,6 +195,20 @@ export class HarborAmbience {
   waterTopology() { return this.topology; }
 
   activeFleet() { return this.fleet.filter((boat) => boat.model.visible).map((boat) => boat.kind); }
+
+  expeditionRouteContext() {
+    return Object.freeze({
+      docks: this.topology?.docks.length ?? 0,
+      shelteredWater: this.topology?.sheltered.length ?? 0,
+      deepPassages: this.profile.constraints.filter((cell) => cell.type === 'deep-current').length,
+    });
+  }
+
+  setExpeditionVoyage(voyage: ActiveVoyageSave | undefined, progress: number) {
+    this.expeditionVoyage = voyage ? { ...voyage } : undefined;
+    this.expeditionProgress = progress;
+    this.expeditionBoat.visible = Boolean(voyage);
+  }
 
   wildlifeStats() { return this.fauna.stats(); }
 
@@ -210,8 +247,18 @@ export class HarborAmbience {
       // Hulls are modeled lengthwise on local X, so offset Three's +Z-style heading
       // by a quarter turn. Without this, the fleet travels broadside along its route.
       boat.model.rotation.y = Math.atan2(tangent.x, tangent.z) - Math.PI / 2;
-      boat.model.rotation.z = Math.sin(time * boat.bobSpeed * .78 + boat.phase * 5) * .028;
+      boat.model.rotation.z = Math.sin(time * boat.bobSpeed * .78 + boat.phase * 5) * .028 + this.pack.prevailingWind.z * .01;
       if (boat.kind === 'fishing boat') this.updateFishingWork(boat, time, timeOfDay);
+    }
+    if (this.expeditionVoyage) {
+      const progress = Math.max(0, Math.min(.999, this.expeditionProgress));
+      const point = this.expeditionRoute.getPointAt(progress);
+      const tangent = this.expeditionRoute.getTangentAt(progress);
+      this.expeditionBoat.visible = true;
+      this.expeditionBoat.position.copy(point);
+      this.expeditionBoat.position.y += Math.sin(time * 1.35) * .045;
+      this.expeditionBoat.rotation.y = Math.atan2(tangent.x, tangent.z) - Math.PI / 2;
+      this.expeditionBoat.rotation.z = Math.sin(time * 1.12) * .025;
     }
     this.fauna.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, rainIntensity);
     this.clouds.position.x = Math.sin(time * .018) * 2.5;
@@ -334,6 +381,7 @@ export class HarborAmbience {
   }
 
   private boatOnShift(kind: BoatKind, hour: number) {
+    hour = (hour + this.pack.vesselScheduleOffset + 24) % 24;
     if (this.discoveries.has('lantern-finale') && hour >= 19 && hour < 23) return true;
     if (kind === 'fishing boat') return (hour >= 4.5 && hour < 11.5) || (hour >= 15.5 && hour < 18.5);
     if (kind === 'merchant boat') return hour >= 8 && hour < 18.5;
@@ -454,6 +502,26 @@ export class HarborAmbience {
       boat.add(crate);
     }
     boat.scale.setScalar(1.08);
+    return consolidateModel(boat);
+  }
+
+  private createExpeditionBoat() {
+    const boat = new THREE.Group();
+    const hullMaterial = new THREE.MeshStandardMaterial({ color: this.pack.currentColor, roughness: .9 });
+    const sailMaterial = new THREE.MeshStandardMaterial({ color: this.pack.reefColor, side: THREE.DoubleSide, roughness: .9 });
+    const wood = new THREE.MeshStandardMaterial({ color: 0x68483a, roughness: 1 });
+    const hull = new THREE.Mesh(new THREE.CapsuleGeometry(.24, .92, 4, 9), hullMaterial);
+    hull.rotation.z = Math.PI / 2;
+    hull.scale.y = .55;
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(.018, .024, 1.05, 6), wood);
+    mast.position.y = .57;
+    const sail = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(.02, 1.02, 0), new THREE.Vector3(.02, .18, 0),
+      new THREE.Vector3(this.pack.prevailingWind.x < 0 ? -.6 : .6, .28, this.pack.prevailingWind.z * .08),
+    ]), sailMaterial);
+    const cargo = new THREE.Mesh(new THREE.BoxGeometry(.32, .24, .3), wood);
+    cargo.position.set(-.28, .27, -.06);
+    boat.add(hull, mast, sail, cargo);
     return consolidateModel(boat);
   }
 

@@ -2,7 +2,7 @@ import type { BusinessSave, BusinessType, CraftGood, CraftingSave, CitizenSave }
 import type { FormationOccurrence } from './formations.ts';
 import { placeBusinessAffinity } from './place-identities.ts';
 
-type Ingredient = Partial<Record<CraftGood, number>>;
+export type Ingredient = Partial<Record<CraftGood, number>>;
 
 type CraftRecipe = {
   id: string;
@@ -201,6 +201,17 @@ export class CraftingSystem {
       const typed = good as CraftGood;
       this.goods[typed] = Math.max(0, (this.goods[typed] ?? 0) - (amount ?? 0));
     }
+  }
+
+  inventory() { return Object.freeze({ ...this.goods }); }
+
+  canConsume(bundle: Ingredient) { return this.hasIngredients(bundle); }
+
+  /** Cargo leaves only through an explicit confirmed action in the Observe card. */
+  consumeConfirmed(bundle: Ingredient) {
+    if (!this.hasIngredients(bundle)) return false;
+    this.consume(bundle);
+    return true;
   }
 
   summary() {

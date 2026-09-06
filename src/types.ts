@@ -11,7 +11,7 @@ export type Cell = {
 };
 
 export type SavedTown = {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
   seed: number;
   cells: Cell[];
   timeOfDay?: number;
@@ -34,7 +34,69 @@ export type SavedTown = {
   placeIntroductionSeen?: boolean;
   /** Existing towns and players who skip the guide should not see it again. */
   onboardingDismissed?: boolean;
+  /** Explicit geography keeps a saved shoreline stable across generator changes. */
+  harborProfile?: HarborProfileSave;
+  /** A town never changes world pack after its first foundation is raised. */
+  worldPackId?: WorldPackId;
+  /** Undefined means not chosen yet; null remembers that the player declined. */
+  townPromiseId?: TownPromiseId | null;
+  townPromiseCompleted?: boolean;
+  expeditions?: ExpeditionsSave;
 };
+
+export type WorldPackId = 'classic-harbor' | 'trade-wind-isles';
+
+export type HarborArchetype =
+  | 'classic-harbor'
+  | 'split-channel'
+  | 'sheltered-lagoon'
+  | 'stepping-stones'
+  | 'long-shoal';
+
+export type HarborCellType = 'shoal' | 'deep-current' | 'rock-outcrop';
+
+export type HarborConstraintCell = Readonly<{
+  x: number;
+  z: number;
+  type: HarborCellType;
+  /** Reefs are a pack-specific expression of a buildable shoal, not a new rule. */
+  detail?: 'reef';
+}>;
+
+export type HarborProfileSave = Readonly<{
+  generatorVersion: number;
+  archetype: HarborArchetype;
+  title: string;
+  firstTide: Readonly<{ x: number; z: number }>;
+  constraints: readonly HarborConstraintCell[];
+}>;
+
+export type TownPromiseId =
+  | 'between-two-waters'
+  | 'gardens-above'
+  | 'makers-tide'
+  | 'returning-light'
+  | 'evenings-for-everyone';
+
+export type ExpeditionRouteId =
+  | 'market-exchange'
+  | 'seed-voyage'
+  | 'kiln-commission'
+  | 'beacon-survey'
+  | 'theatre-visit'
+  | 'roof-messenger';
+
+export type ActiveVoyageSave = Readonly<{
+  routeId: ExpeditionRouteId;
+  departedAt: number;
+  returnsAt: number;
+}>;
+
+export type ExpeditionsSave = Readonly<{
+  activeVoyage?: ActiveVoyageSave;
+  completedRoutes: ExpeditionRouteId[];
+  earnedKeepsakes: string[];
+}>;
 
 export type FormationId =
   | 'narrow-canal' | 'sea-arch' | 'high-bridge' | 'covered-skybridge' | 'lantern-gate'

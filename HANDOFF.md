@@ -34,8 +34,9 @@ This repository contains the completed original prototype plus five implemented 
    - Press `G` for a developer panel showing snapshot totals, citizen and business state, selected topology, event eligibility, recent effects, nav visualization, event forcing, citizen spawning, and time advancement.
    - Business prosperity derives from recent visits and successful production, decays over simulated time, and remains bounded. Two local tiers add shop displays, fuller stock and pennants. Customers sometimes carry parcels home from prosperous shops.
    - A flourishing mix of trades supports a deterministic fair-weather market every third day. Two stalls fit a harbor plaza; a compact one-stall version uses an arcade when no plaza exists. Residents gather when the market opens.
-   - First Tide now hands the player a legible optional destination: five Harbor Lanterns tied to Blossom, Table, Chorus, Clock, and Welcome stories. The journal maps their waiting, stirring, and lit states, and following one drills through prerequisite discoveries to an actionable clue.
-   - Earned lanterns appear at story-appropriate anchors and are inspectable. Lighting all five, maintaining a Lantern Square, and returning in the evening triggers a one-shot staged gathering, with Festival Crown upgrading the destination to its pavilion. The sequence ends in a non-modal completion card and a quiet persistent water-lantern aftermath, so building can continue.
+   - Five Harbor Lanterns are revealed only after the Confluence layer opens. The six non-finale Confluences earn them, while Festival Crown is the seventh and final construction achievement.
+   - No elapsed-time, clock, weather, visitor, relationship, story, or Observe condition contributes to lantern progress. Completing a requirement through a player construction edit lights its lantern immediately; an already-complete loaded layout gets a direct journal claim. The finale needs only an explicit Begin action at any hour.
+   - Kindled lanterns appear at story-appropriate anchors and remain inspectable. The staged gathering ends in a non-modal completion card and a quiet persistent water-lantern aftermath, so building can continue.
 7. **Formation mastery — four slices**
    - A pure detector recognizes 18 tiered architectural forms across water, street, terrace, rooftop, courtyard, and landmark families.
    - The Formation Atlas permanently remembers discovered forms, shows clues for unknown forms, counts active occurrences, and refocuses forms that still exist.
@@ -50,6 +51,7 @@ This repository contains the completed original prototype plus five implemented 
    - Living places become exact resident destinations, bring matching trades up to three residents earlier, add two items to supported production, remain remembered after reshaping, and expose actionable combination clues in the Atlas.
    - A one-time Second Tide invitation waits for three known forms, two active families, three residents, and a quiet delay. Unrelated possibilities remain poetic rumors; building one ingredient progressively surfaces its place name and actionable clue. A surfaced clue can be followed through the existing tide tracker, and fourteen GROW stories respond to residents using the resulting landmarks.
    - Seven hidden Confluences unlock in the Atlas after four living places are known. Each requires every pair in its three-formation cluster to be within three tiles—not a loose chain or district-scale triangle—raises one reversible grand landmark over its exact component landmarks, becomes a resident destination, persists as discovery memory, and has a dedicated GROW story. Component economic effects remain active; Confluences do not stack another opening or production bonus.
+   - The Atlas presents this dependency chain in order: building formations, living places, then Confluences.
 
 The visual direction is a warm, fictional old East Asian harbor: layered tiled eaves, narrow signs, awnings, laundry balconies, pipes, rooftop tanks, and evening window light. It draws on old Tokyo and Hong Kong atmosphere without reproducing a specific property or place.
 
@@ -63,7 +65,7 @@ Façade decoration is coordinated through per-wall occupancy claims in `CityRend
 - `src/businesses.ts` — business recipes, emergence thresholds, scoring, opening hours, ownership, and validity maintenance.
 - `src/crafting.ts` — production recipes, bounded stocks, progression milestones, delivery intents, and save serialization.
 - `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, 72 one-shot discoveries, and six recurring moments.
-- `src/lanterns.ts` — the five Harbor Lantern definitions and their waiting, stirring, and lit progression state.
+- `src/lanterns.ts` — the five Harbor Lantern definitions, Confluence requirements, and waiting, stirring, ready, and lit states.
 - `src/confluences.ts` — the seven three-formation recipes, strict all-pairs detection, Atlas progress, grand-landmark sockets, and component-landmark supersession.
 - `src/harbor.ts` — shoreline-derived boat routes, boats, birds, clouds, stars, blossom particles, and evening fireflies.
 - `src/fauna.ts` — deterministic habitat derivation, low-poly wildlife models, and fly/feed/perch/scatter/swim/wander behavior.
@@ -87,7 +89,7 @@ The town is stored in `localStorage` under `little-tides-town-v1`. The current p
 - businesses, sites, owners, employees, popularity, names, types, and opening times.
 - discovered stable event IDs, illustrated journal entries, and recurring-event cooldown timestamps.
 - crafting stocks, completed production steps, and the production cursor.
-- remembered formation and living-place IDs, First/Second Tide introduction state, and the currently followed living-place clue.
+- remembered formation, living-place, and Confluence IDs, earned lantern IDs, First/Second Tide introduction state, and the currently followed clue.
 - the optional living-place origin of businesses founded inside an active neighborhood footprint.
 
 Save compatibility is not a product constraint while the game is in development. The loader accepts only the current schema, and future system changes may deliberately start a fresh town instead of carrying migration code. The in-game **New tide** action clears the existing local save.

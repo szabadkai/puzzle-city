@@ -428,7 +428,7 @@ function conditionProgress(
     }
     case 'festival-invitation': return snapshot.festivalInvited
       ? { value: 1, hint: 'The Festival Pavilion has been called to life.' }
-      : { value: 0, hint: 'Begin the gathering from the Harbor Journal, then observe the Festival Pavilion.' };
+      : { value: 0, hint: 'Begin the gathering from the Harbor Journal.' };
     case 'memory': {
       const current = snapshot.memory[condition.metric];
       const hints: Record<MemoryMetric, string> = {
@@ -1259,7 +1259,6 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     condition: all(
       { kind: 'lit-lanterns', atLeast: 5 },
       { kind: 'confluence', confluenceId: 'festival-crown', atLeast: 1 },
-      { kind: 'time', after: 19, before: 23 },
       { kind: 'festival-invitation' },
     ), focus: { kind: 'confluence', confluenceId: 'festival-crown' },
     effects: [

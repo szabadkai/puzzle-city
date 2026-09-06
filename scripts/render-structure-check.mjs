@@ -126,14 +126,14 @@ try {
   const unattendedFinaleSnapshot = {
     litLanternCount: 5,
     festivalInvited: false,
-    timeOfDay: 20,
+    timeOfDay: 12,
     confluences: [{ id: 'festival-crown', x: 0, z: 0, visitors: 0 }],
   };
   if (evaluateCondition(finaleEvent.condition, unattendedFinaleSnapshot)) {
     throw new Error('The lantern finale can still begin while the game runs unattended.');
   }
   if (!evaluateCondition(finaleEvent.condition, { ...unattendedFinaleSnapshot, festivalInvited: true })) {
-    throw new Error('An intentional Festival Pavilion observation cannot begin the ready lantern finale.');
+    throw new Error('The journal Begin action cannot start the ready lantern finale at any hour.');
   }
 
   const city = new CityRenderer(seed);

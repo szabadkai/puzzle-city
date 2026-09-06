@@ -548,7 +548,7 @@ export class CityRenderer {
         title: lantern.title,
         ageHours: 0,
         ageLabel: 'One of five harbor lanterns',
-        detail: `This light was kindled after the town fulfilled its promise: "${lantern.promise}"`,
+        detail: `This light marks a town-building achievement: "${lantern.achievement}"`,
         note: 'When all five are lit, you can call them together at the Festival Crown.',
       };
     }

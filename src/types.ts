@@ -30,8 +30,10 @@ export type SavedTown = {
   placeIdentities?: PlaceIdentityId[];
   /** Rare three-form places the town has discovered, even if later reshaped. */
   confluences?: ConfluenceId[];
-  /** Lanterns the player deliberately kindled at their matching Confluences. */
+  /** Lanterns earned by completing their Confluence requirements. */
   harborLanterns?: HarborLanternId[];
+  /** Distinguishes player-earned Confluence lanterns from the retired story-based system. */
+  harborLanternMode?: 'confluence-mastery';
   /** Optional living-place clue currently followed in the shared tide tracker. */
   followedPlaceIdentityId?: PlaceIdentityId;
   /** Optional three-form clue currently followed in the shared tide tracker. */

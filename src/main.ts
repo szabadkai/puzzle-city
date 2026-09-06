@@ -45,7 +45,7 @@ import {
   detectConfluences,
   type ConfluenceOccurrence,
 } from './confluences';
-import { HARBOR_LANTERNS, HARBOR_LANTERN_BY_EVENT, harborLanternStates } from './lanterns';
+import { HARBOR_LANTERNS, harborLanternStates, harborLanternsCompletedByEdit } from './lanterns';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
@@ -53,25 +53,27 @@ const MUSIC_MUTED_KEY = 'little-tides-music-muted';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="hud">
-    <div class="brand"><h1>Little Tides</h1><p>潮町 · a town from the sea</p></div>
-    <div class="time-widget" aria-label="Time and simulation speed">
-      <span id="clock-display" class="desktop-clock">Day 1 · 07:30</span>
-      <span id="mobile-clock-display" class="mobile-clock" aria-hidden="true">D1 · 07:30</span>
-      <div class="speed-controls">
-        <button data-speed="0" aria-label="Pause simulation">Ⅱ</button>
-        <button data-speed="1" class="active" aria-label="Normal simulation speed">1×</button>
-        <button data-speed="3" aria-label="Triple simulation speed">3×</button>
+    <div class="brand"><h1>Little Tides</h1></div>
+    <div class="header-controls">
+      <div class="time-widget" aria-label="Time and simulation speed">
+        <span id="clock-display" class="desktop-clock">Day 1 · 07:30</span>
+        <span id="mobile-clock-display" class="mobile-clock" aria-hidden="true">D1 · 07:30</span>
+        <div class="speed-controls">
+          <button data-speed="0" aria-label="Pause simulation">Ⅱ</button>
+          <button data-speed="1" class="active" aria-label="Normal simulation speed">1×</button>
+          <button data-speed="3" aria-label="Triple simulation speed">3×</button>
+        </div>
       </div>
-      <button id="music-toggle" class="music-toggle" aria-label="Turn music off" aria-pressed="true"><span aria-hidden="true">♫</span></button>
-    </div>
-    <div class="top-actions">
-      <button id="mobile-menu-toggle" class="mobile-menu-toggle" aria-label="Open town controls" aria-controls="top-actions-menu" aria-expanded="false"><span aria-hidden="true">☰</span></button>
-      <div class="top-actions-menu" id="top-actions-menu">
-        <button id="journal-open" aria-label="Open observation journal"><span class="desktop-journal-label">Journal</span><span class="mobile-journal-label" aria-hidden="true">▤</span><span id="journal-count">0</span></button>
-        <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
-        <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
-        <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
-        <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
+      <button id="journal-open" class="journal-quick" aria-label="Open observation journal"><span class="desktop-journal-label">Journal</span><span class="mobile-journal-label" aria-hidden="true">▤</span><span id="journal-count">0</span></button>
+      <div class="top-actions">
+        <button id="mobile-menu-toggle" class="mobile-menu-toggle" aria-label="Open town controls" aria-controls="top-actions-menu" aria-expanded="false"><span aria-hidden="true">☰</span></button>
+        <div class="top-actions-menu" id="top-actions-menu">
+          <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
+          <button id="music-toggle" aria-label="Turn music off" aria-pressed="true"><span>Music</span><span class="music-state" aria-hidden="true">♫</span></button>
+          <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
+          <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
+          <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
+        </div>
       </div>
     </div>
     <div class="toast" id="toast"></div>
@@ -107,7 +109,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </aside>
     <aside class="first-tide" id="first-tide" aria-live="polite">
       <button class="first-tide-close" id="first-tide-close" aria-label="Skip the first-tide guide">×</button>
-      <span id="first-tide-progress">First tide · 1 of 4</span>
+      <span id="first-tide-progress">First tide · 1/4</span>
       <strong id="first-tide-title">Raise the first home</strong>
       <p id="first-tide-hint">Click anywhere in the nearby water.</p>
       <button class="first-tide-atlas" id="first-tide-atlas">Open Formation Atlas</button>
@@ -116,7 +118,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button class="second-tide-close" id="second-tide-close" aria-label="Dismiss the living-places introduction">×</button>
       <span>Second tide</span>
       <strong>When shapes meet</strong>
-      <p id="second-tide-hint">You have found enough building forms to combine them. The Atlas has new clues.</p>
+      <p id="second-tide-hint">New place clues are waiting in the Atlas.</p>
       <button class="second-tide-atlas" id="second-tide-atlas">Explore living places</button>
     </aside>
     <aside class="lantern-finale-card" id="lantern-finale-card" aria-live="polite">
@@ -129,12 +131,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button id="finale-postcard">Save postcard</button>
       </div>
     </aside>
-    <div class="hint" id="hint">
-      <span class="desktop-hint"><i class="mouse"></i> click to build</span>
-      <span class="desktop-hint">right-click to remove</span>
-      <span class="desktop-hint">drag to move · right-drag to orbit · scroll to zoom</span>
-      <span class="touch-hint">Tap to build · drag to orbit · two fingers to move or zoom</span>
-    </div>
     <nav class="mobile-controls" aria-label="Touch controls">
       <button class="touch-action active" data-touch-mode="build" aria-pressed="true">
         <span class="touch-action-icon" aria-hidden="true">＋</span><span>Build</span>
@@ -153,28 +149,28 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section class="touch-guide" role="dialog" aria-modal="true" aria-labelledby="touch-guide-title">
         <span class="guide-kicker">How to play</span>
         <button class="guide-close" id="touch-guide-close" aria-label="Close touch guide">×</button>
-        <h2 id="touch-guide-title">Shape the harbor by touch</h2>
+        <h2 id="touch-guide-title">Touch controls</h2>
         <div class="gesture-list">
-          <div><span class="gesture-icon" aria-hidden="true">☝</span><p><strong>Tap</strong> the water to build. Tap a resident to meet them.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>Drag</strong> with one finger to orbit around your town.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Drag</strong> with two fingers to move the view, or pinch to zoom.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">−</span><p>Choose <strong>Remove</strong>, then tap a building to take down one floor.</p></div>
-          <div><span class="gesture-icon" aria-hidden="true">◉</span><p>Choose <strong>Observe</strong> above, then tap a building, tree, animal, boat, or resident to read its history.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">☝</span><p><strong>Tap</strong> water to build or a resident to meet them.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>One-finger drag</strong> turns the view.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">⌁</span><p><strong>Two-finger drag</strong> moves the view. Pinch to zoom.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">−</span><p><strong>Remove</strong> takes down one floor.</p></div>
+          <div><span class="gesture-icon" aria-hidden="true">◉</span><p><strong>Observe</strong> shows a person or place's history.</p></div>
         </div>
         <button class="guide-done" id="touch-guide-done">Got it</button>
       </section>
     </div>
-    <div class="journal-scrim" id="journal-scrim" aria-hidden="true">
+    <div class="journal-scrim" id="journal-scrim" aria-hidden="true" inert>
       <aside class="journal" role="dialog" aria-modal="true" aria-labelledby="journal-title">
         <header>
-          <div><span class="journal-kicker">Observations from the water</span><h2 id="journal-title">Harbor Journal</h2></div>
+          <div><span class="journal-kicker">Town records</span><h2 id="journal-title">Harbor Journal</h2></div>
           <button id="journal-close" aria-label="Close observation journal">×</button>
         </header>
         <div class="journal-tabs" role="tablist" aria-label="Harbor records">
           <button id="journal-tab-stories" role="tab" data-journal-view="stories" aria-selected="true">Stories <span id="story-count">0</span></button>
           <button id="journal-tab-atlas" role="tab" data-journal-view="atlas" aria-selected="false">Formations <span id="formation-count">0/18</span></button>
         </div>
-        <p class="journal-intro" id="journal-intro">Build at your own pace. The journal records what happens.</p>
+        <p class="journal-intro" id="journal-intro">Build freely. The journal saves what happens.</p>
         <div class="journal-list" id="journal-list" tabindex="0" aria-label="Journal entries"></div>
       </aside>
     </div>
@@ -183,10 +179,22 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button class="about-close" id="about-close" aria-label="Close About">×</button>
         <span class="about-kicker">A town from the sea</span>
         <h2 id="about-title">Little Tides</h2>
-        <p>Place homes in the water. Residents move in, open shops, make friends, and leave stories in the journal.</p>
+        <p>Build homes on the water. Residents move in, open shops, and leave stories.</p>
+        <section class="about-controls" aria-labelledby="about-controls-title">
+          <h3 id="about-controls-title">How to play</h3>
+          <dl>
+            <div><dt>Build</dt><dd>Click or tap empty water.</dd></div>
+            <div><dt>Remove</dt><dd>Right-click a building, or choose Remove on touch.</dd></div>
+            <div><dt>Look around</dt><dd>Drag to move. Right-drag to turn. Scroll or pinch to zoom.</dd></div>
+            <div><dt>History</dt><dd>Choose Observe, then select a person or place.</dd></div>
+          </dl>
+        </section>
         <p class="creator-credit">Made by <a href="https://szabadkai.com" target="_blank" rel="noreferrer">Levente Szabadkai</a> · <a href="https://github.com/szabadkai/puzzle-city" target="_blank" rel="noreferrer">GitHub</a>.</p>
         <a class="feedback-link" href="https://github.com/szabadkai/puzzle-city/issues/new" target="_blank" rel="noreferrer">Send feedback on GitHub</a>
-        <p class="music-credit">Music: <a href="https://opengameart.org/content/caketown-cuteplayful" target="_blank" rel="noreferrer">&quot;Caketown - Cute/playful&quot;</a> by Matthew Pablo, licensed <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.<br><a href="https://opengameart.org/content/free-contemplative-fantasy-music-pack" target="_blank" rel="noreferrer">&quot;Déjà Vus&quot;</a> by <a href="https://yannz41.itch.io" target="_blank" rel="noreferrer">YannZ</a>, licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Transcoded from MP3 to 64 kbps AAC. <a href="https://open.spotify.com/intl-it/artist/76CUcHd0t0XViSm9YBbHBw" target="_blank" rel="noreferrer">Spotify</a> · <a href="mailto:yziango@gmail.com">Contact</a>.</p>
+        <details class="music-credit">
+          <summary>Music credits</summary>
+          <p><a href="https://opengameart.org/content/caketown-cuteplayful" target="_blank" rel="noreferrer">&quot;Caketown - Cute/playful&quot;</a> by Matthew Pablo, licensed <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.<br><a href="https://opengameart.org/content/free-contemplative-fantasy-music-pack" target="_blank" rel="noreferrer">&quot;Déjà Vus&quot;</a> by <a href="https://yannz41.itch.io" target="_blank" rel="noreferrer">YannZ</a>, licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. <a href="https://open.spotify.com/intl-it/artist/76CUcHd0t0XViSm9YBbHBw" target="_blank" rel="noreferrer">Spotify</a> · <a href="mailto:yziango@gmail.com">Contact</a>.</p>
+        </details>
       </section>
     </div>
     <div class="postcard-scrim" id="postcard-scrim" aria-hidden="true">
@@ -194,14 +202,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button class="postcard-close" id="postcard-close" aria-label="Close tide postcard">×</button>
         <span class="postcard-kicker">Keep this little harbor</span>
         <h2 id="postcard-title">Tide postcard</h2>
-        <p>Save a PNG that contains your town. Load it later, share the picture, or export the harbor for 3D printing.</p>
+        <p>Save, share, or reload your town as a PNG. You can also export it for 3D printing.</p>
         <div class="postcard-preview" aria-hidden="true"><span class="postcard-stamp">潮</span><strong id="postcard-message-preview">Wish you were here by the water.</strong><i id="postcard-date-preview">Day 1</i></div>
         <label class="postcard-inscription" for="postcard-message">Inscription<input id="postcard-message" maxlength="60" value="Wish you were here by the water."></label>
         <button class="postcard-save" id="postcard-save">Save tide postcard</button>
         <button class="postcard-stl" id="postcard-stl">Export 3D model (.stl)</button>
         <button class="postcard-load" id="postcard-load">Load a postcard</button>
         <input id="postcard-file" type="file" accept="image/png,.png" hidden>
-        <p class="postcard-note" id="postcard-note" aria-live="polite">Anyone can view the picture. Little Tides can also read the town tucked inside it.</p>
+        <p class="postcard-note" id="postcard-note" aria-live="polite">The PNG stores your town so Little Tides can reload it.</p>
       </section>
     </div>
   </div>
@@ -223,12 +231,9 @@ let forcedEventSelection = DISCOVERY_EVENTS[0]?.id ?? '';
 let lastChimedHour = Math.floor(timeOfDay);
 let lanternFinaleSequenceActive = false;
 let lanternFinaleTimers: number[] = [];
-const migratedLanterns = saved?.harborLanterns === undefined
-  ? HARBOR_LANTERNS.filter((lantern) => saved?.discoveries?.includes(lantern.eventId)).map((lantern) => lantern.id)
-  : [];
-const litHarborLanternIds = new Set<HarborLanternId>(saved?.harborLanterns ?? migratedLanterns);
-let lanternToKindle: HarborLanternId | null = null;
-let finaleAwaitingObservation = false;
+const litHarborLanternIds = new Set<HarborLanternId>(
+  saved?.harborLanternMode === 'confluence-mastery' ? saved.harborLanterns ?? [] : [],
+);
 let festivalInvitationPending = false;
 
 const scene = new THREE.Scene();
@@ -649,7 +654,6 @@ function inspectTownMemory(clientX: number, clientY: number) {
     showToast('Nothing here is ready to be observed yet.');
     return false;
   }
-  if (cityPoint) completePendingLanternObservation(cityPoint.x, cityPoint.z);
   selectedMemoryReader = ambienceMemory && ambienceHit
     ? () => ambience.memoryFromObject(ambienceHit.object, day * 24 + timeOfDay, catColonyFoundedAt, ambienceHit.instanceId)
     : lanternHit ? () => city.memoryFromObject(lanternHit.object)
@@ -664,59 +668,6 @@ function cityObservationAt(x: number, z: number, absoluteHours: number) {
   const business = businesses.all().find((candidate) => candidate.cellKey === `${x},${z}`);
   const status = business ? crafting.businessStatus(business.type, business.cellKey, formationOccurrences) : null;
   return status ? { ...memory, detail: status, note: `${memory.detail} ${memory.note}` } : memory;
-}
-
-function confluenceAtLandmark(x: number, z: number) {
-  return confluenceOccurrences.find((confluence) => {
-    const landmark = confluenceLandmarkSocket(confluence);
-    return landmark.x === x && landmark.z === z;
-  });
-}
-
-function completePendingLanternObservation(x: number, z: number) {
-  const confluence = confluenceAtLandmark(x, z);
-  if (!confluence) return;
-  if (lanternToKindle) {
-    const lantern = harborLanternStates({
-      discoveries: grow.discoveredIds(),
-      knownConfluences,
-      activeConfluences: confluenceOccurrences.map((occurrence) => occurrence.id),
-      litLanterns: litHarborLanternIds,
-    }).find((candidate) => candidate.id === lanternToKindle);
-    const kindlingConfluenceId = lantern?.confluenceIds.at(-1);
-    if (!lantern || lantern.state !== 'ready' || confluence.id !== kindlingConfluenceId) return;
-    litHarborLanternIds.add(lantern.id);
-    lanternToKindle = null;
-    followedThreadId = null;
-    followedConfluenceId = null;
-    city.setHarborLanterns(litHarborLanternIds);
-    city.celebrateAt(x, z);
-    showToast(`${lantern.title} kindled at the ${CONFLUENCE_BY_ID.get(confluence.id)?.landmark.title ?? 'landmark'}.`);
-    softTone(480 + litHarborLanternIds.size * 68, .28, 0, .02, 'sine');
-    renderJournal();
-    updateThreadStatus();
-    persistSoon();
-    evaluateDiscoveries();
-    return;
-  }
-  if (!finaleAwaitingObservation || confluence.id !== 'festival-crown') return;
-  const allLit = litHarborLanternIds.size === HARBOR_LANTERNS.length;
-  const rightHour = timeOfDay >= 19 && timeOfDay < 23;
-  if (!allLit || !rightHour) {
-    finaleAwaitingObservation = false;
-    showToast(allLit ? 'Return to the Festival Pavilion between 19:00 and 23:00.' : 'The pavilion is still waiting for all five lanterns.');
-    return;
-  }
-  festivalInvitationPending = true;
-  const discovery = grow.triggerEligible('lantern-finale', currentSnapshot());
-  festivalInvitationPending = false;
-  finaleAwaitingObservation = false;
-  if (!discovery) return;
-  city.setDiscoveryState(grow.discoveredIds());
-  citizens.setDiscoveries(grow.discoveredIds());
-  refreshAmbience();
-  renderJournal();
-  persistSoon();
 }
 
 function showMemoryCard(memory: CityMemoryInspection | HarborMemoryInspection) {
@@ -771,7 +722,6 @@ function build(x: number, z: number) {
   ignoreNextPerformanceSample = true;
   popSound();
   persistSoon();
-  document.querySelector('#hint')?.classList.add('hidden');
   evaluateDiscoveries();
 }
 
@@ -821,6 +771,7 @@ function currentTownData(): SavedTown {
     placeIdentities: [...knownPlaceIdentities],
     confluences: [...knownConfluences],
     harborLanterns: [...litHarborLanternIds],
+    harborLanternMode: 'confluence-mastery',
     onboardingDismissed,
     placeIntroductionSeen,
   };
@@ -868,14 +819,26 @@ function refreshFormations(announce: boolean) {
   for (const occurrence of placeIdentityOccurrences) knownPlaceIdentities.add(occurrence.id);
   const revealedConfluences = confluenceOccurrences.filter((occurrence) => !knownConfluences.has(occurrence.id));
   for (const occurrence of confluenceOccurrences) knownConfluences.add(occurrence.id);
+  const completedLanterns = announce ? harborLanternsCompletedByEdit(
+    previousConfluences.map((occurrence) => occurrence.id),
+    confluenceOccurrences.map((occurrence) => occurrence.id),
+    litHarborLanternIds,
+  ) : [];
+  for (const lantern of completedLanterns) litHarborLanternIds.add(lantern.id);
+  if (completedLanterns.length) city.setHarborLanterns(litHarborLanternIds);
   if (announce && settledConfluences.length) {
     const occurrence = settledConfluences.at(-1)!;
     const definition = CONFLUENCE_BY_ID.get(occurrence.id);
     const landmark = confluenceLandmarkSocket(occurrence);
     const firstDiscovery = revealedConfluences.some((revealed) => revealed.id === occurrence.id);
+    const lanternNotice = completedLanterns.length === 1
+      ? ` ${completedLanterns[0].title} lit.`
+      : completedLanterns.length > 1
+        ? ` ${completedLanterns.map((lantern) => lantern.title).join(' and ')} lit together.`
+        : '';
     if (definition) showToast(firstDiscovery
-      ? `${definition.title} formed here. Three formations raised its ${definition.landmark.title.toLowerCase()}.`
-      : `${definition.landmark.title} has returned.`);
+      ? `${definition.title} formed here. Three formations raised its ${definition.landmark.title.toLowerCase()}.${lanternNotice}`
+      : `${definition.landmark.title} has returned.${lanternNotice}`);
     controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .22);
     city.celebrateAt(landmark.x, landmark.z);
     citizens.gatherAt(landmark.x, landmark.z, `welcoming the new ${landmark.title.toLowerCase()}`);
@@ -988,13 +951,13 @@ function updateFirstTideGuide() {
   }
   const step = onboardingStep();
   const copy = [
-    ['Raise the first home', 'Build at the golden ripple or anywhere in the nearby water.'],
-    ['Leave water between neighbors', 'The four ripples skip one water tile. Choose one for a second home.'],
-    ['Lift both banks', 'Gold rings mark the two roofs. Add one storey to each to make a sea arch.'],
-    ['Let buildings meet', 'Choose a nearby ripple. A shared wall will reshape both buildings.'],
-    ['The harbor has begun', 'The journal will remember its forms, people, and stories as the town grows.'],
+    ['Raise the first home', 'Build on a gold ripple or anywhere nearby.'],
+    ['Leave room for water', 'Build on one of the four ripples. Keep one water tile between homes.'],
+    ['Lift both banks', 'Add one floor to both marked roofs to form a sea arch.'],
+    ['Let buildings meet', 'Build on a nearby ripple. The shared wall reshapes both homes.'],
+    ['The harbor has begun', 'Your journal saves new shapes, people, and stories.'],
   ] as const;
-  document.querySelector('#first-tide-progress')!.textContent = step === 4 ? 'First tide complete' : `First tide · ${step + 1} of 4`;
+  document.querySelector('#first-tide-progress')!.textContent = step === 4 ? 'First tide complete' : `First tide · ${step + 1}/4`;
   document.querySelector('#first-tide-title')!.textContent = copy[step][0];
   document.querySelector('#first-tide-hint')!.textContent = copy[step][1];
   document.querySelector('#first-tide-atlas')!.textContent = step === 4 ? 'Open Harbor Journal' : 'Open Formation Atlas';
@@ -1034,8 +997,8 @@ function updateSecondTideIntroduction() {
   const surfaced = PLACE_IDENTITY_CATALOG.filter((identity) =>
     knownPlaceIdentities.has(identity.id) || placeIdentityProgress(identity.id, formationOccurrences).state !== 'missing').length;
   document.querySelector('#second-tide-hint')!.textContent = surfaced === 1
-    ? 'The forms in town have unlocked one new Atlas clue.'
-    : `The forms in town have unlocked ${surfaced} new Atlas clues.`;
+    ? 'One new place clue is waiting in the Atlas.'
+    : `${surfaced} new place clues are waiting in the Atlas.`;
   const delayPassed = performance.now() - secondTideEligibleSince >= 4000;
   panel.classList.toggle('show', delayPassed && !journalOpen);
 }
@@ -1284,13 +1247,13 @@ function renderJournal() {
   document.querySelector('#story-count')!.textContent = String(entries.length);
   document.querySelector('#formation-count')!.textContent = `${knownFormations.size}/${FORMATION_CATALOG.length}`;
   document.querySelector('#journal-title')!.textContent = journalView === 'stories' ? 'Harbor Journal' : 'Formation Atlas';
-  document.querySelector('.journal-kicker')!.textContent = journalView === 'stories' ? 'Observations from the water' : 'The shapes a town can remember';
+  document.querySelector('.journal-kicker')!.textContent = journalView === 'stories' ? 'Town records' : 'Known town shapes';
   const confluencesUnlocked = knownPlaceIdentities.size >= 4 || knownConfluences.size > 0;
   document.querySelector('#journal-intro')!.textContent = journalView === 'stories'
     ? confluencesUnlocked
-      ? 'Confluences and the stories lived around them can kindle five Harbor Lanterns.'
-      : 'Build at your own pace. The journal records what happens.'
-    : 'Empty space, water, and roof heights determine each form. You can rebuild any form the Atlas remembers.';
+      ? 'Master confluences to light all five lanterns.'
+      : 'Build freely. The journal saves what happens.'
+    : 'Water, open space, and roof height shape each form.';
   document.querySelectorAll<HTMLButtonElement>('[data-journal-view]').forEach((button) => {
     const selected = button.dataset.journalView === journalView;
     button.classList.toggle('active', selected);
@@ -1301,37 +1264,36 @@ function renderJournal() {
     renderFormationAtlas(list);
     return;
   }
-  if (confluencesUnlocked) renderLanternMap(list, snapshot);
+  if (confluencesUnlocked) renderLanternMap(list);
   const clues = grow.clues(snapshot);
   const clueSection = document.createElement('section');
   clueSection.className = 'journal-clues';
   const clueHeading = document.createElement('div');
   clueHeading.className = 'clue-heading';
-  clueHeading.innerHTML = '<span>Whispers on the tide</span><small>Choose one thread to follow</small>';
+  clueHeading.innerHTML = '<span>Clues</span><small>Follow one</small>';
   clueSection.append(clueHeading);
   if (clues.length) {
     for (const clue of clues) clueSection.append(createClueCard(clue));
   } else {
     const quiet = document.createElement('p');
     quiet.className = 'clue-quiet';
-    quiet.textContent = 'For now, the harbor has told all the stories it knows.';
+    quiet.textContent = 'No new clues yet.';
     clueSection.append(quiet);
   }
   list.append(clueSection);
   if (!entries.length) {
     const empty = document.createElement('p');
     empty.className = 'journal-empty';
-    empty.textContent = 'The first entry will appear when something changes in town.';
+    empty.textContent = 'Your first town event will appear here.';
     list.append(empty);
     return;
   }
   for (const entry of entries) list.append(createJournalEntry(entry));
 }
 
-function renderLanternMap(list: HTMLDivElement, snapshot: ReturnType<typeof currentSnapshot>) {
+function renderLanternMap(list: HTMLDivElement) {
   const activeConfluenceIds = new Set(confluenceOccurrences.map((confluence) => confluence.id));
   const lanterns = harborLanternStates({
-    discoveries: grow.discoveredIds(),
     knownConfluences,
     activeConfluences: activeConfluenceIds,
     litLanterns: litHarborLanternIds,
@@ -1342,7 +1304,7 @@ function renderLanternMap(list: HTMLDivElement, snapshot: ReturnType<typeof curr
   const heading = document.createElement('div');
   heading.className = 'lantern-map-heading';
   const headingCopy = document.createElement('span');
-  headingCopy.innerHTML = `<strong>Five Harbor Lanterns</strong><small>${lit} of ${lanterns.length} lit</small>`;
+  headingCopy.innerHTML = `<strong>Harbor Lanterns</strong><small>${lit}/${lanterns.length} lit</small>`;
   const constellation = document.createElement('span');
   constellation.className = 'lantern-constellation';
   constellation.setAttribute('aria-hidden', 'true');
@@ -1357,19 +1319,14 @@ function renderLanternMap(list: HTMLDivElement, snapshot: ReturnType<typeof curr
   const grid = document.createElement('div');
   grid.className = 'lantern-grid';
   for (const lantern of lanterns) {
-    const progress = grow.progressFor(lantern.eventId, snapshot);
     const missingConfluences = lantern.confluenceIds.filter((id) => !activeConfluenceIds.has(id));
-    const kindlingConfluenceId = lantern.confluenceIds.at(-1)!;
-    const kindlingLandmark = CONFLUENCE_BY_ID.get(kindlingConfluenceId)?.landmark.title ?? 'Confluence landmark';
-    const following = followedThreadId === lantern.eventId
-      || Boolean(followedConfluenceId && lantern.confluenceIds.includes(followedConfluenceId));
+    const following = Boolean(followedConfluenceId && lantern.confluenceIds.includes(followedConfluenceId));
     const card = document.createElement('button');
     card.className = `lantern-card ${lantern.state} ${following ? 'following' : ''}`;
-    if (lantern.state === 'lit') card.dataset.revisitId = lantern.eventId;
-    else if (lantern.state === 'ready') card.dataset.kindleLanternId = lantern.id;
+    if (lantern.state === 'lit') card.dataset.revisitLanternId = lantern.id;
+    else if (lantern.state === 'ready') card.dataset.claimLanternId = lantern.id;
     else if (missingConfluences.length) card.dataset.followConfluenceId = missingConfluences[0];
-    else card.dataset.threadId = lantern.eventId;
-    card.setAttribute('aria-pressed', String(following || lanternToKindle === lantern.id));
+    card.setAttribute('aria-pressed', String(following));
     const mark = document.createElement('span');
     mark.className = 'lantern-mark';
     mark.textContent = lantern.mark;
@@ -1379,12 +1336,12 @@ function renderLanternMap(list: HTMLDivElement, snapshot: ReturnType<typeof curr
     title.textContent = lantern.title;
     const hint = document.createElement('small');
     if (lantern.state === 'lit') hint.textContent = 'Lit · revisit in town';
-    else if (lantern.state === 'ready') hint.textContent = `Ready · observe the ${kindlingLandmark} to kindle it`;
+    else if (lantern.state === 'ready') hint.textContent = 'Achievement complete · claim lantern';
     else if (missingConfluences.length) {
       const missingNames = missingConfluences.map((id) => CONFLUENCE_BY_ID.get(id)?.title ?? id).join(' and ');
       const verb = missingConfluences.every((id) => knownConfluences.has(id)) ? 'Bring back' : 'Shape';
-      hint.textContent = `${lantern.storyComplete ? 'Story complete. ' : ''}${verb} ${missingNames}.`;
-    } else hint.textContent = progress?.hint ?? lantern.promise;
+      hint.textContent = `${verb} ${missingNames}.`;
+    } else hint.textContent = lantern.achievement;
     card.setAttribute('aria-label', `${lantern.title}. ${hint.textContent}`);
     copy.append(title, hint);
     card.append(mark, copy);
@@ -1393,8 +1350,7 @@ function renderLanternMap(list: HTMLDivElement, snapshot: ReturnType<typeof curr
   section.append(grid);
 
   const crown = confluenceOccurrences.find((confluence) => confluence.id === 'festival-crown');
-  const rightHour = timeOfDay >= 19 && timeOfDay < 23;
-  const readyToBegin = Boolean(crown) && lit === lanterns.length && rightHour;
+  const readyToBegin = Boolean(crown) && lit === lanterns.length;
   const destination = document.createElement('button');
   destination.className = `lantern-destination ${readyToBegin ? 'ready' : ''}`;
   if (readyToBegin) destination.dataset.beginLanternFinale = 'true';
@@ -1405,9 +1361,7 @@ function renderLanternMap(list: HTMLDivElement, snapshot: ReturnType<typeof curr
     ? 'Shape a lantern stair, harbor plaza, and rooftop pavilion close together.'
     : lit < lanterns.length
       ? `The pavilion waits for ${lanterns.length - lit} more ${lanterns.length - lit === 1 ? 'light' : 'lights'}.`
-      : !rightHour
-        ? 'All five lights are ready. Return between 19:00 and 23:00.'
-        : 'Begin here, then observe the pavilion to call the harbor together.';
+      : 'Begin the gathering when you are ready.';
   const destinationAction = readyToBegin ? 'Begin' : crown ? 'Visit' : 'Follow';
   destination.innerHTML = `<span aria-hidden="true">${crown ? '✦' : '◇'}</span><span><strong>${destinationTitle}</strong><small>${destinationHint}</small></span><em>${destinationAction}</em>`;
   destination.setAttribute('aria-label', `${destinationTitle}. ${destinationHint} ${destinationAction}.`);
@@ -1423,12 +1377,12 @@ function renderFormationAtlas(list: HTMLDivElement) {
   const summary = document.createElement('div');
   summary.className = 'atlas-summary';
   const confluencesUnlocked = knownPlaceIdentities.size >= 4 || knownConfluences.size > 0;
-  summary.innerHTML = `<strong>${knownFormations.size} of ${FORMATION_CATALOG.length}</strong><span>formations remembered · ${knownPlaceIdentities.size} of ${PLACE_IDENTITY_CATALOG.length} living places${confluencesUnlocked ? ` · ${knownConfluences.size} of ${CONFLUENCE_CATALOG.length} confluences` : ''}</span>`;
+  summary.innerHTML = `<strong>${knownFormations.size}/${FORMATION_CATALOG.length}</strong><span>forms · ${knownPlaceIdentities.size}/${PLACE_IDENTITY_CATALOG.length} places${confluencesUnlocked ? ` · ${knownConfluences.size}/${CONFLUENCE_CATALOG.length} confluences` : ''}</span>`;
   list.append(summary);
 
   const formationHeading = document.createElement('div');
   formationHeading.className = 'atlas-section-heading';
-  formationHeading.innerHTML = '<strong>Building formations</strong><span>Neighboring buildings create these forms.</span>';
+  formationHeading.innerHTML = '<strong>Building forms</strong><span>Nearby buildings shape one another.</span>';
   const grid = document.createElement('div');
   grid.className = 'atlas-grid';
   for (const formation of FORMATION_CATALOG) {
@@ -1481,8 +1435,8 @@ function renderFormationAtlas(list: HTMLDivElement) {
     }
     const status = document.createElement('em');
     status.textContent = active
-      ? `${active} in town${gathering ? ` · ${gathering} ${gathering === 1 ? 'visitor' : 'visitors'}` : ''} · focus`
-      : learned ? 'Remembered' : 'Not yet shaped';
+      ? `${active} in town${gathering ? ` · ${gathering} visiting` : ''} · View`
+      : learned ? 'Known' : 'Not found';
     copy.append(family, title, description);
     if (learned) copy.append(influence);
     copy.append(status);
@@ -1500,7 +1454,7 @@ function renderPlaceIdentityAtlas(list: HTMLDivElement) {
   const useCounts = citizens.identityUseCounts();
   const heading = document.createElement('div');
   heading.className = 'atlas-section-heading identity-heading';
-  heading.innerHTML = '<strong>Living places</strong><span>Each active place decorates nearby blocks and affects which trades open there. Shops keep a record of the place that attracted them.</span>';
+  heading.innerHTML = '<strong>Living places</strong><span>Combine forms to create places and attract shops.</span>';
   const grid = document.createElement('div');
   grid.className = 'identity-grid';
   for (const identity of PLACE_IDENTITY_CATALOG) {
@@ -1540,7 +1494,7 @@ function renderPlaceIdentityAtlas(list: HTMLDivElement) {
     const copy = document.createElement('span');
     copy.className = 'identity-copy';
     const kicker = document.createElement('small');
-    kicker.textContent = learned ? `living place · ${identity.influenceRadius}-tile reach` : surfaced ? 'clue available' : 'harbor rumor';
+    kicker.textContent = learned ? `place · ${identity.influenceRadius}-tile reach` : surfaced ? 'clue ready' : 'rumor';
     const title = document.createElement('strong');
     title.textContent = visibleTitle;
     const description = document.createElement('span');
@@ -1550,11 +1504,11 @@ function renderPlaceIdentityAtlas(list: HTMLDivElement) {
     influence.textContent = learned ? `${identity.landmark.title}. ${identity.landmark.effect} ${identity.trace} ${identity.influence}` : '';
     const status = document.createElement('em');
     status.textContent = active
-      ? `${influencedHomes} ${influencedHomes === 1 ? 'home' : 'homes'} in reach${gathering ? ` · ${gathering} ${gathering === 1 ? 'visitor' : 'visitors'}` : ''}${legacyTrades ? ` · ${legacyTrades} lasting ${legacyTrades === 1 ? 'trade' : 'trades'}` : ''} · focus`
-      : following ? `following · ${Math.round(progress.value * 100)}%`
-      : learned ? `Remembered${legacyTrades ? ` · ${legacyTrades} lasting ${legacyTrades === 1 ? 'trade' : 'trades'}` : ''} · follow to rebuild`
-      : surfaced ? 'Follow this clue'
-      : 'Listen for one of its forms';
+      ? `${influencedHomes} ${influencedHomes === 1 ? 'home' : 'homes'}${gathering ? ` · ${gathering} visiting` : ''}${legacyTrades ? ` · ${legacyTrades} ${legacyTrades === 1 ? 'trade' : 'trades'}` : ''} · View`
+      : following ? `Following · ${Math.round(progress.value * 100)}%`
+      : learned ? `Known${legacyTrades ? ` · ${legacyTrades} ${legacyTrades === 1 ? 'trade' : 'trades'}` : ''} · Follow to rebuild`
+      : surfaced ? 'Follow clue'
+      : 'Find one of its forms';
     copy.append(kicker, title, description);
     if (learned) copy.append(influence);
     copy.append(status);
@@ -1570,7 +1524,7 @@ function renderConfluenceAtlas(list: HTMLDivElement) {
   const useCounts = citizens.confluenceUseCounts();
   const heading = document.createElement('div');
   heading.className = 'atlas-section-heading identity-heading confluence-heading';
-  heading.innerHTML = '<strong>Confluences</strong><span>Three nearby formations create each confluence. Its landmark replaces the smaller local landmarks, but their trade benefits remain.</span>';
+  heading.innerHTML = '<strong>Confluences</strong><span>Bring three forms together. Their trade bonuses remain.</span>';
   const grid = document.createElement('div');
   grid.className = 'identity-grid confluence-grid';
   for (const definition of CONFLUENCE_CATALOG) {
@@ -1600,7 +1554,7 @@ function renderConfluenceAtlas(list: HTMLDivElement) {
     const copy = document.createElement('span');
     copy.className = 'identity-copy';
     const kicker = document.createElement('small');
-    kicker.textContent = learned ? 'three-form place' : surfaced ? 'clue available' : 'harbor rumor';
+    kicker.textContent = learned ? 'three-form place' : surfaced ? 'clue ready' : 'rumor';
     const title = document.createElement('strong');
     title.textContent = visibleTitle;
     const description = document.createElement('span');
@@ -1610,11 +1564,11 @@ function renderConfluenceAtlas(list: HTMLDivElement) {
     influence.textContent = learned ? `${definition.landmark.title}. ${definition.landmark.effect}` : '';
     const status = document.createElement('em');
     status.textContent = active
-      ? `${gathering} ${gathering === 1 ? 'visitor' : 'visitors'} · focus`
-      : following ? `following · ${Math.round(progress.value * 100)}%`
-      : learned ? 'Remembered · follow to rebuild'
-      : surfaced ? 'Follow this clue'
-      : 'Listen for its first formation';
+      ? `${gathering} visiting · View`
+      : following ? `Following · ${Math.round(progress.value * 100)}%`
+      : learned ? 'Known · Follow to rebuild'
+      : surfaced ? 'Follow clue'
+      : 'Find its first form';
     copy.append(kicker, title, description);
     if (learned) copy.append(influence);
     copy.append(status);
@@ -1669,19 +1623,28 @@ function revisitConfluence(id: ConfluenceId) {
   showToast(`${definition.title}: three formations converge at its ${definition.landmark.title.toLowerCase()}.`);
 }
 
+function revisitHarborLantern(id: HarborLanternId) {
+  const lantern = HARBOR_LANTERNS.find((candidate) => candidate.id === id);
+  const anchor = city.harborLanternGatherPoints().find((candidate) => candidate.id === id);
+  if (!lantern || !anchor) return;
+  controls.target.lerp(city.worldPosition(anchor.x, anchor.z).setY(1), .55);
+  city.celebrateAt(anchor.x, anchor.z);
+  setJournalOpen(false);
+  showToast(`${lantern.title}: ${lantern.achievement}`);
+}
+
 function lanternState(id: HarborLanternId) {
   return harborLanternStates({
-    discoveries: grow.discoveredIds(),
     knownConfluences,
     activeConfluences: confluenceOccurrences.map((confluence) => confluence.id),
     litLanterns: litHarborLanternIds,
   }).find((lantern) => lantern.id === id);
 }
 
-function seekLanternKindling(id: HarborLanternId) {
+function claimCompletedLantern(id: HarborLanternId) {
   const lantern = lanternState(id);
   if (!lantern || lantern.state !== 'ready') {
-    showToast('That lantern still needs its story and active Confluence.');
+    showToast('That lantern still needs its Confluence achievement active in town.');
     renderJournal();
     return;
   }
@@ -1689,32 +1652,35 @@ function seekLanternKindling(id: HarborLanternId) {
   const occurrence = confluenceOccurrences.find((confluence) => confluence.id === kindlingConfluenceId);
   if (!occurrence) return;
   const landmark = confluenceLandmarkSocket(occurrence);
-  lanternToKindle = id;
-  finaleAwaitingObservation = false;
+  litHarborLanternIds.add(id);
+  city.setHarborLanterns(litHarborLanternIds);
   followedThreadId = null;
   followedConfluenceId = null;
   controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .55);
   city.celebrateAt(landmark.x, landmark.z);
-  setJournalOpen(false);
-  setObserveMode(true, false);
-  showToast(`Observe the ${landmark.title} to kindle the ${lantern.title}.`);
+  showToast(`${lantern.title} lit. The Confluence was already complete.`);
+  softTone(480 + litHarborLanternIds.size * 68, .28, 0, .02, 'sine');
+  renderJournal();
+  updateThreadStatus();
+  persistSoon();
 }
 
 function prepareLanternFinale() {
   const crown = confluenceOccurrences.find((confluence) => confluence.id === 'festival-crown');
-  const rightHour = timeOfDay >= 19 && timeOfDay < 23;
-  if (!crown || litHarborLanternIds.size !== HARBOR_LANTERNS.length || !rightHour) {
+  if (!crown || litHarborLanternIds.size !== HARBOR_LANTERNS.length) {
     renderJournal();
     return;
   }
-  const landmark = confluenceLandmarkSocket(crown);
-  lanternToKindle = null;
-  finaleAwaitingObservation = true;
-  controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .55);
-  city.celebrateAt(landmark.x, landmark.z);
   setJournalOpen(false);
-  setObserveMode(true, false);
-  showToast(`Observe the ${landmark.title} to begin the gathering.`);
+  festivalInvitationPending = true;
+  const discovery = grow.triggerEligible('lantern-finale', currentSnapshot());
+  festivalInvitationPending = false;
+  if (!discovery) return;
+  city.setDiscoveryState(grow.discoveredIds());
+  citizens.setDiscoveries(grow.discoveredIds());
+  refreshAmbience();
+  renderJournal();
+  persistSoon();
 }
 
 function createClueCard(clue: DiscoveryClue) {
@@ -1775,10 +1741,9 @@ function updateThreadStatus(snapshot = currentSnapshot()) {
     panel.classList.remove('show');
     return;
   }
-  const lantern = HARBOR_LANTERN_BY_EVENT.get(followedThreadId);
   const percent = Math.round(clue.progress * 100);
-  document.querySelector('#thread-kicker')!.textContent = lantern ? 'Following a harbor lantern' : 'Following a thread';
-  document.querySelector('#thread-title')!.textContent = lantern?.title ?? clue.title;
+  document.querySelector('#thread-kicker')!.textContent = 'Following a thread';
+  document.querySelector('#thread-title')!.textContent = clue.title;
   document.querySelector('#thread-hint')!.textContent = clue.hint;
   document.querySelector<HTMLElement>('#thread-progress-fill')!.style.width = `${percent}%`;
   const progress = panel.querySelector<HTMLElement>('[role="progressbar"]')!;
@@ -1800,8 +1765,7 @@ function followThread(eventId: string) {
   const clue = followedThreadId ? grow.progressFor(followedThreadId, snapshot) : null;
   if (clue?.focus) controls.target.lerp(city.worldPosition(clue.focus.x, clue.focus.z).setY(1), .4);
   setJournalOpen(false);
-  const lantern = followedThreadId ? HARBOR_LANTERN_BY_EVENT.get(followedThreadId) : null;
-  showToast(`Following "${lantern?.title ?? clue?.title ?? 'a new thread'}".`);
+  showToast(`Following "${clue?.title ?? 'a new thread'}".`);
 }
 
 function followPlaceIdentity(id: PlaceIdentityId) {
@@ -1996,14 +1960,32 @@ function createJournalEntry(entry: JournalEntry) {
 }
 
 function setJournalOpen(open: boolean) {
-  const scrim = document.querySelector('#journal-scrim')!;
+  const scrim = document.querySelector<HTMLElement>('#journal-scrim')!;
+  const openButton = document.querySelector<HTMLButtonElement>('#journal-open')!;
+  const hadFocus = scrim.contains(document.activeElement);
   if (open) {
+    setTopActionsOpen(false);
+    setAboutOpen(false);
+    setPostcardOpen(false);
+    setTouchGuideOpen(false);
     renderJournal();
     document.querySelector<HTMLDivElement>('#journal-list')!.scrollTop = 0;
   }
   scrim.classList.toggle('show', open);
   scrim.setAttribute('aria-hidden', String(!open));
-  if (!open) updateSecondTideIntroduction();
+  document.querySelectorAll<HTMLElement>('.hud > :not(#journal-scrim)').forEach((element) => {
+    if (open) element.setAttribute('inert', '');
+    else element.removeAttribute('inert');
+  });
+  renderer.domElement.toggleAttribute('inert', open);
+  if (open) {
+    scrim.removeAttribute('inert');
+    window.setTimeout(() => document.querySelector<HTMLButtonElement>('#journal-close')!.focus(), 50);
+  } else {
+    scrim.setAttribute('inert', '');
+    if (hadFocus) openButton.focus();
+    updateSecondTideIntroduction();
+  }
 }
 
 function setAboutOpen(open: boolean) {
@@ -2030,7 +2012,7 @@ function setPostcardOpen(open: boolean) {
     setAboutOpen(false);
     setTouchGuideOpen(false);
     document.querySelector('#postcard-date-preview')!.textContent = `${postcardDate()} · Day ${day}`;
-    document.querySelector('#postcard-note')!.textContent = 'Anyone can view the picture. Little Tides can also read the town tucked inside it.';
+    document.querySelector('#postcard-note')!.textContent = 'The PNG stores your town so Little Tides can reload it.';
     window.setTimeout(() => document.querySelector<HTMLButtonElement>('#postcard-save')!.focus(), 50);
   } else if (scrim.contains(document.activeElement)) {
     openButton.focus();
@@ -2072,14 +2054,14 @@ async function savePostcard() {
   const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
   button.disabled = true;
   button.textContent = 'Painting postcard...';
-  note.textContent = 'Capturing the harbor and packing the town data into the PNG.';
+  note.textContent = 'Saving the picture and town data.';
   try {
     saveTown();
     const inscription = document.querySelector<HTMLInputElement>('#postcard-message')!.value;
     const postcard = await makeTidePostcard(await canvasPng(inscription), currentTownData());
     const date = new Date().toISOString().slice(0, 10);
     downloadBlob(postcard, `little-tides-day-${day}-${date}.png`);
-    note.textContent = 'Saved. This PNG can be shared as a picture or loaded back here later.';
+    note.textContent = 'Saved. Share the PNG or load it here later.';
     showToast('Your tide postcard is ready.');
   } catch (error) {
     note.textContent = error instanceof Error ? error.message : 'The postcard could not be saved.';
@@ -2094,13 +2076,13 @@ async function saveTownModel() {
   const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
   button.disabled = true;
   button.textContent = 'Building 3D model...';
-  note.textContent = 'Joining the visible buildings to a printable base.';
+  note.textContent = 'Preparing the town for 3D printing.';
   try {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     const model = makeTownStl(city.root);
     const date = new Date().toISOString().slice(0, 10);
     downloadBlob(model, `little-tides-day-${day}-${date}.stl`);
-    note.textContent = 'STL saved in millimeters. It includes the visible town on a shared base; colors are not part of STL files.';
+    note.textContent = 'STL saved in millimeters. It includes the town and a shared base, without colors.';
     showToast('Your harbor model is ready.');
   } catch (error) {
     note.textContent = error instanceof Error ? error.message : 'The 3D model could not be exported.';
@@ -2112,7 +2094,7 @@ async function saveTownModel() {
 
 async function loadPostcard(file: File) {
   const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
-  note.textContent = 'Reading the town data inside this picture...';
+  note.textContent = 'Reading the town inside this picture...';
   try {
     const town = await readTidePostcard(file);
     const townDay = town.day ?? 1;
@@ -2229,7 +2211,7 @@ function updateMusicButton() {
   button.classList.toggle('muted', musicMuted);
   button.setAttribute('aria-pressed', String(!musicMuted));
   button.setAttribute('aria-label', musicMuted ? 'Turn music on' : 'Turn music off');
-  button.querySelector('span')!.textContent = musicMuted ? '♩' : '♫';
+  button.querySelector('.music-state')!.textContent = musicMuted ? '♩' : '♫';
 }
 
 async function startBackgroundMusic() {
@@ -2307,19 +2289,15 @@ document.querySelector('#touch-guide')!.addEventListener('click', (event) => {
   if (event.target === event.currentTarget) setTouchGuideOpen(false);
 });
 
-const mobileHeaderQuery = matchMedia('(max-width: 700px), (hover: none) and (pointer: coarse)');
-
 function setTopActionsOpen(open: boolean) {
-  const mobileMenu = mobileHeaderQuery.matches;
-  const expanded = mobileMenu && open;
   const actions = document.querySelector<HTMLElement>('.top-actions')!;
   const menu = document.querySelector<HTMLElement>('#top-actions-menu')!;
   const toggle = document.querySelector<HTMLButtonElement>('#mobile-menu-toggle')!;
-  actions.classList.toggle('open', expanded);
-  toggle.setAttribute('aria-expanded', String(expanded));
-  toggle.setAttribute('aria-label', expanded ? 'Close town controls' : 'Open town controls');
-  menu.setAttribute('aria-hidden', String(mobileMenu && !expanded));
-  if (mobileMenu && !expanded) menu.setAttribute('inert', '');
+  actions.classList.toggle('open', open);
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.setAttribute('aria-label', open ? 'Close town controls' : 'Open town controls');
+  menu.setAttribute('aria-hidden', String(!open));
+  if (!open) menu.setAttribute('inert', '');
   else menu.removeAttribute('inert');
 }
 
@@ -2332,7 +2310,6 @@ document.querySelector('#top-actions-menu')!.addEventListener('click', (event) =
 document.addEventListener('pointerdown', (event) => {
   if (!document.querySelector('.top-actions')!.contains(event.target as Node)) setTopActionsOpen(false);
 });
-mobileHeaderQuery.addEventListener('change', () => setTopActionsOpen(false));
 setTopActionsOpen(false);
 
 document.querySelector('#reset')!.addEventListener('click', () => {
@@ -2347,8 +2324,6 @@ function setObserveMode(enabled: boolean, announce = true) {
   button.classList.toggle('active', observeMode);
   button.setAttribute('aria-pressed', String(observeMode));
   if (!observeMode) {
-    lanternToKindle = null;
-    finaleAwaitingObservation = false;
     hideMemoryCard();
   }
   if (announce) showToast(observeMode ? 'Observe mode: choose a building, tree, animal, boat, or resident.' : 'Build mode restored.');
@@ -2389,8 +2364,10 @@ document.querySelector('#journal-scrim')!.addEventListener('click', (event) => {
 });
 document.querySelector('#journal-list')!.addEventListener('click', (event) => {
   const target = event.target as HTMLElement;
-  const kindle = target.closest<HTMLButtonElement>('[data-kindle-lantern-id]');
-  if (kindle?.dataset.kindleLanternId) seekLanternKindling(kindle.dataset.kindleLanternId as HarborLanternId);
+  const claim = target.closest<HTMLButtonElement>('[data-claim-lantern-id]');
+  if (claim?.dataset.claimLanternId) claimCompletedLantern(claim.dataset.claimLanternId as HarborLanternId);
+  const harborLantern = target.closest<HTMLButtonElement>('[data-revisit-lantern-id]');
+  if (harborLantern?.dataset.revisitLanternId) revisitHarborLantern(harborLantern.dataset.revisitLanternId as HarborLanternId);
   const beginFinale = target.closest<HTMLButtonElement>('[data-begin-lantern-finale]');
   if (beginFinale) prepareLanternFinale();
   const thread = target.closest<HTMLButtonElement>('[data-thread-id]');
@@ -2579,7 +2556,10 @@ function updateTimeDisplay() {
   const hours = Math.floor(timeOfDay);
   const minutes = Math.floor((timeOfDay - hours) * 60);
   const time = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-  document.querySelector('#clock-display')!.textContent = `Day ${day} · ${time} · ${citizens.population()} ${citizens.population() === 1 ? 'resident' : 'residents'}`;
+  const population = citizens.population();
+  const desktopClock = document.querySelector<HTMLElement>('#clock-display')!;
+  desktopClock.textContent = `Day ${day} · ${time}`;
+  desktopClock.setAttribute('aria-label', `Day ${day}, ${time}, ${population} ${population === 1 ? 'resident' : 'residents'}`);
   document.querySelector('#mobile-clock-display')!.textContent = `D${day} · ${time}`;
   updateCitizenCard();
   const memory = selectedMemoryReader?.();

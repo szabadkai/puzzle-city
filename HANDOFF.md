@@ -1,6 +1,6 @@
 # Little Tides — project handoff
 
-This repository contains the completed original prototype plus four implemented slices of the new **Formation mastery** scope. The playable `main` build is deployed at <https://szabadkai.github.io/puzzle-city/>.
+This repository contains the completed original prototype plus five implemented slices of the new **Formation mastery** scope. The playable `main` build is deployed at <https://szabadkai.github.io/puzzle-city/>.
 
 ## Completed milestones
 
@@ -17,11 +17,12 @@ This repository contains the completed original prototype plus four implemented 
    - Persistent owners, names, opening hours, procedural storefronts, owner routines, visitor destinations, favorite-shop histories, popularity counts, and neighbor employees.
    - Businesses close or are reassigned when edits invalidate their site or owner.
 4. **Crafting town**
-   - Seventeen connected production steps carry raw catch, herbs, grain, timber, clay, and fiber through processed food, tools, tableware, cloth, hospitality, fishing gear, and a finished harbor export.
+   - Seventeen connected production steps carry local catch and herbs plus imported grain, timber, clay, and fiber through processed food, tools, tableware, cloth, hospitality, fishing gear, and a finished harbor export.
+   - Merchant-only raw materials require a real dock instead of appearing at the inn. A deterministic dockside yard, cargo lighter moored clear of the platform, and animated deckhand/porter handoff show each landing; visible sacks, logs, jars, and bales track the current stock, and onward carriers start at that shoreline cell. The merchant makes a full open-water approach, docks for the import window, loads finished harbor goods, and carries those crates beyond the town, where they leave persistent stock.
    - Stocks and completed steps persist; carriers visibly move cargo; Observe mode shows a workplace’s inputs, output, and shortages without turning the main HUD into a management screen.
 5. **GROW discoveries**
    - Pure declarative condition trees evaluate cloned, read-only snapshots of topology, population, time, businesses, relationships, and prior discoveries.
-   - Fifty-eight stable, chained one-shot event IDs commit through narrow city, business, citizen, wildlife, ambience, and presentation effects.
+   - Seventy-two stable, chained one-shot event IDs commit through narrow city, business, citizen, wildlife, ambience, and presentation effects.
    - Six recurring, cooldown-backed observations turn regular customers, dawn fishing crews, bird-feeding children, waterfront elders, familiar restaurant tables, and the harbor cats’ breakfast into persistent daily patterns without adding duplicate journal entries.
    - Discoveries add a restrained world glimmer, resident reaction, caption and sound, then persist their first illustrated observation in the harbor journal.
 6. **Polish and quiet finale**
@@ -31,19 +32,26 @@ This repository contains the completed original prototype plus four implemented 
    - Spatially bucketed relationship checks are capped per tick, and established friends pause for shared meals, harbor news, evening walks, and other joint routines.
    - Layered procedural cues cover water, gulls, footsteps, construction, doors, chatter, bells, horns, insects, and the finale without starting ambient playback before the player has interacted.
    - Press `G` for a developer panel showing snapshot totals, citizen and business state, selected topology, event eligibility, recent effects, nav visualization, event forcing, citizen spawning, and time advancement.
+   - First Tide now hands the player a legible optional destination: five Harbor Lanterns tied to Blossom, Table, Chorus, Clock, and Welcome stories. The journal maps their waiting, stirring, and lit states, and following one drills through prerequisite discoveries to an actionable clue.
+   - Earned lanterns appear at story-appropriate anchors and are inspectable. Lighting all five, maintaining a Lantern Square, and returning in the evening triggers a one-shot staged gathering, with Festival Crown upgrading the destination to its pavilion. The sequence ends in a non-modal completion card and a quiet persistent water-lantern aftermath, so building can continue.
 7. **Formation mastery — four slices**
    - A pure detector recognizes 18 tiered architectural forms across water, street, terrace, rooftop, courtyard, and landmark families.
    - The Formation Atlas permanently remembers discovered forms, shows clues for unknown forms, counts active occurrences, and refocuses forms that still exist.
    - A dismissible four-step First Tide uses temporary world-space ripples to teach negative space, vertical transformation, and adjacency on desktop and touch layouts.
    - Active forms register named, reachable gathering nodes in the citizen navigation graph; the Atlas reports current visitors and citizen cards name the destination.
    - Compatible forms improve business site scoring, allow a trade to arrive up to two residents earlier when a supported ground floor exists, and add one item to nearby production batches. The Atlas and Observe-mode workplace detail explain the relationship.
-   - Six higher-order living places emerge from nearby compatible forms without painted zones: Canal Market, Garden Commons, Makers’ Walk, Roof Village, High Harbor, and Lantern Square.
-   - Every living place grows one exclusive procedural landmark—Market Barge, Seed House, Guild Kiln, Roof Hall, Signal Beacon, or Lantern Theatre—at a source-formation socket, with a rising arrival animation, camera glimmer, two-tone cue, and resident welcome. It disappears reversibly if the relationship is broken and can be inspected directly.
-   - The six consequences are asymmetric: early merchant traffic, spreading seed trays, fired-clay façade marks, concentrated rooftop meetings, a dedicated survey boat, and a nightly theatre audience and glow.
+   - Fourteen higher-order living places emerge from nearby compatible forms without painted zones. The original six are joined by Ferry Quarter, Tidepool Cloister, Story Court, Windloom Quarter, Bell Steps, Messenger’s Row, Star Garden, and Kite Steps.
+   - Every living place grows one exclusive procedural landmark at a source-formation socket, with a rising arrival animation, camera glimmer, two-tone cue, and resident welcome. It disappears reversibly if the relationship is broken and can be inspected directly.
+   - Consequences are asymmetric: merchant and passenger traffic, gardens and tidal wildlife, fired-clay marks, rooftop meetings, teaching, weaving, civic bells, visiting couriers, night observation, rooftop play, a survey boat, and a nightly theatre audience.
+   - Every landmark casts a bounded neighborhood footprint. The nearest landmark wins at overlaps, and all fourteen places spread a distinct visual vocabulary across nearby buildings.
+   - The Atlas reports homes in reach and lasting influenced trades; Observe identifies the active influence on a building. Newly opened businesses persist the living place that drew them to their site, preserving a readable legacy even if the source formations are later reshaped.
    - Living places become exact resident destinations, bring matching trades up to three residents earlier, add two items to supported production, remain remembered after reshaping, and expose actionable combination clues in the Atlas.
-   - A one-time Second Tide invitation waits for three known forms, two active families, three residents, and a quiet delay. Unrelated possibilities remain poetic rumors; building one ingredient progressively surfaces its place name and actionable clue. A surfaced clue can be followed through the existing tide tracker, and six GROW stories respond to residents using the resulting landmarks.
+   - A one-time Second Tide invitation waits for three known forms, two active families, three residents, and a quiet delay. Unrelated possibilities remain poetic rumors; building one ingredient progressively surfaces its place name and actionable clue. A surfaced clue can be followed through the existing tide tracker, and fourteen GROW stories respond to residents using the resulting landmarks.
+   - Seven hidden Confluences unlock in the Atlas after four living places are known. Each requires three mutually close formations (not a loose chain), raises one reversible grand landmark over its exact component landmarks, becomes a resident destination, persists as discovery memory, and has a dedicated GROW story. Component economic effects remain active; Confluences do not stack another opening or production bonus.
 
 The visual direction is a warm, fictional old East Asian harbor: layered tiled eaves, narrow signs, awnings, laundry balconies, pipes, rooftop tanks, and evening window light. It draws on old Tokyo and Hong Kong atmosphere without reproducing a specific property or place.
+
+Façade decoration is coordinated through per-wall occupancy claims in `CityRenderer`. Large authored compositions reserve first, ordinary openings can sit behind a deliberate balcony, and opportunistic equipment must find a collision-free edge slot or disappear; keep new wall-mounted decoration inside that planner rather than placing it independently.
 
 ## Code map
 
@@ -52,7 +60,9 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 - `src/citizens.ts` — navigation graph, A* routing, resident lifecycle, routines, relationships, business visits, and citizen rendering.
 - `src/businesses.ts` — business recipes, emergence thresholds, scoring, opening hours, ownership, and validity maintenance.
 - `src/crafting.ts` — production recipes, bounded stocks, progression milestones, delivery intents, and save serialization.
-- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, 58 one-shot discoveries, and six recurring moments.
+- `src/grow.ts` — read-only world snapshots, declarative conditions, event commitment, discovery focus resolution, 72 one-shot discoveries, and six recurring moments.
+- `src/lanterns.ts` — the five Harbor Lantern definitions and their waiting, stirring, and lit progression state.
+- `src/confluences.ts` — the seven three-formation recipes, strict all-pairs detection, Atlas progress, grand-landmark sockets, and component-landmark supersession.
 - `src/harbor.ts` — shoreline-derived boat routes, boats, birds, clouds, stars, blossom particles, and evening fireflies.
 - `src/fauna.ts` — deterministic habitat derivation, low-poly wildlife models, and fly/feed/perch/scatter/swim/wander behavior.
 - `src/water.ts` — shared deterministic shoreline, dock, canal, sheltered-water, and route derivation.
@@ -76,8 +86,9 @@ The town is stored in `localStorage` under `little-tides-town-v1`. The current p
 - discovered stable event IDs, illustrated journal entries, and recurring-event cooldown timestamps.
 - crafting stocks, completed production steps, and the production cursor.
 - remembered formation and living-place IDs, First/Second Tide introduction state, and the currently followed living-place clue.
+- the optional living-place origin of businesses founded inside an active neighborhood footprint.
 
-`SavedTown` accepts versions 1 through 10, and all fields added after version 1 are optional. Existing towns discover any currently active formations and living places on load and skip First Tide automatically; repeated journal entries from older saves are compacted on load. Preserve that additive migration behavior when extending the schema. The in-game **New tide** action clears the existing local save.
+Save compatibility is not a product constraint while the game is in development. The loader accepts only the current schema, and future system changes may deliberately start a fresh town instead of carrying migration code. The in-game **New tide** action clears the existing local save.
 
 ## Performance baseline
 
@@ -119,6 +130,6 @@ Repository: <https://github.com/szabadkai/puzzle-city>
 
 ## Current state and future extensions
 
-The original prototype roadmap is complete. The active new scope is formation mastery. Individual forms and higher-order living places now affect movement, gathering, business suitability, production, landmark transformation, and authored resident stories; First Tide and Second Tide teach the two layers without exposing zones. The nearest follow-up is replayable seeded harbor constraints and expeditions. Caribbean and Italian coastal world packs are promising later multipliers, but should reuse the mechanical grammar instead of becoming cosmetic reskins. Other extension seams include multiple save slots, accessibility settings for motion and sound, more boat silhouettes, and authored discovery packs registered against the existing GROW engine.
+The original prototype roadmap is complete. The active new scope is formation mastery. Individual forms, higher-order living places, and seven three-form Confluences now affect movement, gathering, business suitability, production, landmark transformation, and authored resident stories; First Tide and Second Tide teach the first two layers without exposing zones, while the third layer reveals itself through mastery. The nearest follow-up is replayable seeded harbor constraints and expeditions. Caribbean and Italian coastal world packs are promising later multipliers, but should reuse the mechanical grammar instead of becoming cosmetic reskins. Other extension seams include multiple save slots, accessibility settings for motion and sound, more boat silhouettes, and authored discovery packs registered against the existing GROW engine.
 
 Preserve the GROW boundary: pure snapshot evaluation in `grow.ts`, state changes only through narrow system APIs, and additive save migrations. Keep wildlife and seasonal animation batched, and use the `P` and `G` panels together when evaluating dense-town changes.

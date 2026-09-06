@@ -17,6 +17,7 @@ export type FormationDefinition = Readonly<{
   tier: number;
   mark: string;
   description: string;
+  socialEffect: string;
   hint: string;
 }>;
 
@@ -27,24 +28,24 @@ export type FormationOccurrence = Readonly<{
 }>;
 
 export const FORMATION_CATALOG: readonly FormationDefinition[] = [
-  { id: 'narrow-canal', title: 'Narrow Canal', family: 'water', tier: 1, mark: '≈', description: 'Two homes turn a strip of open water into a sheltered street for boats.', hint: 'Leave one water tile between two opposing homes.' },
-  { id: 'sea-arch', title: 'Sea Arch', family: 'water', tier: 2, mark: '∩', description: 'Two-storey banks meet above the tide while keeping the passage open.', hint: 'Raise both banks of a narrow canal to two storeys.' },
-  { id: 'high-bridge', title: 'High Bridge', family: 'water', tier: 3, mark: '⌒', description: 'The crossing rises into a walkable bridge above the blue lane.', hint: 'Raise both sides of a sea arch to three storeys.' },
-  { id: 'covered-skybridge', title: 'Covered Skybridge', family: 'water', tier: 4, mark: '▱', description: 'A roof gathers over the elevated crossing and shelters its footsteps.', hint: 'Let both sides of a high bridge reach four storeys.' },
-  { id: 'lantern-gate', title: 'Lantern Gate', family: 'water', tier: 5, mark: '◇', description: 'The tallest crossing becomes a lantern-lit threshold over the canal.', hint: 'Let both sides of a covered skybridge reach five storeys.' },
-  { id: 'arcade-row', title: 'Arcade Row', family: 'street', tier: 1, mark: '⋂', description: 'Three aligned buildings shelter a continuous ground-floor walk.', hint: 'Make a straight run of three two-storey buildings.' },
-  { id: 'roof-promenade', title: 'Roof Promenade', family: 'street', tier: 2, mark: '═', description: 'An arcade gains a lantern-lined route across its connected roofs.', hint: 'Raise all three buildings of an arcade row to three storeys.' },
-  { id: 'stepped-terrace', title: 'Stepped Terrace', family: 'terrace', tier: 1, mark: '⌁', description: 'A rising sequence of roofs becomes an outdoor stair through the town.', hint: 'Arrange three connected roofs in a one–two–three height progression beside a usable lower roof.' },
-  { id: 'terraced-garden', title: 'Terraced Garden', family: 'terrace', tier: 2, mark: '⌁', description: 'A higher stepped route gathers planters along its landings.', hint: 'Lift a stepped terrace into a two–three–four progression.' },
-  { id: 'lantern-stair', title: 'Lantern Stair', family: 'terrace', tier: 3, mark: '⌁', description: 'The highest terrace becomes a warm stair of gardens and lanterns.', hint: 'Lift a terraced garden into a three–four–five progression.' },
-  { id: 'rooftop-court', title: 'Rooftop Court', family: 'rooftop', tier: 1, mark: '□', description: 'Four equal roofs share one open room beneath the sky.', hint: 'Make a two-by-two block of equal two-storey buildings.' },
-  { id: 'rooftop-pavilion', title: 'Rooftop Pavilion', family: 'rooftop', tier: 2, mark: '▣', description: 'A roofed gathering place grows above a shared court.', hint: 'Raise all four buildings of a rooftop court to three storeys.' },
-  { id: 'hanging-roof-garden', title: 'Hanging Roof Garden', family: 'rooftop', tier: 3, mark: '❖', description: 'Greenery spills from the highest shared court.', hint: 'Raise all four sides of a rooftop pavilion to four storeys.' },
-  { id: 'courtyard-garden', title: 'Courtyard Garden', family: 'courtyard', tier: 1, mark: '✣', description: 'Three walls shelter an empty place and invite something green to grow.', hint: 'Shelter one empty tile with homes on three sides.' },
-  { id: 'cloister-garden', title: 'Cloister Garden', family: 'courtyard', tier: 2, mark: '✤', description: 'Taller walls wrap the garden in a quiet covered walk.', hint: 'Raise the surrounding walls of a courtyard garden to two storeys.' },
-  { id: 'courtyard-pavilion', title: 'Courtyard Pavilion', family: 'courtyard', tier: 3, mark: '✥', description: 'A pavilion crowns the most deeply sheltered garden.', hint: 'Raise the surrounding walls of a cloister garden to three storeys.' },
-  { id: 'harbor-plaza', title: 'Harbor Plaza', family: 'landmark', tier: 1, mark: '⊞', description: 'A larger opening becomes a public square with water, shade, and room to linger.', hint: 'Leave a two-by-two opening inside a ring of at least six homes.' },
-  { id: 'lookout-tower', title: 'Lookout Tower', family: 'landmark', tier: 1, mark: '△', description: 'A lightly connected tall home keeps a clear view of the horizon.', hint: 'Let an isolated or lightly connected home reach three storeys.' },
+  { id: 'narrow-canal', title: 'Narrow Canal', family: 'water', tier: 1, mark: '≈', description: 'Two homes turn a strip of open water into a sheltered street for boats.', socialEffect: 'Neighbors stop to watch boats thread the sheltered water.', hint: 'Leave one water tile between two opposing homes.' },
+  { id: 'sea-arch', title: 'Sea Arch', family: 'water', tier: 2, mark: '∩', description: 'Two-storey banks meet above the tide while keeping the passage open.', socialEffect: 'Fishers check the current while passersby linger beneath the arch.', hint: 'Raise both banks of a narrow canal to two storeys.' },
+  { id: 'high-bridge', title: 'High Bridge', family: 'water', tier: 3, mark: '⌒', description: 'The crossing rises into a walkable bridge above the blue lane.', socialEffect: 'Walkers cross for the open view and wave to boats below.', hint: 'Raise both sides of a sea arch to three storeys.' },
+  { id: 'covered-skybridge', title: 'Covered Skybridge', family: 'water', tier: 4, mark: '▱', description: 'A roof gathers over the elevated crossing and shelters its footsteps.', socialEffect: 'Rain or shine, neighbors meet beneath its sheltered roof.', hint: 'Let both sides of a high bridge reach four storeys.' },
+  { id: 'lantern-gate', title: 'Lantern Gate', family: 'water', tier: 5, mark: '◇', description: 'The tallest crossing becomes a lantern-lit threshold over the canal.', socialEffect: 'At dusk, residents gather under the lights to greet arriving boats.', hint: 'Let both sides of a covered skybridge reach five storeys.' },
+  { id: 'arcade-row', title: 'Arcade Row', family: 'street', tier: 1, mark: '⋂', description: 'Three aligned buildings shelter a continuous ground-floor walk.', socialEffect: 'Shopgoers stroll the shaded colonnade and pause to talk.', hint: 'Make a straight run of three two-storey buildings.' },
+  { id: 'roof-promenade', title: 'Roof Promenade', family: 'street', tier: 2, mark: '═', description: 'An arcade gains a lantern-lined route across its connected roofs.', socialEffect: 'Evening walkers follow the rooftop lanterns above the street.', hint: 'Raise all three buildings of an arcade row to three storeys.' },
+  { id: 'stepped-terrace', title: 'Stepped Terrace', family: 'terrace', tier: 1, mark: '⌁', description: 'A rising sequence of roofs becomes an outdoor stair through the town.', socialEffect: 'Residents take the stepped shortcut through the rising roofs.', hint: 'Arrange three connected roofs in a one–two–three height progression beside a usable lower roof.' },
+  { id: 'terraced-garden', title: 'Terraced Garden', family: 'terrace', tier: 2, mark: '⌁', description: 'A higher stepped route gathers planters along its landings.', socialEffect: 'Gardeners tend the landings while neighbors climb past.', hint: 'Lift a stepped terrace into a two–three–four progression.' },
+  { id: 'lantern-stair', title: 'Lantern Stair', family: 'terrace', tier: 3, mark: '⌁', description: 'The highest terrace becomes a warm stair of gardens and lanterns.', socialEffect: 'After sunset, residents climb the glowing stair for the harbor view.', hint: 'Lift a terraced garden into a three–four–five progression.' },
+  { id: 'rooftop-court', title: 'Rooftop Court', family: 'rooftop', tier: 1, mark: '□', description: 'Four equal roofs share one open room beneath the sky.', socialEffect: 'Neighbors share the open-air room and its wide sky.', hint: 'Make a two-by-two block of equal two-storey buildings.' },
+  { id: 'rooftop-pavilion', title: 'Rooftop Pavilion', family: 'rooftop', tier: 2, mark: '▣', description: 'A roofed gathering place grows above a shared court.', socialEffect: 'Small groups meet beneath the pavilion’s rooftop shade.', hint: 'Raise all four buildings of a rooftop court to three storeys.' },
+  { id: 'hanging-roof-garden', title: 'Hanging Roof Garden', family: 'rooftop', tier: 3, mark: '❖', description: 'Greenery spills from the highest shared court.', socialEffect: 'Gardeners and quiet visitors linger among the high greenery.', hint: 'Raise all four sides of a rooftop pavilion to four storeys.' },
+  { id: 'courtyard-garden', title: 'Courtyard Garden', family: 'courtyard', tier: 1, mark: '✣', description: 'Three walls shelter an empty place and invite something green to grow.', socialEffect: 'Neighbors rest in the sheltered green at the center.', hint: 'Shelter one empty tile with homes on three sides.' },
+  { id: 'cloister-garden', title: 'Cloister Garden', family: 'courtyard', tier: 2, mark: '✤', description: 'Taller walls wrap the garden in a quiet covered walk.', socialEffect: 'Residents circle the covered walk for a quiet pause.', hint: 'Raise the surrounding walls of a courtyard garden to two storeys.' },
+  { id: 'courtyard-pavilion', title: 'Courtyard Pavilion', family: 'courtyard', tier: 3, mark: '✥', description: 'A pavilion crowns the most deeply sheltered garden.', socialEffect: 'The deep courtyard becomes a calm meeting place beneath its pavilion.', hint: 'Raise the surrounding walls of a cloister garden to three storeys.' },
+  { id: 'harbor-plaza', title: 'Harbor Plaza', family: 'landmark', tier: 1, mark: '⊞', description: 'A larger opening becomes a public square with water, shade, and room to linger.', socialEffect: 'Crowds cross paths by the water and linger in the shade.', hint: 'Leave a two-by-two opening inside a ring of at least six homes.' },
+  { id: 'lookout-tower', title: 'Lookout Tower', family: 'landmark', tier: 1, mark: '△', description: 'A lightly connected tall home keeps a clear view of the horizon.', socialEffect: 'Residents climb up to scan the horizon and watch arrivals.', hint: 'Let an isolated or lightly connected home reach three storeys.' },
 ] as const;
 
 export const FORMATION_BY_ID = new Map(FORMATION_CATALOG.map((formation) => [formation.id, formation]));
@@ -57,6 +58,9 @@ const BUSINESS_FAMILIES: Record<FormationFamily, readonly BusinessType[]> = {
   courtyard: ['flower-shop', 'tea-house', 'cafe', 'restaurant'],
   landmark: ['inn', 'restaurant', 'bookstore', 'cafe'],
 };
+
+export const FORMATION_OPENING_ADVANCE = 2;
+export const FORMATION_BATCH_BONUS = 1;
 
 export type FormationAffinity = Readonly<{
   score: number;
@@ -88,26 +92,54 @@ export function formationSupportsBusiness(type: BusinessType, occurrences: reado
 }
 
 export function formationOpeningPopulation(type: BusinessType, basePopulation: number, occurrences: readonly FormationOccurrence[]) {
-  return Math.max(2, basePopulation - (formationSupportsBusiness(type, occurrences) ? 2 : 0));
+  return Math.max(2, basePopulation - (formationSupportsBusiness(type, occurrences) ? FORMATION_OPENING_ADVANCE : 0));
+}
+
+function joinWithAnd(items: readonly string[]) {
+  if (items.length < 2) return items[0] ?? '';
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items.at(-1)}`;
+}
+
+function businessPlural(type: BusinessType) {
+  return type === 'cafe' ? 'cafés' : `${type.replace('-', ' ')}s`;
+}
+
+export function formationInfluenceDetails(formation: FormationDefinition) {
+  const businesses = BUSINESS_FAMILIES[formation.family]
+    .map(businessPlural);
+  return Object.freeze({
+    socialEffect: formation.socialEffect,
+    businesses: joinWithAnd(businesses),
+  });
 }
 
 export function formationInfluenceSummary(formation: FormationDefinition) {
-  const businesses = BUSINESS_FAMILIES[formation.family]
-    .slice(0, 3)
-    .map((type) => type === 'cafe' ? 'cafés' : `${type.replace('-', ' ')}s`)
-    .join(', ');
-  return `People gather here. Nearby ${businesses} can open sooner and make fuller batches.`;
+  const effect = formationInfluenceDetails(formation);
+  return `${effect.socialEffect} Favored trades: ${effect.businesses}. When based nearby, they can open ${FORMATION_OPENING_ADVANCE} residents earlier and produce +${FORMATION_BATCH_BONUS} item per batch.`;
 }
 
 export function formationGatheringActivity(id: FormationId, ageGroup?: string, occupation?: string) {
   const formation = FORMATION_BY_ID.get(id);
   if (!formation) return 'spending time in a familiar place';
-  if (formation.family === 'water') return occupation === 'Fisher' ? `checking the current beside the ${formation.title.toLowerCase()}` : `watching boats pass the ${formation.title.toLowerCase()}`;
-  if (formation.family === 'street') return ageGroup === 'child' ? `playing beneath the ${formation.title.toLowerCase()}` : `lingering in the shade of the ${formation.title.toLowerCase()}`;
-  if (formation.family === 'terrace') return `climbing through the ${formation.title.toLowerCase()}`;
-  if (formation.family === 'rooftop') return `sharing the view from the ${formation.title.toLowerCase()}`;
-  if (formation.family === 'courtyard') return occupation === 'Gardener' ? `tending the ${formation.title.toLowerCase()}` : `resting inside the ${formation.title.toLowerCase()}`;
-  return id === 'lookout-tower' ? 'watching the horizon below the lookout tower' : 'meeting neighbors in the harbor plaza';
+  if (id === 'narrow-canal') return occupation === 'Fisher' ? 'checking the current in the narrow canal' : 'watching boats thread the narrow canal';
+  if (id === 'sea-arch') return occupation === 'Fisher' ? 'reading the tide beneath the sea arch' : 'lingering beneath the sea arch';
+  if (id === 'high-bridge') return ageGroup === 'child' ? 'waving to boats from the high bridge' : 'crossing the high bridge for the open view';
+  if (id === 'covered-skybridge') return 'meeting neighbors beneath the covered skybridge';
+  if (id === 'lantern-gate') return 'watching arrivals beneath the lantern gate';
+  if (id === 'arcade-row') return ageGroup === 'child' ? 'playing beneath the arcade row' : 'strolling through the shaded arcade row';
+  if (id === 'roof-promenade') return 'following the lanterns along the roof promenade';
+  if (id === 'stepped-terrace') return 'taking the stepped terrace shortcut';
+  if (id === 'terraced-garden') return occupation === 'Gardener' ? 'tending the terraced garden landings' : 'climbing past the terraced garden planters';
+  if (id === 'lantern-stair') return 'climbing the lantern stair for the harbor view';
+  if (id === 'rooftop-court') return ageGroup === 'child' ? 'playing in the rooftop court' : 'sharing the open air in the rooftop court';
+  if (id === 'rooftop-pavilion') return 'meeting beneath the rooftop pavilion';
+  if (id === 'hanging-roof-garden') return occupation === 'Gardener' ? 'tending the hanging roof garden' : 'resting among the high greenery';
+  if (id === 'courtyard-garden') return occupation === 'Gardener' ? 'tending the courtyard garden' : 'resting in the sheltered courtyard green';
+  if (id === 'cloister-garden') return 'taking a quiet turn around the cloister garden';
+  if (id === 'courtyard-pavilion') return 'meeting beneath the courtyard pavilion';
+  if (id === 'lookout-tower') return 'scanning the horizon below the lookout tower';
+  return 'crossing paths with neighbors in the harbor plaza';
 }
 
 const CROSSING_IDS: Record<NonNullable<ReturnType<typeof emptyCrossingFeature>>, FormationId> = {

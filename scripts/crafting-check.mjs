@@ -31,7 +31,7 @@ const crafting = new CraftingSystem();
 
 let deliveries = 0;
 for (let hours = 0; hours < 24 * 40; hours += .34) {
-  const update = crafting.update(businesses, citizens, discoveries, hours);
+  const update = crafting.update(businesses, citizens, discoveries, hours, [], '-2,0');
   if (update.delivery) deliveries += 1;
 }
 
@@ -42,6 +42,21 @@ assert.match(crafting.summary(), /harbor goods/, 'the final export good is produ
 const restored = new CraftingSystem(crafting.serialize());
 assert.equal(restored.completedCount(), crafting.completedCount(), 'crafting milestones survive save/load');
 assert.equal(restored.summary(), crafting.summary(), 'goods survive save/load');
+const exportStock = restored.goodsSnapshot()['harbor-goods'] ?? 0;
+const shipped = restored.shipHarborGoods(4);
+assert.equal(shipped, Math.min(4, exportStock), 'a departing merchant takes only the export cargo it can carry');
+assert.equal(restored.goodsSnapshot()['harbor-goods'], exportStock - shipped, 'shipped harbor goods leave the town stock');
+
+const docklessImports = new CraftingSystem();
+const docklessUpdate = docklessImports.update(businesses, [], ['merchant-arrival'], 8, []);
+assert.equal(docklessUpdate.changed, false, 'merchant materials cannot appear without a working import dock');
+assert.equal(docklessImports.serialize().goods.grain, undefined, 'dockless towns do not conjure imported grain at an inn');
+
+const docksideImports = new CraftingSystem();
+const docksideUpdate = docksideImports.update(businesses, [], ['merchant-arrival'], 8, [], '-2,0');
+assert.equal(docksideUpdate.arrival?.good, 'grain', 'a working dock receives the first merchant material');
+assert.equal(docksideUpdate.arrival?.atCellKey, '-2,0', 'the arrival records its real shoreline storage cell');
+assert.equal(docksideUpdate.delivery?.fromCellKey, '-2,0', 'the onward carrier starts at dockside storage');
 
 const fishmonger = [{
   id: 'business-fishmonger', type: 'fishmonger', cellKey: '-1,0', ownerId: 'fishmonger-owner',

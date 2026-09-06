@@ -1,9 +1,8 @@
 import { hash } from './random.ts';
 
-export type MemoryMetric = 'patinaCells' | 'matureTrees' | 'catPopulation' | 'oldestBuildingHours' | 'rainIntensity';
+export type MemoryMetric = 'matureTrees' | 'catPopulation' | 'oldestBuildingHours' | 'rainIntensity';
 
 export type TownMemorySnapshot = Readonly<{
-  patinaCells: number;
   growingTrees: number;
   matureTrees: number;
   oldestTreeHours: number;

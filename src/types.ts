@@ -11,7 +11,7 @@ export type Cell = {
 };
 
 export type SavedTown = {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  version: 10;
   seed: number;
   cells: Cell[];
   timeOfDay?: number;
@@ -28,8 +28,14 @@ export type SavedTown = {
   formations?: FormationId[];
   /** Higher-order places formed by bringing compatible architectural forms together. */
   placeIdentities?: PlaceIdentityId[];
+  /** Rare three-form places the town has discovered, even if later reshaped. */
+  confluences?: ConfluenceId[];
+  /** Deliberately dedicated Confluence landmark sockets; geometry alone does not activate them. */
+  confluenceCharters?: ConfluenceCharter[];
   /** Optional living-place clue currently followed in the shared tide tracker. */
   followedPlaceIdentityId?: PlaceIdentityId;
+  /** Optional three-form clue currently followed in the shared tide tracker. */
+  followedConfluenceId?: ConfluenceId;
   /** Whether the player has seen or dismissed the optional Second Tide introduction. */
   placeIntroductionSeen?: boolean;
   /** Existing towns and players who skip the guide should not see it again. */
@@ -50,7 +56,30 @@ export type PlaceIdentityId =
   | 'makers-walk'
   | 'roof-village'
   | 'high-harbor'
-  | 'lantern-square';
+  | 'lantern-square'
+  | 'ferry-quarter'
+  | 'tidepool-cloister'
+  | 'story-court'
+  | 'windloom-quarter'
+  | 'bell-steps'
+  | 'messengers-row'
+  | 'star-garden'
+  | 'kite-steps';
+
+export type ConfluenceId =
+  | 'grand-exchange'
+  | 'tide-sanctuary'
+  | 'house-of-hands'
+  | 'festival-crown'
+  | 'celestial-beacon'
+  | 'banner-guild'
+  | 'archive-tower';
+
+export type ConfluenceCharter = Readonly<{
+  id: ConfluenceId;
+  x: number;
+  z: number;
+}>;
 
 export type JournalIllustration =
   | 'foundation' | 'rain' | 'garden' | 'arch' | 'bridge' | 'tower'
@@ -95,6 +124,8 @@ export type BusinessSave = {
   openedAt: number;
   employeeIds?: string[];
   visitCount?: number;
+  /** The living place that first drew this trade here. Kept as neighborhood history. */
+  placeIdentityId?: PlaceIdentityId;
 };
 
 export type CitizenAgeGroup = 'child' | 'adult' | 'elder';

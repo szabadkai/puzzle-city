@@ -1,5 +1,5 @@
 import type { BusinessSave, BusinessType, CraftGood, CraftingSave, CitizenSave } from './types';
-import type { FormationOccurrence } from './formations.ts';
+import { FORMATION_BATCH_BONUS, type FormationOccurrence } from './formations.ts';
 import { placeBusinessAffinity } from './place-identities.ts';
 
 type Ingredient = Partial<Record<CraftGood, number>>;
@@ -8,6 +8,8 @@ type CraftRecipe = {
   id: string;
   producer?: BusinessType;
   profession?: string;
+  /** This raw material can only enter town aboard a merchant vessel. */
+  imported?: boolean;
   inputs: Ingredient;
   output: CraftGood;
   amount?: number;
@@ -24,9 +26,16 @@ export type CraftDelivery = {
   toCellKey: string;
 };
 
+export type CraftArrival = {
+  good: CraftGood;
+  amount: number;
+  atCellKey: string;
+};
+
 export type CraftingUpdate = {
   changed: boolean;
   delivery?: CraftDelivery;
+  arrival?: CraftArrival;
   milestone?: string;
 };
 
@@ -45,22 +54,22 @@ const RECIPES: readonly CraftRecipe[] = [
     milestone: 'Fresh harbor herbs have entered the town’s kitchens.',
   },
   {
-    id: 'grain-landing', producer: 'inn', inputs: {}, output: 'grain', amount: 2, deliveryTo: ['mill'],
+    id: 'grain-landing', imported: true, inputs: {}, output: 'grain', amount: 2, deliveryTo: ['mill'],
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 8 && hour < 17,
     milestone: 'The merchant boat has landed its first sacks of grain.',
   },
   {
-    id: 'timber-landing', producer: 'inn', inputs: {}, output: 'timber', amount: 2, deliveryTo: ['workshop', 'shipyard'],
+    id: 'timber-landing', imported: true, inputs: {}, output: 'timber', amount: 2, deliveryTo: ['workshop', 'shipyard'],
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 8 && hour < 17,
     milestone: 'Straight harbor timber has been carried ashore.',
   },
   {
-    id: 'clay-landing', producer: 'inn', inputs: {}, output: 'clay', amount: 2, deliveryTo: ['pottery'],
+    id: 'clay-landing', imported: true, inputs: {}, output: 'clay', amount: 2, deliveryTo: ['pottery'],
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 8 && hour < 17,
     milestone: 'The pottery has received its first river clay.',
   },
   {
-    id: 'fiber-landing', producer: 'inn', inputs: {}, output: 'fiber', amount: 2, deliveryTo: ['weaver'],
+    id: 'fiber-landing', imported: true, inputs: {}, output: 'fiber', amount: 2, deliveryTo: ['weaver'],
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 8 && hour < 17,
     milestone: 'Bundles of fiber have arrived for the loom.',
   },
@@ -144,6 +153,7 @@ export class CraftingSystem {
     discoveries: readonly string[],
     absoluteHours: number,
     formations: readonly FormationOccurrence[] = [],
+    importSourceCellKey?: string,
   ): CraftingUpdate {
     if (absoluteHours - this.lastProducedAt < PRODUCTION_INTERVAL) return { changed: false };
     const hour = ((absoluteHours % 24) + 24) % 24;
@@ -155,18 +165,19 @@ export class CraftingSystem {
       const worker = recipe.profession ? citizens.find((citizen) => citizen.occupation === recipe.profession) : undefined;
       if (recipe.producer && !producer) continue;
       if (recipe.profession && !worker) continue;
+      if (recipe.imported && !importSourceCellKey) continue;
       if (recipe.discoveries?.some((id) => !discovered.has(id))) continue;
       if (recipe.activeAt && !recipe.activeAt(hour)) continue;
       if ((this.goods[recipe.output] ?? 0) >= CAPACITY) continue;
       if (!this.hasIngredients(recipe.inputs)) continue;
 
       const baseAmount = recipe.amount ?? 1;
-      const sourceKey = worker?.homeKey ?? producer?.cellKey;
+      const sourceKey = recipe.imported ? importSourceCellKey : worker?.homeKey ?? producer?.cellKey;
       const [sourceX, sourceZ] = sourceKey?.split(',').map(Number) ?? [];
       const affinity = producer && Number.isFinite(sourceX) && Number.isFinite(sourceZ)
         ? placeBusinessAffinity(producer.type, { x: sourceX!, z: sourceZ! }, formations)
         : { score: 0 };
-      const amount = baseAmount + (affinity.identity ? 2 : affinity.score > 0 ? 1 : 0);
+      const amount = baseAmount + (affinity.identity ? 2 : affinity.score > 0 ? FORMATION_BATCH_BONUS : 0);
 
       this.consume(recipe.inputs);
       this.goods[recipe.output] = Math.min(CAPACITY, (this.goods[recipe.output] ?? 0) + amount);
@@ -179,12 +190,15 @@ export class CraftingSystem {
       const delivery = sourceKey && destination && sourceKey !== destination.cellKey
         ? { good: recipe.output, amount, fromCellKey: sourceKey, toCellKey: destination.cellKey }
         : undefined;
+      const arrival = recipe.imported && sourceKey
+        ? { good: recipe.output, amount, atCellKey: sourceKey }
+        : undefined;
       const milestone = first
         ? `${recipe.milestone}${affinity.identity
           ? ` The ${affinity.identity.title.toLowerCase()} makes it a generous batch.`
           : affinity.formation ? ` The nearby ${affinity.formation.title.toLowerCase()} makes it a fuller batch.` : ''}`
         : undefined;
-      return { changed: true, delivery, milestone };
+      return { changed: true, delivery, arrival, milestone };
     }
     // Do not spin on a blocked economy every frame. A quarter-hour retry keeps
     // newly supplied chains responsive without turning shortages into pressure.
@@ -235,6 +249,14 @@ export class CraftingSystem {
   completedCount() { return this.completedRecipes.size; }
 
   recipeCount() { return RECIPES.length; }
+
+  goodsSnapshot() { return { ...this.goods }; }
+
+  shipHarborGoods(capacity = 4) {
+    const shipped = Math.min(Math.max(0, capacity), this.goods['harbor-goods'] ?? 0);
+    if (shipped > 0) this.goods['harbor-goods'] = (this.goods['harbor-goods'] ?? 0) - shipped;
+    return shipped;
+  }
 
   serialize(): CraftingSave {
     return {

@@ -42,7 +42,7 @@ function isPng(bytes: Uint8Array) {
 function isSavedTown(value: unknown): value is SavedTown {
   if (!value || typeof value !== 'object') return false;
   const town = value as Partial<SavedTown>;
-  const validVersion = Number.isInteger(town.version) && Number(town.version) >= 1 && Number(town.version) <= 7;
+  const validVersion = town.version === 10;
   const validCells = Array.isArray(town.cells) && town.cells.length <= 1024 && town.cells.every((cell) =>
     cell && typeof cell === 'object'
     && Number.isFinite(cell.x) && Number.isFinite(cell.z)

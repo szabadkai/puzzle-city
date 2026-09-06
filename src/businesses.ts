@@ -2,6 +2,7 @@ import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type Citize
 import { hash, pick } from './random';
 import {
   detectFormations,
+  FORMATION_OPENING_ADVANCE,
   type FormationOccurrence,
 } from './formations.ts';
 import { placeBusinessAffinity, placeOpeningPopulation } from './place-identities.ts';
@@ -268,7 +269,13 @@ export class BusinessSystem {
       .filter((citizen) => cells.has(citizen.homeKey) && !occupiedCells.has(citizen.homeKey) && !occupiedOwners.has(citizen.id))
       .map((citizen) => ({ citizen, cell: cells.get(citizen.homeKey)! }))
       .filter(({ cell }) => recipe.type !== 'inn' || cell.height >= 2)
-      .filter(({ cell }) => citizens.length >= recipe.population || placeBusinessAffinity(recipe.type, cell, formations).score > 0)
+      .filter(({ cell }) => {
+        if (citizens.length >= recipe.population) return true;
+        const affinity = placeBusinessAffinity(recipe.type, cell, formations);
+        if (affinity.identity) return citizens.length >= Math.max(2, recipe.population - 3);
+        if (affinity.formation) return citizens.length >= Math.max(2, recipe.population - FORMATION_OPENING_ADVANCE);
+        return false;
+      })
       .sort((a, b) => {
         const reserveA = !hasInn && recipe.type !== 'inn' && a.cell.height >= 2 ? -50 : 0;
         const reserveB = !hasInn && recipe.type !== 'inn' && b.cell.height >= 2 ? -50 : 0;
@@ -283,6 +290,7 @@ export class BusinessSystem {
       });
     const chosen = candidates[0];
     if (!chosen) return null;
+    const placeAffinity = placeBusinessAffinity(recipe.type, chosen.cell, formations);
     const name = pick(recipe.names, hash(this.seed, chosen.cell.x, chosen.cell.z, 1200 + recipe.population));
     const business: BusinessSave = {
       id: `business-${recipe.type}-${chosen.cell.x}-${chosen.cell.z}`,
@@ -293,6 +301,7 @@ export class BusinessSystem {
       openedAt: absoluteHours,
       employeeIds: [],
       visitCount: 0,
+      placeIdentityId: placeAffinity.identity?.id,
     };
     for (const existing of this.businesses) existing.employeeIds = (existing.employeeIds ?? []).filter((id) => id !== chosen.citizen.id);
     this.businesses.push(business);

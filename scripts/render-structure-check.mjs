@@ -10,9 +10,21 @@ const context = {
   strokeRect() {},
   fillText() {},
   clearRect() {},
+  save() {},
+  restore() {},
+  beginPath() {},
+  moveTo() {},
+  lineTo() {},
+  closePath() {},
+  stroke() {},
+  fill() {},
+  arc() {},
+  ellipse() {},
   set fillStyle(_value) {},
   set strokeStyle(_value) {},
   set lineWidth(_value) {},
+  set lineCap(_value) {},
+  set lineJoin(_value) {},
   set font(_value) {},
   set textAlign(_value) {},
   set textBaseline(_value) {},
@@ -23,18 +35,33 @@ globalThis.document = {
   },
 };
 
+const facadeClaimsConflict = (a, b) => {
+  if (a.direction !== b.direction) return false;
+  const horizontalOverlap = a.bounds.sideMin < b.bounds.sideMax + .04 && a.bounds.sideMax > b.bounds.sideMin - .04;
+  const verticalOverlap = a.bounds.yMin < b.bounds.yMax + .04 && a.bounds.yMax > b.bounds.yMin - .04;
+  if (!horizontalOverlap || !verticalOverlap) return false;
+  if (a.layer === 'opening' && b.layer === 'opening') return false;
+  if ((a.layer === 'opening' && b.layer === 'composition') || (a.layer === 'composition' && b.layer === 'opening')) return false;
+  return true;
+};
+
 const server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'error' });
 
 try {
   const { CityRenderer } = await server.ssrLoadModule('/src/city.ts');
   const { CitizenSystem, NavGraph } = await server.ssrLoadModule('/src/citizens.ts');
+  const { CONFLUENCE_BY_ID } = await server.ssrLoadModule('/src/confluences.ts');
+  const { createWorldSnapshot, DISCOVERY_EVENTS, evaluateCondition, resolveFocus } = await server.ssrLoadModule('/src/grow.ts');
   const { HarborAmbience } = await server.ssrLoadModule('/src/harbor.ts');
   const { hash } = await server.ssrLoadModule('/src/random.ts');
   const { hasWaterStairs } = await server.ssrLoadModule('/src/water.ts');
+  const { facadeDirectionAt } = await server.ssrLoadModule('/src/topology.ts');
   const { walkableSteppedTerrace } = await server.ssrLoadModule('/src/architecture.ts');
   const {
     CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_WALK_Y, QUAY_PATH_OFFSET,
-    TERRACE_STEP_COUNT, terraceStepOutward, terraceStepWalkY,
+    STOREFRONT_APRON_CENTER, STOREFRONT_APRON_DEPTH, STOREFRONT_CAT_OUTWARD,
+    TERRACE_STEP_COUNT, TERRACE_TREAD_CLEARANCE, roofWalkY,
+    terraceStepOutward, terraceStepWalkY, terraceTreadTopY,
   } = await server.ssrLoadModule('/src/spatial.ts');
 
   const seed = 42;
@@ -84,15 +111,32 @@ try {
   const discoveries = [
     'lantern-finale', 'tower-bell', 'birds-nest', 'clock-tower',
     'rooftop-gardens', 'festival-ribbons', 'rare-tree', 'gulls-return',
-    'silver-shoal', 'quay-crabs', 'harbor-cats', 'garden-butterflies',
-    'blossom-tide', 'evening-chorus',
+    'fishing-boat', 'silver-shoal', 'quay-crabs', 'harbor-cats', 'garden-butterflies',
+    'blossom-tide', 'blossom-evening', 'shared-supper', 'evening-chorus', 'ferry-route',
   ];
+
+  const finaleEvent = DISCOVERY_EVENTS.find((event) => event.id === 'lantern-finale');
+  const finaleCondition = JSON.stringify(finaleEvent?.condition);
+  for (const requirement of ['blossom-evening', 'shared-supper', 'evening-chorus', 'clock-tower', 'ferry-route', 'lantern-square']) {
+    if (!finaleCondition.includes(requirement)) throw new Error(`The lantern finale no longer requires ${requirement}.`);
+  }
 
   const city = new CityRenderer(seed);
   city.load(cells, 240);
   city.setBusinesses(businesses);
   city.setDiscoveryState(discoveries);
   city.update(1, 240);
+  const earnedLanterns = city.root.getObjectByName('earned-harbor-lanterns');
+  const lanternTargets = earnedLanterns?.children.filter((child) => child.userData.harborLanternId) ?? [];
+  if (lanternTargets.length !== 5) throw new Error(`The town rendered ${lanternTargets.length} of five earned harbor lanterns.`);
+  if (city.memoryFromObject(lanternTargets[0])?.ageLabel !== 'One of five harbor lanterns') {
+    throw new Error('Earned harbor lanterns cannot explain their meaning in Observe mode.');
+  }
+  earnedLanterns.updateWorldMatrix(true, true);
+  const lanternPosition = lanternTargets[0].getWorldPosition(new THREE.Vector3());
+  const lanternRay = new THREE.Raycaster(lanternPosition.clone().add(new THREE.Vector3(0, 0, 2)), new THREE.Vector3(0, 0, -1));
+  if (!lanternRay.intersectObject(lanternTargets[0]).length) throw new Error('Observe mode cannot ray-pick an earned harbor lantern.');
+  if (!earnedLanterns?.getObjectByName('earned-harbor-lantern-batch')) throw new Error('Earned lantern visuals were not consolidated into one draw batch.');
   const vegetationPlots = [...city.root.children].filter((group) => group.userData.vegetationPlotKind);
   if (!vegetationPlots.length) throw new Error('Exposed houses did not produce any deterministic vegetation plots.');
   if (!vegetationPlots.some((group) => group.userData.vegetationStage > 0)) throw new Error('Established vegetation plots did not advance with town time.');
@@ -100,6 +144,55 @@ try {
     .flatMap((group) => (group.userData.architecturalTrees ?? []).map((tree) => tree.habitat));
   if (!architecturalTreeHabitats.includes('rooftop')) throw new Error('Dense flat roofs did not produce compact rooftop trees.');
   if (city.signAtlas.tiles.size < businessTypes.length) throw new Error('The shared sign atlas did not receive every business sign.');
+  const pictogramTiles = [...city.signAtlas.tiles.keys()].filter((key) => key.startsWith('pictogram-'));
+  if (pictogramTiles.length !== businessTypes.length) throw new Error(`The sign atlas received ${pictogramTiles.length} of ${businessTypes.length} business pictograms.`);
+  const renderedShopfronts = new Set(city.root.children.map((group) => group.userData.businessFacade).filter(Boolean));
+  const missingShopfronts = businessTypes.filter((type) => !renderedShopfronts.has(type));
+  if (missingShopfronts.length) throw new Error(`Businesses are missing distinct shopfronts: ${missingShopfronts.join(', ')}.`);
+  for (const shop of city.root.children.filter((group) => group.userData.businessFacade)) {
+    const direction = shop.userData.businessApronDirection;
+    if ((shop.userData.domesticGroundFacadeDirections ?? []).includes(direction)) {
+      throw new Error(`${shop.userData.businessFacade} retained a domestic ground façade beneath its shopfront.`);
+    }
+  }
+  for (const group of city.root.children) {
+    const claims = group.userData.facadeDecorationClaims ?? [];
+    for (let first = 0; first < claims.length; first++) for (let second = first + 1; second < claims.length; second++) {
+      if (facadeClaimsConflict(claims[first], claims[second])) {
+        throw new Error(`${claims[first].kind} overlaps ${claims[second].kind} in the façade occupancy map.`);
+      }
+    }
+  }
+  const recessedPosters = city.root.children.filter((group) => group.userData.businessFacade && group.userData.businessPosterOutward < 1.8);
+  if (recessedPosters.length) throw new Error('Business pictograms are recessed behind storefront decorations.');
+
+  // Exercise the collision planner with isolated two-storey homes, where the
+  // old generator could independently add a balcony, festival pennants, and
+  // wall equipment to the same upper façade.
+  const collisionCells = Array.from({ length: 9 }, (_, index) => ({
+    x: -8 + index * 2, z: -8, height: 2, color: index % 6,
+    placedAt: 0, foundedAt: 0, renovatedAt: 0,
+  }));
+  const collisionCity = new CityRenderer(seed);
+  collisionCity.load(collisionCells, 240);
+  collisionCity.setDiscoveryState(['festival-ribbons', 'lantern-finale']);
+  const collisionGroups = collisionCity.root.children.filter((group) => group.userData.cellX !== undefined);
+  if (!collisionGroups.some((group) => (group.userData.facadeDecorationRejections ?? [])
+    .some((rejection) => rejection.kind === 'festival-ribbons'))) {
+    throw new Error('The façade occupancy fixture did not reject any pennants competing with a balcony.');
+  }
+  if (!collisionGroups.some((group) => (group.userData.facadeDecorationClaims ?? [])
+    .some((claim) => claim.kind.startsWith('air-conditioner-')))) {
+    throw new Error('The façade occupancy fixture did not find a safe alternate slot for any wall equipment.');
+  }
+  for (const group of collisionGroups) {
+    const claims = group.userData.facadeDecorationClaims ?? [];
+    for (let first = 0; first < claims.length; first++) for (let second = first + 1; second < claims.length; second++) {
+      if (facadeClaimsConflict(claims[first], claims[second])) {
+        throw new Error(`${claims[first].kind} overlaps ${claims[second].kind} in the stress-test façade.`);
+      }
+    }
+  }
   const staticBatches = city.root.getObjectByName('town-static-batches').children;
   const vertexBatchMaterials = new Set();
   for (const batch of staticBatches) {
@@ -118,6 +211,17 @@ try {
   const ambience = new HarborAmbience(seed, new THREE.PerspectiveCamera(), cells);
   ambience.setTown(cells, businesses, citizens, city.matureTreeAnchors(240));
   ambience.setDiscoveryState(discoveries);
+  const floatingLanterns = ambience.root.getObjectByName('floating-finale-lanterns');
+  const fireworks = ambience.root.getObjectByName('finale-fireworks');
+  if (!floatingLanterns?.visible || fireworks?.visible) throw new Error('A completed finale did not keep only its quiet water-lantern aftermath.');
+  ambience.startLanternFinale();
+  if (floatingLanterns.visible || fireworks.visible) throw new Error('The finale began before the five town lanterns had answered.');
+  ambience.setLanternFinaleStage('water');
+  if (!floatingLanterns.visible || fireworks.visible) throw new Error('The water-lantern beat displayed the wrong finale effects.');
+  ambience.setLanternFinaleStage('fireworks');
+  if (!floatingLanterns.visible || !fireworks.visible) throw new Error('The firework beat did not retain the floating lanterns.');
+  ambience.setLanternFinaleStage('complete');
+  if (!floatingLanterns.visible || fireworks.visible) throw new Error('The finale did not settle back into its persistent quiet state.');
   const behavioralPlaces = [
     {
       id: 'canal-market', x: 1, z: 0, formations: ['narrow-canal', 'arcade-row'],
@@ -127,13 +231,124 @@ try {
       id: 'high-harbor', x: 1, z: 0, formations: ['high-bridge', 'lookout-tower'],
       members: [{ id: 'high-bridge', x: 2, z: 0 }, { id: 'lookout-tower', x: 0, z: 0 }],
     },
+    {
+      id: 'ferry-quarter', x: 1, z: 0, formations: ['narrow-canal', 'harbor-plaza'],
+      members: [{ id: 'narrow-canal', x: 0, z: 0 }, { id: 'harbor-plaza', x: 2, z: 0 }],
+    },
   ];
   ambience.setPlaceIdentities(behavioralPlaces);
   if (!ambience.activeFleet().includes('merchant boat')) throw new Error('The Canal Market did not attract merchant traffic.');
   if (!ambience.activeFleet().includes('signal boat')) throw new Error('The Signal Beacon did not call its survey boat.');
+  if (!ambience.activeFleet().includes('ferry')) throw new Error('The Ferry Quarter did not establish its passenger route.');
+  for (const vesselName of ['rowboat', 'fishing-boat', 'merchant-boat', 'signal-boat', 'ferry']) {
+    const vessel = ambience.root.getObjectByName(vesselName);
+    let crew = 0;
+    vessel?.traverse((object) => { if (object.userData.vesselCrew) crew += 1; });
+    if (!vessel || crew < 1) throw new Error(`${vesselName} does not have a visible crew model.`);
+  }
+  const visiblePassengers = ['ferry-passenger-1', 'ferry-passenger-2', 'ferry-passenger-3']
+    .filter((name) => ambience.root.getObjectByName(name)?.visible).length;
+  if (visiblePassengers !== 2) throw new Error(`The ferry represented ${visiblePassengers} travelers for a sixteen-person town instead of 2.`);
+  if (!ambience.root.getObjectByName('fishing-deckhand')?.visible) throw new Error('The second fisher did not join the boat after the crew grew.');
+  ambience.setCargoState({ fish: 5, grain: 2, timber: 1, clay: 3, fiber: 2, 'harbor-goods': 1 });
+  const visibleCatch = ['catch-fish-1', 'catch-fish-2', 'catch-fish-3']
+    .filter((name) => ambience.root.getObjectByName(name)?.visible).length;
+  if (visibleCatch !== 3) throw new Error(`Five stored fish produced ${visibleCatch} visible catch pieces instead of 3.`);
+  for (const good of ['grain', 'timber', 'clay', 'fiber', 'harbor-goods']) {
+    if (!ambience.root.getObjectByName(`merchant-cargo-${good}`)?.visible) throw new Error(`The merchant boat did not show its ${good} cargo.`);
+  }
+  const importCell = { x: 0, z: 0, height: 1, color: 0, placedAt: 0, foundedAt: 0, renovatedAt: 0 };
+  const importAmbience = new HarborAmbience(seed, new THREE.PerspectiveCamera(), [importCell]);
+  importAmbience.setTown([importCell], businesses, citizens, []);
+  importAmbience.setDiscoveryState(['merchant-arrival']);
+  importAmbience.setCargoState({ grain: 2, timber: 1, clay: 3, fiber: 2 });
+  const importYard = importAmbience.root.getObjectByName('dockside-import-yard');
+  if (!importYard?.visible || importAmbience.importSourceCellKey() !== '0,0') throw new Error('Merchant imports did not establish a visible dockside storage yard.');
+  const importLighter = importYard.getObjectByName('import-lighter');
+  if (!importLighter || importLighter.position.z < 1.15 || importLighter.userData.mooringClearance < .12) {
+    throw new Error('The import lighter was not parked clear of the dock platform.');
+  }
+  importYard.updateMatrixWorld(true);
+  const importPlatform = importYard.getObjectByName('import-platform');
+  if (!importPlatform || new THREE.Box3().setFromObject(importPlatform).intersectsBox(new THREE.Box3().setFromObject(importLighter))) {
+    throw new Error('The import lighter geometry overlaps the dock platform.');
+  }
+  if (importYard.getObjectByName('import-hoist')) throw new Error('The obsolete cargo hoist remained in the people-led import yard.');
+  for (const worker of ['import-lighter-deckhand', 'import-dock-porter']) {
+    if (!importYard.getObjectByName(worker)?.userData.importWorker) throw new Error(`The import yard is missing ${worker}.`);
+  }
+  for (const good of ['grain', 'timber', 'clay', 'fiber']) {
+    if (!importYard.getObjectByName(`import-store-${good}-1`)?.visible) throw new Error(`Dockside storage did not show its ${good} stock.`);
+  }
+  if (importAmbience.memoryFromObject(importYard, 240, 0)?.title !== 'Dockside import yard') {
+    throw new Error('The import yard cannot explain imported materials in Observe mode.');
+  }
+  importAmbience.beginImport('clay');
+  importAmbience.update(1, .8, 12, 240, 0, 0);
+  const unloadingClay = importYard.getObjectByName('unloading-clay');
+  if (!unloadingClay?.visible || unloadingClay.position.z >= 1.12 || unloadingClay.position.y <= .29) {
+    throw new Error('Incoming clay did not visibly travel from the lighter into dockside storage.');
+  }
+  importYard.updateMatrixWorld(true);
+  const deckhandPosition = importYard.getObjectByName('import-lighter-deckhand').getWorldPosition(new THREE.Vector3());
+  const cargoPosition = unloadingClay.getWorldPosition(new THREE.Vector3());
+  if (cargoPosition.y > .5 || cargoPosition.distanceTo(deckhandPosition) > .55) {
+    throw new Error('Incoming cargo floated away from the deckhand carrying it ashore.');
+  }
+  importAmbience.update(2.5, .8, 12, 240, 0, 0);
+  importYard.updateMatrixWorld(true);
+  const porterPosition = importYard.getObjectByName('import-dock-porter').getWorldPosition(new THREE.Vector3());
+  if (unloadingClay.getWorldPosition(cargoPosition).distanceTo(porterPosition) > .55) {
+    throw new Error('The dock porter did not take over the incoming cargo on the platform.');
+  }
+  const merchantJourney = importAmbience.root.getObjectByName('merchant-boat');
+  const outsidePosition = merchantJourney.position.clone();
+  if (importAmbience.activeImportSourceCellKey()) throw new Error('Imports were accepted before the merchant reached the dock.');
+  importAmbience.setCargoState({ grain: 2, timber: 1, clay: 3, fiber: 2, 'harbor-goods': 3 });
+  importAmbience.update(30, .8, 12, 240, 0, 0);
+  if (importAmbience.activeImportSourceCellKey() !== '0,0' || merchantJourney.position.distanceTo(outsidePosition) < 8) {
+    throw new Error('The merchant boat did not travel from open water to the import dock.');
+  }
+  importAmbience.update(50, .8, 12, 240, 0, 0);
+  if (!merchantJourney.visible || !merchantJourney.getObjectByName('merchant-cargo-harbor-goods')?.visible) {
+    throw new Error('The departing merchant did not visibly carry finished harbor goods.');
+  }
+  const departure = importAmbience.update(69, .8, 12, 240, 0, 0);
+  if (!departure.exportDeparture || merchantJourney.visible) throw new Error('The merchant boat did not complete its outbound trip beyond the town.');
   const signalBoat = ambience.root.getObjectByName('signal-boat');
   if (!signalBoat || ambience.memoryFromObject(signalBoat, 240, 0)?.title !== 'Beacon survey boat') {
     throw new Error('The Signal Beacon survey boat cannot be inspected.');
+  }
+  const fishingBoat = ambience.root.getObjectByName('fishing-boat');
+  const castNet = fishingBoat?.getObjectByName('cast-net');
+  const castNetCanopy = fishingBoat?.getObjectByName('cast-net-canopy');
+  const castNetHandline = fishingBoat?.getObjectByName('cast-net-handline');
+  const castNetSplash = fishingBoat?.getObjectByName('cast-net-splash');
+  const castingArm = fishingBoat?.getObjectByName('casting-arm');
+  if (!fishingBoat || !castNet || !castNetCanopy || !castNetHandline || !castNetSplash || !castingArm) {
+    throw new Error('The fishing boat is missing part of its staged net-casting rig.');
+  }
+  const fishingActor = ambience.fleet.find((boat) => boat.kind === 'fishing boat');
+  if (!fishingActor) throw new Error('The fishing boat has no fleet actor.');
+  fishingActor.eligible = true;
+  ambience.update(10.85, .8, 6, 240, 0, 0);
+  if (!castNet.visible || castNet.position.y < .6 || castNet.position.z < .7 || castingArm.rotation.x > 1) {
+    throw new Error('The skipper and net did not follow the airborne casting pose.');
+  }
+  ambience.update(13.25, .8, 6, 240, 0, 0);
+  const handlinePositions = castNetHandline.geometry?.getAttribute('position');
+  if (!castNet.visible || !castNetSplash.visible || !handlinePositions || handlinePositions.getZ(2) < 1) {
+    throw new Error('The cast net did not open over the water with a connected handline and splash.');
+  }
+  ambience.update(3.76, .8, 6, 240, 0, 0);
+  if (!castNet.visible || castNet.position.z > 1.1 || castNet.scale.x > .65) {
+    throw new Error('The cast net did not gather back toward the boat during retrieval.');
+  }
+  ambience.update(6.4, .8, 6, 240, 0, 0);
+  if (castNet.visible || castNetHandline.visible) throw new Error('The fishing rig stayed visible during the rest between casts.');
+  ambience.setCargoState({});
+  if (ambience.root.getObjectByName('catch-fish-1')?.visible || ambience.root.getObjectByName('merchant-cargo-grain')?.visible) {
+    throw new Error('Consumed cargo remained visible on the fleet.');
   }
   ambience.setPlaceIdentities([]);
   if (ambience.activeFleet().includes('signal boat')) throw new Error('The survey boat remained after the Signal Beacon disappeared.');
@@ -150,6 +365,53 @@ try {
   if (!catBatch || ambience.wildlifeMemoryFromObject(catBatch, 240, 0)?.kind !== 'cat') {
     throw new Error('Visible harbor cats cannot be inspected in Observe mode.');
   }
+
+  // An isolated cell makes the old fauna rule choose north, while this seed's
+  // storefront deliberately faces east. Cats must share the storefront choice
+  // and remain in the supported apron lane instead of orbiting into the counter.
+  const catCell = { x: -3, z: 0, height: 1, color: 0, placedAt: 0, foundedAt: 0, renovatedAt: 0 };
+  const catCells = [catCell];
+  const catCellMap = new Map([[`${catCell.x},${catCell.z}`, catCell]]);
+  const catBusiness = {
+    id: 'cat-fishmonger', type: 'fishmonger', cellKey: `${catCell.x},${catCell.z}`,
+    ownerId: 'cat-keeper', name: 'Cat Quay Fish', openedAt: 1, employeeIds: [], visitCount: 20,
+  };
+  const catFacadeDirection = facadeDirectionAt(catCell.x, catCell.z, catCellMap, seed);
+  if (catFacadeDirection !== 1) throw new Error('The cat storefront regression fixture no longer faces east.');
+  const catCity = new CityRenderer(seed);
+  catCity.load(catCells, 240);
+  catCity.setBusinesses([catBusiness]);
+  const catFacade = catCity.root.children.find((group) => group.userData.businessFacade === 'fishmonger');
+  if (catFacade?.userData.businessApronDirection !== catFacadeDirection) {
+    throw new Error('The fishmonger apron did not use the shared façade direction.');
+  }
+  const catAmbience = new HarborAmbience(seed, new THREE.PerspectiveCamera(), catCells);
+  catAmbience.setTown(catCells, [catBusiness], [], []);
+  catAmbience.setDiscoveryState(['harbor-cats']);
+  catAmbience.update(2, .8, 10, 240, 0, 0);
+  const storefrontCatBatch = catAmbience.root.getObjectByName('harbor-cats')?.children
+    .find((object) => object instanceof THREE.InstancedMesh && object.count === 3);
+  if (!storefrontCatBatch) throw new Error('The fishmonger did not receive its three storefront cat slots.');
+  const apronOuterEdge = STOREFRONT_APRON_CENTER + STOREFRONT_APRON_DEPTH / 2;
+  const assertCatsOnApron = (phase) => {
+    for (let index = 0; index < storefrontCatBatch.count; index++) {
+      const matrix = new THREE.Matrix4();
+      storefrontCatBatch.getMatrixAt(index, matrix);
+      const position = new THREE.Vector3().setFromMatrixPosition(matrix);
+      const outward = position.x - catCell.x * CELL_SIZE;
+      const lateral = Math.abs(position.z - catCell.z * CELL_SIZE);
+      if (Math.abs(outward - STOREFRONT_CAT_OUTWARD) > .02) {
+        throw new Error(`Storefront cat ${index} left the safe façade lane during ${phase} (${outward.toFixed(2)}).`);
+      }
+      if (lateral > 1 || outward >= apronOuterEdge) {
+        throw new Error(`Storefront cat ${index} left the supporting shop apron during ${phase}.`);
+      }
+    }
+  };
+  assertCatsOnApron('routine movement');
+  catAmbience.wildlifeEffect('gather', 'cats', { x: catCell.x, z: catCell.z });
+  catAmbience.update(3, .8, 10, 240, 0, 0);
+  assertCatsOnApron('a gathering event');
   const fishBatch = ambience.root.getObjectByName('fish-schools')?.children
     .flatMap((school) => school.children)
     .find((object) => object instanceof THREE.InstancedMesh && object.count > 0)
@@ -251,6 +513,7 @@ try {
       id: 'canal-market', title: 'Market Barge', target: [0, 0], cells: [
         { x: 0, z: -1, height: 2, color: 0, placedAt: 0 },
         { x: 0, z: 1, height: 2, color: 0, placedAt: 0 },
+        { x: -1, z: 0, height: 2, color: 0, placedAt: 0 },
       ], members: [
         { id: 'sea-arch', x: 0, z: 0, direction: 0 },
         { id: 'arcade-row', x: 1, z: 0, direction: 1 },
@@ -297,6 +560,84 @@ try {
         { id: 'rooftop-pavilion', x: 3, z: 0 },
       ],
     },
+    {
+      id: 'ferry-quarter', title: 'Ferry House', target: [0, 0], cells: [
+        { x: 0, z: -1, height: 2, color: 0, placedAt: 0 },
+        { x: 0, z: 1, height: 2, color: 0, placedAt: 0 },
+      ], members: [
+        { id: 'sea-arch', x: 0, z: 0 },
+        { id: 'harbor-plaza', x: 3, z: 0 },
+      ],
+    },
+    {
+      id: 'tidepool-cloister', title: 'Tide Cistern', target: [0, 0], cells: [
+        { x: 0, z: -1, height: 2, color: 1, placedAt: 0 },
+        { x: -1, z: 0, height: 2, color: 1, placedAt: 0 },
+        { x: 1, z: 0, height: 2, color: 1, placedAt: 0 },
+      ], members: [
+        { id: 'sea-arch', x: 3, z: 0 },
+        { id: 'cloister-garden', x: 0, z: 0 },
+      ],
+    },
+    {
+      id: 'story-court', title: 'Reading Loggia', target: [0, 0], cells: [
+        { x: 0, z: -1, height: 1, color: 2, placedAt: 0 },
+        { x: -1, z: 0, height: 1, color: 2, placedAt: 0 },
+        { x: 1, z: 0, height: 1, color: 2, placedAt: 0 },
+      ], members: [
+        { id: 'arcade-row', x: 3, z: 0 },
+        { id: 'courtyard-garden', x: 0, z: 0 },
+      ],
+    },
+    {
+      id: 'windloom-quarter', title: 'Wind Loom', target: [0, 0], cells: [
+        { x: 0, z: 0, height: 3, color: 3, placedAt: 0 },
+        { x: 1, z: 0, height: 3, color: 3, placedAt: 0 },
+        { x: 0, z: 1, height: 3, color: 3, placedAt: 0 },
+        { x: 1, z: 1, height: 3, color: 3, placedAt: 0 },
+      ], members: [
+        { id: 'terraced-garden', x: 3, z: 0 },
+        { id: 'rooftop-pavilion', x: 0, z: 0 },
+      ],
+    },
+    {
+      id: 'bell-steps', title: 'Tide Bell', target: [0, 0], cells: [
+        { x: 0, z: 0, height: 3, color: 4, placedAt: 0 },
+      ], members: [
+        { id: 'lantern-stair', x: 0, z: 0 },
+        { id: 'harbor-plaza', x: 3, z: 0 },
+      ],
+    },
+    {
+      id: 'messengers-row', title: 'Post House', target: [0, 0], cells: [
+        { x: 0, z: 0, height: 2, color: 5, placedAt: 0 },
+      ], members: [
+        { id: 'arcade-row', x: 0, z: 0 },
+        { id: 'lookout-tower', x: 3, z: 0 },
+      ],
+    },
+    {
+      id: 'star-garden', title: 'Star Dial', target: [0, 0], cells: [
+        { x: 0, z: 0, height: 4, color: 6, placedAt: 0 },
+        { x: 1, z: 0, height: 4, color: 6, placedAt: 0 },
+        { x: 0, z: 1, height: 4, color: 6, placedAt: 0 },
+        { x: 1, z: 1, height: 4, color: 6, placedAt: 0 },
+      ], members: [
+        { id: 'hanging-roof-garden', x: 0, z: 0 },
+        { id: 'lookout-tower', x: 3, z: 0 },
+      ],
+    },
+    {
+      id: 'kite-steps', title: 'Kite Loft', target: [0, 0], cells: [
+        { x: 0, z: 0, height: 2, color: 7, placedAt: 0 },
+        { x: 1, z: 0, height: 2, color: 7, placedAt: 0 },
+        { x: 0, z: 1, height: 2, color: 7, placedAt: 0 },
+        { x: 1, z: 1, height: 2, color: 7, placedAt: 0 },
+      ], members: [
+        { id: 'stepped-terrace', x: 3, z: 0 },
+        { id: 'rooftop-court', x: 0, z: 0 },
+      ],
+    },
   ];
   for (const landmarkCase of landmarkCases) {
     const landmarkCity = new CityRenderer(seed);
@@ -319,6 +660,38 @@ try {
     if (landmarkCase.id === 'garden-commons' && !landmarkCity.root.children.some((child) => child.userData.seedHouseTrays)) {
       throw new Error('The Seed House did not spread planting trays to nearby homes.');
     }
+    if (landmarkCase.id === 'canal-market') {
+      const barge = animatedLandmark.getObjectByName('market-barge-model');
+      const hasShapedHull = barge?.children.some((child) => child instanceof THREE.Mesh && child.geometry.type === 'ExtrudeGeometry');
+      const representedPeople = barge?.children.filter((child) => child.userData.bargePerson).length ?? 0;
+      if (!barge || !hasShapedHull || barge.children.length < 18 || representedPeople !== 2) {
+        throw new Error('The Market Barge is missing its shaped hull, striped canopy, or working-deck details.');
+      }
+      const marketFrontages = landmarkCity.root.children
+        .filter((child) => child.userData.canalMarketFrontDirection !== undefined);
+      if (!marketFrontages.length) throw new Error('The Canal Market did not establish a coherent neighboring frontage.');
+      for (const frontage of marketFrontages) {
+        const direction = frontage.userData.canalMarketFrontDirection;
+        const cellX = frontage.userData.cellX;
+        const cellZ = frontage.userData.cellZ;
+        const [frontDx, frontDz] = [[0, -1], [1, 0], [0, 1], [-1, 0]][direction];
+        const before = Math.abs(cellX - targetX) + Math.abs(cellZ - targetZ);
+        const after = Math.abs(cellX + frontDx - targetX) + Math.abs(cellZ + frontDz - targetZ);
+        if (after >= before) throw new Error('A Canal Market frontage does not face toward its barge.');
+        if ((frontage.userData.residentialAwningDirections ?? []).includes(direction)) {
+          throw new Error('A residential awning remained beneath a Canal Market frontage.');
+        }
+        if ((frontage.userData.arcadeDirections ?? []).includes(direction)) {
+          throw new Error('An arcade arch remained on the Canal Market frontage.');
+        }
+        if ((frontage.userData.domesticGroundFacadeDirections ?? []).includes(direction)) {
+          throw new Error('A domestic ground façade remained beneath a Canal Market frontage.');
+        }
+      }
+      if (landmarkCity.signAtlas.tiles.size !== 0) {
+        throw new Error('A non-business hanging sign still makes a Canal Market home look like a shop.');
+      }
+    }
     if (landmarkCase.id === 'makers-walk' && !landmarkCity.root.children.some((child) => child.userData.guildKilnMarks)) {
       throw new Error('The Guild Kiln did not spread fired craft marks to nearby façades.');
     }
@@ -327,6 +700,97 @@ try {
       throw new Error(`${landmarkCase.title} remained after its source relationship was removed.`);
     }
   }
+
+  const courtyardCells = [
+    { x: 0, z: -1, height: 2, color: 1, placedAt: 0 },
+    { x: -1, z: 0, height: 2, color: 1, placedAt: 0 },
+    { x: 1, z: 0, height: 2, color: 1, placedAt: 0 },
+  ];
+  const roofCells = [
+    { x: 0, z: 0, height: 3, color: 3, placedAt: 0 },
+    { x: 1, z: 0, height: 3, color: 3, placedAt: 0 },
+    { x: 0, z: 1, height: 3, color: 3, placedAt: 0 },
+    { x: 1, z: 1, height: 3, color: 3, placedAt: 0 },
+  ];
+  const confluenceCases = [
+    { id: 'grand-exchange', target: [0, 0], cells: [{ x: -1, z: 0, height: 2, color: 0, placedAt: 0 }, { x: 1, z: 0, height: 2, color: 0, placedAt: 0 }], members: [{ id: 'narrow-canal', x: 0, z: 0 }, { id: 'arcade-row', x: 2, z: 0 }, { id: 'harbor-plaza', x: 1, z: 2 }] },
+    { id: 'tide-sanctuary', target: [0, 0], cells: courtyardCells, members: [{ id: 'sea-arch', x: 2, z: 0 }, { id: 'cloister-garden', x: 0, z: 0 }, { id: 'terraced-garden', x: 1, z: 2 }] },
+    { id: 'house-of-hands', target: [0, 0], cells: courtyardCells, members: [{ id: 'arcade-row', x: 2, z: 0 }, { id: 'courtyard-garden', x: 0, z: 0 }, { id: 'stepped-terrace', x: 1, z: 2 }] },
+    { id: 'festival-crown', target: [0, 0], cells: plazaCells, members: [{ id: 'lantern-stair', x: 2, z: 0 }, { id: 'harbor-plaza', x: 0, z: 0 }, { id: 'rooftop-pavilion', x: 1, z: 2 }] },
+    { id: 'celestial-beacon', target: [0, 0], cells: [{ x: 0, z: 0, height: 4, color: 4, placedAt: 0 }], members: [{ id: 'high-bridge', x: 2, z: 0 }, { id: 'lookout-tower', x: 0, z: 0 }, { id: 'hanging-roof-garden', x: 1, z: 2 }] },
+    { id: 'banner-guild', target: [0, 0], cells: roofCells, members: [{ id: 'arcade-row', x: 2, z: 0 }, { id: 'terraced-garden', x: 1, z: 2 }, { id: 'rooftop-pavilion', x: 0, z: 0 }] },
+    { id: 'archive-tower', target: [0, 0], cells: [{ x: 0, z: 0, height: 4, color: 5, placedAt: 0 }], members: [{ id: 'arcade-row', x: 2, z: 0 }, { id: 'courtyard-garden', x: 1, z: 2 }, { id: 'lookout-tower', x: 0, z: 0 }] },
+  ];
+  for (const confluenceCase of confluenceCases) {
+    const definition = CONFLUENCE_BY_ID.get(confluenceCase.id);
+    const confluenceCity = new CityRenderer(seed);
+    confluenceCity.load(confluenceCase.cells, 0);
+    confluenceCity.setConfluences([{
+      id: confluenceCase.id,
+      x: Math.round(confluenceCase.members.reduce((sum, member) => sum + member.x, 0) / 3),
+      z: Math.round(confluenceCase.members.reduce((sum, member) => sum + member.z, 0) / 3),
+      formations: confluenceCase.members.map((member) => member.id),
+      members: confluenceCase.members,
+    }], true);
+    const [targetX, targetZ] = confluenceCase.target;
+    const landmarkGroup = confluenceCity.root.children.find((child) => child.userData.cellX === targetX && child.userData.cellZ === targetZ);
+    if (!landmarkGroup || landmarkGroup.scale.y >= 1 || landmarkGroup.userData.confluenceLandmark !== definition.landmark.kind) {
+      throw new Error(`${definition.landmark.title} did not arrive as a distinct animated confluence landmark.`);
+    }
+    if (confluenceCase.id === 'archive-tower') {
+      if (!landmarkGroup.userData.archiveReplacesTowerRoof || landmarkGroup.userData.hasPitchedTowerRoof) {
+        throw new Error('The Harbor Archive did not replace the lookout’s intersecting pitched roof.');
+      }
+      if (landmarkGroup.userData.archiveWindowCount !== 8) {
+        throw new Error('The Harbor Archive is missing its four paired record-room window bays.');
+      }
+    }
+    const memory = confluenceCity.memoryAt(targetX, targetZ, 0);
+    if (memory?.kind !== 'landmark' || memory.title !== definition.landmark.title || !memory.note.includes('all three formations')) {
+      throw new Error(`${definition.landmark.title} is not inspectable as a three-formation landmark.`);
+    }
+    confluenceCity.setConfluences([]);
+    if (confluenceCity.memoryAt(targetX, targetZ, 0)?.title === definition.landmark.title) {
+      throw new Error(`${definition.landmark.title} remained after its three-formation relationship was removed.`);
+    }
+  }
+  const clockCity = new CityRenderer(seed);
+  clockCity.load([{ x: 0, z: 0, height: 4, color: 2, placedAt: 0 }], 0);
+  clockCity.setDiscoveryState(['clock-tower']);
+  const clockGroup = clockCity.root.children.find((child) => child.userData.cellX === 0 && child.userData.cellZ === 0);
+  if (!clockGroup || clockGroup.userData.clockFaceCount !== 4) {
+    throw new Error('An isolated clocktower does not mount a complete dial on every exposed face.');
+  }
+  if (clockGroup.userData.balconyDirection !== undefined) {
+    throw new Error('A balcony still intersects an authored clock face.');
+  }
+  const confluenceEvents = DISCOVERY_EVENTS.filter((event) => event.id.startsWith('confluence-'));
+  if (confluenceEvents.length !== 7 || confluenceEvents.some((event) => event.repeatable || event.effects.some((effect) => effect.kind === 'business'))) {
+    throw new Error('Confluences do not each have one non-economic, one-time journal story.');
+  }
+  const exchangeFixture = confluenceCases[0];
+  const exchangeSnapshot = createWorldSnapshot({
+    cells: exchangeFixture.cells,
+    citizens: [],
+    businesses: [],
+    seed,
+    day: 4,
+    timeOfDay: 12,
+    priorDiscoveries: [],
+    confluences: [{
+      id: exchangeFixture.id,
+      x: 1,
+      z: 1,
+      formations: exchangeFixture.members.map((member) => member.id),
+      members: exchangeFixture.members,
+    }],
+    confluenceVisitorCounts: new Map([[exchangeFixture.id, 2]]),
+  });
+  if (!evaluateCondition({ kind: 'confluence', confluenceId: exchangeFixture.id, atLeast: 1, visitorsAtLeast: 2 }, exchangeSnapshot)) {
+    throw new Error('GROW did not recognize resident use of an active confluence.');
+  }
+  const exchangeFocus = resolveFocus({ kind: 'confluence', confluenceId: exchangeFixture.id }, exchangeSnapshot);
+  if (exchangeFocus?.x !== 0 || exchangeFocus.z !== 0) throw new Error('A Confluence story did not focus its grand landmark socket.');
 
   const singleCell = { x: 0, z: 0, height: 1, color: 0, placedAt: 0 };
   const singleGraph = new NavGraph(new Map([['0,0', singleCell]]), seed);
@@ -395,6 +859,11 @@ try {
     throw new Error('A valid roof-to-roof terrace stair was not rendered.');
   }
   const terraceTopY = .38 + terraceCells[0].height * FLOOR_HEIGHT;
+  const lowerLandingY = roofWalkY(terraceCells[1].height);
+  const lowestTreadY = terraceTreadTopY(terraceTopY, TERRACE_STEP_COUNT - 1);
+  if (Math.abs(lowestTreadY - lowerLandingY - TERRACE_TREAD_CLEARANCE) > .001) {
+    throw new Error('Terrace tread clearance no longer separates the lowest step from the lower roof deck.');
+  }
   for (let index = 0; index < TERRACE_STEP_COUNT; index++) {
     const expectedZ = -terraceStepOutward(index);
     const expectedY = terraceStepWalkY(terraceTopY, index);

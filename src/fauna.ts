@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { hash } from './random';
-import { findPlazaAnchors } from './topology';
+import { facadeDirectionAt, findPlazaAnchors } from './topology';
 import { CARDINALS, type BusinessSave, type Cell, keyOf } from './types';
 import { analyzeWaterTopology, createShorelineRoute, WORLD_CELL_SIZE } from './water';
 import { ageInHours, catColonyAt, describeAge, KITTEN_GROWTH_HOURS, KITTEN_INTERVAL_HOURS } from './memory';
-import { FLOOR_HEIGHT } from './spatial';
+import { FLOOR_HEIGHT, STOREFRONT_CAT_OUTWARD, STOREFRONT_CAT_Y } from './spatial';
 
 export type WildlifeKind = 'gulls' | 'fish' | 'crabs' | 'cats' | 'butterflies';
 export type WildlifeAction = 'reveal' | 'gather' | 'scatter';
@@ -52,7 +52,56 @@ type MarineVisitor = {
   scheduleOffset: number;
 };
 
+type SchoolFishActor = {
+  model: THREE.Group;
+  tail: THREE.Group;
+  baseX: number;
+  baseZ: number;
+  phase: number;
+};
+
+type FishSchoolActor = {
+  model: THREE.Group;
+  fish: SchoolFishActor[];
+  phase: number;
+};
+
+type TurtleActor = {
+  model: THREE.Group;
+  frontFlippers: readonly [THREE.Group, THREE.Group];
+  phase: number;
+};
+
+type AmbientBirdActor = {
+  model: THREE.Group;
+  leftWing: THREE.Group;
+  rightWing: THREE.Group;
+  baseX: number;
+  baseY: number;
+  baseZ: number;
+  phase: number;
+};
+
+type CatActor = {
+  model: THREE.Group;
+  torso: THREE.Group;
+  head: THREE.Group;
+  tail: THREE.Group;
+  phase: number;
+};
+
+type CatAnchor = {
+  position: THREE.Vector3;
+  /** Unit cardinal pointing away from a storefront, absent in open gardens. */
+  outward?: readonly [number, number];
+  cluster: string;
+};
+
 const CELL = WORLD_CELL_SIZE;
+const INSTANCE_WHITE = new THREE.Color(0xffffff);
+const TURTLE_VISIT_CYCLE = 108;
+const TURTLE_VISIT_DURATION = 18;
+const TURTLE_SCALE = .72;
 
 function parseCellKey(cellKey: string) {
   const [x, z] = cellKey.split(',').map(Number);
@@ -121,11 +170,12 @@ export class FaunaSystem {
   private readonly turtleRoot = new THREE.Group();
   private readonly butterflyRoot = new THREE.Group();
   private readonly marineRoot = new THREE.Group();
+  private readonly ambientBirdActors: AmbientBirdActor[] = [];
   private readonly gulls: GullActor[] = [];
-  private readonly fishSchools: THREE.Group[] = [];
+  private readonly fishSchools: FishSchoolActor[] = [];
   private readonly crabs: THREE.Group[] = [];
-  private readonly cats: THREE.Group[] = [];
-  private readonly turtles: THREE.Group[] = [];
+  private readonly cats: CatActor[] = [];
+  private readonly turtles: TurtleActor[] = [];
   private readonly butterflies: THREE.Group[] = [];
   private readonly marineVisitors: Record<'whale' | 'dolphins' | 'squids' | 'tuna', MarineVisitor>;
   private readonly actorInstanceBatches: ActorInstanceBatch[] = [];
@@ -138,7 +188,7 @@ export class FaunaSystem {
   private waterAnchors: THREE.Vector3[] = [];
   private gardenAnchors: THREE.Vector3[] = [];
   private towerAnchors: THREE.Vector3[] = [];
-  private catAnchors: THREE.Vector3[] = [];
+  private catAnchors: CatAnchor[] = [];
   private matureTreeAnchors: THREE.Vector3[] = [];
   private catCapacity = 0;
   private visibleCatCount = 0;
@@ -153,7 +203,7 @@ export class FaunaSystem {
   private feedUntil = 0;
   private feedFocus: THREE.Vector3 | null = null;
   private catGatherUntil = 0;
-  private catGatherFocus: THREE.Vector3 | null = null;
+  private catGatherCluster: string | null = null;
 
   constructor(private readonly seed: number) {
     this.root.name = 'fauna';
@@ -203,16 +253,39 @@ export class FaunaSystem {
       return this.exteriorAnchor(cell.x, cell.z, occupied, .66);
     });
     this.gardenAnchors = [...courtyardAnchors, ...plazaAnchors, ...flowerAnchors];
+    const storefrontCatAnchors = (business: BusinessSave, sideSlots: readonly number[]) => {
+      const cell = parseCellKey(business.cellKey);
+      const direction = facadeDirectionAt(cell.x, cell.z, occupied, this.seed);
+      const [dx, dz] = CARDINALS[direction];
+      const lateralX = dz;
+      const lateralZ = -dx;
+      return sideSlots.map((side): CatAnchor => ({
+        position: new THREE.Vector3(
+          cell.x * CELL + dx * STOREFRONT_CAT_OUTWARD + lateralX * side,
+          STOREFRONT_CAT_Y,
+          cell.z * CELL + dz * STOREFRONT_CAT_OUTWARD + lateralZ * side,
+        ),
+        outward: [dx, dz],
+        cluster: `business:${business.id}`,
+      }));
+    };
     const workingCatAnchors = this.businesses
       .filter((business) => business.type === 'fishmonger' || business.type === 'inn')
-      .map((business) => {
-        const cell = parseCellKey(business.cellKey);
-        return this.exteriorAnchor(cell.x, cell.z, occupied, .62);
-      });
-    this.catAnchors = [...workingCatAnchors, ...this.gardenAnchors.slice(0, 2).map((anchor) => anchor.clone().setY(.28))];
-    const fishmongers = this.businesses.filter((business) => business.type === 'fishmonger').length;
-    const inns = this.businesses.filter((business) => business.type === 'inn').length;
-    const nextCapacity = Math.min(this.cats.length, fishmongers * 3 + inns * 2 + Math.min(2, this.gardenAnchors.length));
+      .flatMap((business) => storefrontCatAnchors(business, business.type === 'fishmonger' ? [-.64, 0, .64] : [-.4, .4]));
+    const openGardenCatAnchors = [...courtyardAnchors, ...plazaAnchors].map((anchor, index): CatAnchor => ({
+      position: anchor.clone().setY(.28),
+      cluster: `garden:${index}`,
+    }));
+    const flowerCatAnchors = this.businesses
+      .filter((business) => business.type === 'flower-shop')
+      .flatMap((business) => storefrontCatAnchors(business, [0]));
+    const gardenCatAnchors = [...openGardenCatAnchors, ...flowerCatAnchors].slice(0, 2);
+    this.catAnchors = [...workingCatAnchors, ...gardenCatAnchors];
+    if (this.catGatherCluster && !this.catAnchors.some((anchor) => anchor.cluster === this.catGatherCluster)) {
+      this.catGatherCluster = null;
+      this.catGatherUntil = 0;
+    }
+    const nextCapacity = Math.min(this.cats.length, this.catAnchors.length);
     if (nextCapacity < this.visibleCatCount) {
       this.migratingCatCount = this.visibleCatCount - nextCapacity;
       this.migrationStartedAt = this.lastRealTime;
@@ -256,9 +329,10 @@ export class FaunaSystem {
       this.feedUntil = this.lastRealTime + 9;
     }
     if (action === 'gather' && animal === 'cats') {
-      this.catGatherFocus = worldFocus && this.catAnchors.length
-        ? this.catAnchors.reduce((nearest, anchor) => anchor.distanceToSquared(worldFocus) < nearest.distanceToSquared(worldFocus) ? anchor : nearest).clone()
-        : this.catAnchors[0]?.clone() ?? this.townCenter.clone();
+      const nearest = worldFocus && this.catAnchors.length
+        ? this.catAnchors.reduce((best, anchor) => anchor.position.distanceToSquared(worldFocus) < best.position.distanceToSquared(worldFocus) ? anchor : best)
+        : this.catAnchors[0];
+      this.catGatherCluster = nearest?.cluster ?? null;
       this.catGatherUntil = this.lastRealTime + 9;
     }
   }
@@ -296,7 +370,9 @@ export class FaunaSystem {
       catCapacity: this.catCapacity,
       kittens: this.kittenCount,
       migratingCats: timeBefore(this.lastRealTime, this.migrationUntil) ? this.migratingCatCount : 0,
-      turtles: this.turtleRoot.visible && this.waterAnchors.length ? this.turtles.length : 0,
+      turtles: this.turtleRoot.visible && this.waterAnchors.length
+        ? this.turtles.filter((turtle) => turtle.model.visible).length
+        : 0,
       butterflies: this.butterflyRoot.visible ? Math.min(this.butterflies.length, Math.max(0, this.gardenAnchors.length * 3)) : 0,
       whale: this.marineRoot.visible && this.marineVisitors.whale.model.visible ? 1 : 0,
       dolphins: this.marineRoot.visible && this.marineVisitors.dolphins.model.visible ? 3 : 0,
@@ -376,19 +452,19 @@ export class FaunaSystem {
         note: 'It moves sideways between barnacled stones and dropped scraps.',
       },
       turtle: {
-        title: 'Harbor turtle', ageLabel: 'Gentle tide-wanderer',
-        detail: 'A sea turtle paddles near the surface, its shell catching the light.',
-        note: 'It favors the quiet water beside the growing town.',
+        title: 'Harbor turtle', ageLabel: 'Rare tide-wanderer',
+        detail: 'A solitary sea turtle briefly rises from the deeper harbor water.',
+        note: 'A sighting is uncommon; before long it paddles quietly back out to sea.',
       },
       whale: {
         title: 'Passing whale', ageLabel: 'Deep-water visitor',
-        detail: 'A whale follows the outer shoreline at an unhurried pace.',
-        note: 'Its route keeps to the deep water beyond the harbor walls.',
+        detail: 'A broad-backed whale surfaces with a slow tail stroke and a misty breath.',
+        note: 'Its long pectoral fins and wide flukes carry it through the deep water beyond the harbor walls.',
       },
       dolphins: {
         title: 'Dolphin pod', ageLabel: 'Playful visitors',
-        detail: 'Three dolphins travel together, rising through the harbor swell.',
-        note: 'Their looping path carries them safely around the town’s shoreline.',
+        detail: 'Three dolphins arc through the swell in a loose traveling pod.',
+        note: 'The leader rises first and the others follow around the town’s shoreline.',
       },
       squids: {
         title: 'Drifting jellyfish', ageLabel: 'Below the surface',
@@ -405,8 +481,7 @@ export class FaunaSystem {
   }
 
   private exteriorAnchor(x: number, z: number, occupied: ReadonlyMap<string, Cell>, distance: number) {
-    const direction = CARDINALS.findIndex(([dx, dz]) => !occupied.has(keyOf(x + dx, z + dz)));
-    const [dx, dz] = CARDINALS[direction < 0 ? 0 : direction];
+    const [dx, dz] = CARDINALS[facadeDirectionAt(x, z, occupied, this.seed)];
     return new THREE.Vector3(x * CELL + dx * CELL * distance, .28, z * CELL + dz * CELL * distance);
   }
 
@@ -505,14 +580,16 @@ export class FaunaSystem {
       const visibleActorSources = (batch.mesh.userData.visibleActorSources ??= []) as THREE.Group[];
       visibleActorSources.length = 0;
       for (const source of batch.sources) {
-        if (!source.visible || !source.parent?.visible) continue;
+        if (!this.actorSourceVisible(source, batch.parent)) continue;
         source.updateWorldMatrix(true, false);
         visibleActorSources.push(source);
         batch.mesh.setMatrixAt(count++, this.instanceMatrix.multiplyMatrices(this.inverseParentMatrix, source.matrixWorld));
+        batch.mesh.setColorAt(count - 1, source.userData.instanceColor instanceof THREE.Color ? source.userData.instanceColor : INSTANCE_WHITE);
       }
       batch.mesh.count = count;
       if (count) {
         batch.mesh.instanceMatrix.needsUpdate = true;
+        if (batch.mesh.instanceColor) batch.mesh.instanceColor.needsUpdate = true;
         // Moving instances invalidate Three's lazily cached raycast bounds.
         batch.mesh.boundingBox = null;
         batch.mesh.boundingSphere = null;
@@ -520,16 +597,78 @@ export class FaunaSystem {
     }
   }
 
-  private createAmbientBirds() {
-    const material = new THREE.MeshBasicMaterial({ color: 0x47676b, side: THREE.DoubleSide });
-    for (let index = 0; index < 6; index++) {
-      const bird = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(-.18, 0, 0), new THREE.Vector3(0, -.06, 0), new THREE.Vector3(.18, 0, 0),
-      ]), material);
-      bird.position.set(index * .6, Math.sin(index) * .34, Math.cos(index * 2) * .5);
-      this.ambientBirds.add(bird);
+  private actorSourceVisible(source: THREE.Object3D, parent: THREE.Object3D) {
+    for (let current: THREE.Object3D | null = source; current && current !== parent; current = current.parent) {
+      if (!current.visible) return false;
     }
-    consolidateActor(this.ambientBirds);
+    return true;
+  }
+
+  private createAmbientBirds() {
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const colors = [0xb8c6c1, 0xd8d9ce, 0x9fafaD].map((color) => new THREE.Color(color));
+    const wingGeometry = new THREE.BufferGeometry();
+    wingGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, .065,
+      .36, .008, -.015,
+      .255, 0, -.135,
+      .035, 0, -.075,
+    ], 3));
+    wingGeometry.setIndex([0, 1, 2, 0, 2, 3]);
+    wingGeometry.computeVertexNormals();
+    const formation = [
+      [0, .12, .26],
+      [-.58, 0, -.28], [.58, -.05, -.28],
+      [-1.04, -.12, -.78], [1.04, -.08, -.78],
+      [0, -.2, -1.08],
+    ] as const;
+    const bodies: THREE.Group[] = [];
+    const wings: THREE.Group[] = [];
+    for (let index = 0; index < 6; index++) {
+      const model = new THREE.Group();
+      const color = colors[index % colors.length];
+      model.userData.instanceColor = color;
+      const body = new THREE.Mesh(new THREE.SphereGeometry(.09, 8, 5), material);
+      body.scale.set(.72, .58, 1.55);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(.06, 7, 5), material);
+      head.position.set(0, .018, .145);
+      const beak = new THREE.Mesh(new THREE.ConeGeometry(.023, .1, 5), material);
+      beak.rotation.x = Math.PI / 2;
+      beak.position.set(0, .01, .225);
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(.065, .14, 4), material);
+      tail.rotation.x = -Math.PI / 2;
+      tail.position.set(0, 0, -.165);
+      model.add(body, head, beak, tail);
+      const birdWings: THREE.Group[] = [];
+      for (const side of [-1, 1]) {
+        const wing = new THREE.Group();
+        wing.name = 'ambient-bird-wing';
+        wing.scale.x = side;
+        wing.position.set(0, .015, .015);
+        wing.userData.instanceColor = color;
+        wing.add(new THREE.Mesh(wingGeometry, material));
+        model.add(wing);
+        birdWings.push(wing);
+        wings.push(wing);
+      }
+      consolidateActor(model);
+      const [baseX, baseY, baseZ] = formation[index];
+      model.position.set(baseX, baseY, baseZ);
+      model.scale.setScalar(.88 + index % 3 * .035);
+      this.ambientBirds.add(model);
+      bodies.push(model);
+      this.ambientBirdActors.push({
+        model,
+        leftWing: birdWings[0],
+        rightWing: birdWings[1],
+        baseX,
+        baseY,
+        baseZ,
+        phase: hash(this.seed, index, 0, 2197) * Math.PI * 2,
+      });
+    }
+    this.createActorInstances(this.ambientBirds, bodies);
+    this.createActorInstances(this.ambientBirds, wings);
   }
 
   private createGulls() {
@@ -560,28 +699,61 @@ export class FaunaSystem {
   }
 
   private createFishSchools() {
-    const materials = [0x315f65, 0x5b7c78, 0x8b7553].map((color) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .58, depthWrite: false }));
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .64, depthWrite: false, side: THREE.DoubleSide });
+    const colors = [0x315f65, 0x5b7c78, 0x9a8058].map((color) => new THREE.Color(color));
+    const tailGeometry = new THREE.BufferGeometry();
+    tailGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      .015, 0, 0,
+      -.15, .105, 0,
+      -.105, 0, 0,
+      -.15, -.105, 0,
+    ], 3));
+    tailGeometry.setIndex([0, 1, 2, 0, 2, 3]);
+    tailGeometry.computeVertexNormals();
     const fishActors: THREE.Group[] = [];
+    const tailActors: THREE.Group[] = [];
     for (let schoolIndex = 0; schoolIndex < 3; schoolIndex++) {
       const school = new THREE.Group();
+      const schoolFish: SchoolFishActor[] = [];
       for (let fishIndex = 0; fishIndex < 5; fishIndex++) {
         const fish = new THREE.Group();
         fish.userData.wildlifeObservation = 'fish' satisfies ObservableWildlife;
-        const body = new THREE.Mesh(new THREE.SphereGeometry(.09, 7, 5), materials[(schoolIndex + fishIndex) % materials.length]);
-        body.scale.set(1.8, .45, .68);
-        const tail = new THREE.Mesh(new THREE.ConeGeometry(.08, .16, 3), materials[(schoolIndex + fishIndex) % materials.length]);
-        tail.rotation.z = -Math.PI / 2;
-        tail.position.x = -.2;
-        fish.add(body, tail);
+        const color = colors[(schoolIndex + fishIndex) % colors.length];
+        fish.userData.instanceColor = color;
+        const body = new THREE.Mesh(new THREE.SphereGeometry(.09, 9, 6), material);
+        body.scale.set(1.9, .5, .76);
+        const dorsal = new THREE.Mesh(new THREE.ConeGeometry(.043, .13, 3), material);
+        dorsal.position.set(-.015, .09, 0);
+        dorsal.scale.z = .42;
+        const tail = new THREE.Group();
+        tail.name = 'fish-tail';
+        tail.position.x = -.17;
+        tail.userData.instanceColor = color;
+        tail.userData.wildlifeObservation = 'fish' satisfies ObservableWildlife;
+        tail.add(new THREE.Mesh(tailGeometry, material));
+        fish.add(body, dorsal, tail);
+        for (const side of [-1, 1]) {
+          const fin = new THREE.Mesh(new THREE.ConeGeometry(.025, .12, 3), material);
+          fin.position.set(.025, -.025, side * .065);
+          fin.rotation.x = side * Math.PI / 2;
+          fin.rotation.z = -.35;
+          fish.add(fin);
+        }
         consolidateActor(fish);
-        fish.position.set((fishIndex - 2) * .25, 0, Math.sin(fishIndex * 2) * .18);
+        const baseX = (fishIndex - 2) * .23;
+        const baseZ = Math.sin(fishIndex * 2) * .18;
+        const phase = hash(this.seed, schoolIndex, fishIndex, 3321) * Math.PI * 2;
+        fish.position.set(baseX, 0, baseZ);
         school.add(fish);
         fishActors.push(fish);
+        tailActors.push(tail);
+        schoolFish.push({ model: fish, tail, baseX, baseZ, phase });
       }
       this.fishRoot.add(school);
-      this.fishSchools.push(school);
+      this.fishSchools.push({ model: school, fish: schoolFish, phase: hash(this.seed, schoolIndex, 0, 3320) * Math.PI * 2 });
     }
     this.createActorInstances(this.fishRoot, fishActors);
+    this.createActorInstances(this.fishRoot, tailActors);
   }
 
   private createCrabs() {
@@ -609,82 +781,200 @@ export class FaunaSystem {
   }
 
   private createCats() {
-    const coats = [0xc58b51, 0x4b4a4c, 0xe1c6a0].map((color) => new THREE.MeshStandardMaterial({ color, roughness: .94 }));
-    const markingMaterial = new THREE.MeshStandardMaterial({ color: 0xeee0c2, roughness: .96 });
+    const coatMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .94 });
+    const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .9 });
+    const coatColors = [0xc58b51, 0x4b4a4c, 0xe1c6a0].map((color) => new THREE.Color(color));
+    const faceColors = [0x49362e, 0x24292a, 0x665344].map((color) => new THREE.Color(color));
+    const torsos: THREE.Group[] = [];
+    const heads: THREE.Group[] = [];
+    const tails: THREE.Group[] = [];
+    const faces: THREE.Group[] = [];
     for (let index = 0; index < 12; index++) {
       // Later kittens deterministically inherit one of the founding coats.
       const family = index < 3 ? index : Math.floor(hash(this.seed, index, 0, 2840) * 3);
-      const coat = coats[family];
+      const coat = coatColors[family].clone();
+      coat.offsetHSL((hash(this.seed, index, family, 2842) - .5) * .018, 0, (hash(this.seed, index, family, 2843) - .5) * .07);
       const cat = new THREE.Group();
       cat.userData.catIndex = index;
       cat.userData.catFamily = family;
       cat.userData.wildlifeObservation = 'cat' satisfies ObservableWildlife;
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(.09, .25, 3, 7), coat);
+
+      const torso = new THREE.Group();
+      torso.name = 'cat-torso';
+      torso.userData.instanceColor = coat;
+      torso.userData.wildlifeObservation = 'cat' satisfies ObservableWildlife;
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(.085, .24, 3, 8), coatMaterial);
       body.rotation.z = Math.PI / 2;
-      body.position.y = .13;
-      const head = new THREE.Mesh(new THREE.SphereGeometry(.11, 8, 6), coat);
-      head.position.set(.2, .19, 0);
+      body.position.y = .145;
+      const haunch = new THREE.Mesh(new THREE.SphereGeometry(.115, 8, 6), coatMaterial);
+      haunch.scale.set(.95, 1.02, .86);
+      haunch.position.set(-.15, .13, 0);
+      const chest = new THREE.Mesh(new THREE.SphereGeometry(.095, 8, 6), coatMaterial);
+      chest.scale.set(.78, 1.08, .82);
+      chest.position.set(.135, .15, 0);
+      torso.add(body, haunch, chest);
+      for (const x of [-.13, .13]) for (const side of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(.024, .029, .14, 6), coatMaterial);
+        leg.position.set(x, .055, side * .064);
+        const paw = new THREE.Mesh(new THREE.SphereGeometry(.033, 6, 4), coatMaterial);
+        paw.scale.set(1.32, .48, .82);
+        paw.position.set(x + .015, -.012, side * .066);
+        torso.add(leg, paw);
+      }
+      consolidateActor(torso);
+
+      const head = new THREE.Group();
+      head.name = 'cat-head';
+      head.position.set(.225, .245, 0);
+      head.userData.instanceColor = coat;
+      head.userData.wildlifeObservation = 'cat' satisfies ObservableWildlife;
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(.105, 9, 6), coatMaterial);
+      skull.scale.set(.98, .94, .92);
+      head.add(skull);
       for (const z of [-.06, .06]) {
-        const ear = new THREE.Mesh(new THREE.ConeGeometry(.045, .11, 4), coat);
-        ear.position.set(.18, .3, z);
-        cat.add(ear);
+        const ear = new THREE.Mesh(new THREE.ConeGeometry(.044, .105, 4), coatMaterial);
+        ear.position.set(-.008, .105, z);
+        ear.rotation.z = -.08;
+        const muzzle = new THREE.Mesh(new THREE.SphereGeometry(.04, 7, 5), coatMaterial);
+        muzzle.scale.set(.8, .65, .72);
+        muzzle.position.set(.082, -.027, z * .56);
+        head.add(ear, muzzle);
       }
-      const tail = new THREE.Mesh(new THREE.TorusGeometry(.16, .025, 5, 10, Math.PI * 1.35), coat);
+      consolidateActor(head);
+
+      const face = new THREE.Group();
+      face.name = 'cat-face';
+      face.userData.instanceColor = faceColors[family];
+      face.userData.wildlifeObservation = 'cat' satisfies ObservableWildlife;
+      for (const side of [-1, 1]) {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(.013, 6, 4), faceMaterial);
+        eye.position.set(.088, .025, side * .056);
+        face.add(eye);
+      }
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(.012, 6, 4), faceMaterial);
+      nose.scale.set(.82, .7, 1);
+      nose.position.set(.116, -.028, 0);
+      face.add(nose);
+      consolidateActor(face);
+      head.add(face);
+
+      const tail = new THREE.Group();
       tail.name = 'cat-tail';
-      tail.rotation.x = Math.PI / 2;
-      tail.position.set(-.25, .18, 0);
-      cat.add(body, head, tail);
-      if (index >= 3 && hash(this.seed, index, family, 2841) > .42) {
-        const marking = new THREE.Mesh(new THREE.SphereGeometry(.061, 7, 5), markingMaterial);
-        marking.scale.set(1.15, .45, .8);
-        marking.position.set(.205, .215, .085);
-        cat.add(marking);
-      }
-      consolidateActor(cat);
+      tail.position.set(-.235, .14, 0);
+      tail.userData.instanceColor = coat;
+      tail.userData.wildlifeObservation = 'cat' satisfies ObservableWildlife;
+      const tailCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(-.105, .012, 0),
+        new THREE.Vector3(-.18, .095, .008),
+        new THREE.Vector3(-.145, .215, .018),
+        new THREE.Vector3(-.06, .275, .025),
+      ]);
+      tail.add(new THREE.Mesh(new THREE.TubeGeometry(tailCurve, 10, .022, 5, false), coatMaterial));
+
+      cat.add(torso, head, tail);
       cat.scale.setScalar(.9);
       this.catRoot.add(cat);
-      this.cats.push(cat);
+      torsos.push(torso);
+      heads.push(head);
+      tails.push(tail);
+      faces.push(face);
+      this.cats.push({ model: cat, torso, head, tail, phase: hash(this.seed, index, family, 2844) * Math.PI * 2 });
     }
-    this.createActorInstances(this.catRoot, this.cats);
+    this.createActorInstances(this.catRoot, torsos);
+    this.createActorInstances(this.catRoot, heads);
+    this.createActorInstances(this.catRoot, tails);
+    this.createActorInstances(this.catRoot, faces);
   }
 
   private createTurtles() {
     const shellMaterial = new THREE.MeshStandardMaterial({ color: 0x58725b, roughness: .9 });
-    const skin = new THREE.MeshStandardMaterial({ color: 0x78947b, roughness: .95 });
-    for (let index = 0; index < 4; index++) {
+    const skin = new THREE.MeshStandardMaterial({ color: 0x78947b, roughness: .95, side: THREE.DoubleSide });
+    const paddleShape = new THREE.Shape();
+    paddleShape.moveTo(-.045, 0);
+    paddleShape.lineTo(.05, 0);
+    paddleShape.lineTo(.092, .2);
+    paddleShape.lineTo(.052, .4);
+    paddleShape.lineTo(-.006, .53);
+    paddleShape.lineTo(-.066, .48);
+    paddleShape.lineTo(-.098, .24);
+    paddleShape.closePath();
+    const paddleGeometry = new THREE.ExtrudeGeometry(paddleShape, {
+      depth: .02,
+      bevelEnabled: true,
+      bevelSegments: 1,
+      bevelSize: .008,
+      bevelThickness: .006,
+      curveSegments: 1,
+    });
+    paddleGeometry.translate(0, 0, -.01);
+    paddleGeometry.rotateX(Math.PI / 2);
+    const frontFlipperActors: THREE.Group[] = [];
+    for (let index = 0; index < 1; index++) {
       const turtle = new THREE.Group();
       turtle.userData.wildlifeObservation = 'turtle' satisfies ObservableWildlife;
       const shell = new THREE.Mesh(new THREE.SphereGeometry(.22, 9, 6), shellMaterial);
       shell.scale.set(1.25, .34, .88);
+      const neck = new THREE.Mesh(new THREE.SphereGeometry(.075, 7, 5), skin);
+      neck.scale.set(1.45, .55, .7);
+      neck.position.set(.235, -.015, 0);
       const head = new THREE.Mesh(new THREE.SphereGeometry(.075, 7, 5), skin);
       head.scale.set(1.25, .72, .82);
-      head.position.x = .28;
-      turtle.add(shell, head);
-      for (const side of [-1, 1]) {
-        const frontFlipper = new THREE.Mesh(new THREE.SphereGeometry(.09, 6, 4), skin);
-        frontFlipper.scale.set(1.1, .18, .72);
-        frontFlipper.position.set(.08, -.015, side * .22);
-        frontFlipper.rotation.y = side * .38;
-        const backFlipper = frontFlipper.clone();
-        backFlipper.scale.set(.72, .15, .52);
-        backFlipper.position.set(-.18, -.02, side * .18);
-        backFlipper.rotation.y = -side * .48;
-        turtle.add(frontFlipper, backFlipper);
+      head.position.set(.34, -.01, 0);
+      turtle.add(shell, neck, head);
+      for (const x of [-.12, .02, .14]) {
+        const scute = new THREE.Mesh(new THREE.SphereGeometry(.09, 7, 5), shellMaterial);
+        scute.scale.set(.68, .18, .66);
+        scute.position.set(x, .073, 0);
+        turtle.add(scute);
       }
+      for (const side of [-1, 1]) {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(.014, 5, 4), shellMaterial);
+        eye.position.set(.398, .007, side * .047);
+        turtle.add(eye);
+      }
+      const frontFlippers: THREE.Group[] = [];
+      for (const side of [-1, 1] as const) {
+        const frontFlipper = new THREE.Group();
+        frontFlipper.name = 'turtle-front-paddle';
+        frontFlipper.userData.wildlifeObservation = 'turtle' satisfies ObservableWildlife;
+        frontFlipper.position.set(.09, -.012, side * .145);
+        frontFlipper.scale.z = side;
+        frontFlipper.rotation.y = -side * .18;
+        frontFlipper.add(new THREE.Mesh(paddleGeometry, skin));
+        turtle.add(frontFlipper);
+        frontFlipperActors.push(frontFlipper);
+        frontFlippers.push(frontFlipper);
+
+        const backFlipper = new THREE.Mesh(paddleGeometry.clone(), skin);
+        backFlipper.scale.set(.68, .72, side * .55);
+        backFlipper.position.set(-.17, -.02, side * .135);
+        backFlipper.rotation.y = -side * .52;
+        turtle.add(backFlipper);
+      }
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(.035, .12, 5), skin);
+      tail.rotation.z = Math.PI / 2;
+      tail.position.x = -.27;
+      turtle.add(tail);
       consolidateActor(turtle);
-      turtle.scale.setScalar(1.12 + index * .06);
+      turtle.scale.setScalar(TURTLE_SCALE);
       this.turtleRoot.add(turtle);
-      this.turtles.push(turtle);
+      this.turtles.push({
+        model: turtle,
+        frontFlippers: frontFlippers as [THREE.Group, THREE.Group],
+        phase: hash(this.seed, index, 0, 3612) * Math.PI * 2,
+      });
     }
-    this.createActorInstances(this.turtleRoot, this.turtles);
+    this.createActorInstances(this.turtleRoot, this.turtles.map((turtle) => turtle.model));
+    this.createActorInstances(this.turtleRoot, frontFlipperActors);
   }
 
   private createButterflies() {
     const colors = [0xe9ad42, 0x74a5a0, 0xd4737d];
-    const materials = colors.map((color) => new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
     for (let index = 0; index < 12; index++) {
       const butterfly = new THREE.Group();
-      const material = materials[index % materials.length];
+      butterfly.userData.instanceColor = new THREE.Color(colors[index % colors.length]);
       const left = new THREE.Mesh(new THREE.CircleGeometry(.07, 5, 0, Math.PI), material);
       const right = new THREE.Mesh(new THREE.CircleGeometry(.07, 5, 0, Math.PI), material);
       left.position.x = -.045;
@@ -739,38 +1029,108 @@ export class FaunaSystem {
     const blue = new THREE.MeshStandardMaterial({ color: 0x3d6871, roughness: .8 });
     const pale = new THREE.MeshStandardMaterial({ color: 0x91aaa5, roughness: .88 });
     const body = new THREE.Mesh(new THREE.SphereGeometry(.5, 12, 7), blue);
-    body.scale.set(2.4, .58, .72);
+    body.scale.set(2.55, .68, .82);
+    body.position.x = -.08;
     const belly = new THREE.Mesh(new THREE.SphereGeometry(.46, 10, 6), pale);
-    belly.scale.set(2.15, .3, .55);
-    belly.position.set(.08, -.22, 0);
-    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(.18, .48, 5), blue);
-    dorsal.position.set(-.18, .37, 0);
-    dorsal.rotation.z = -.18;
+    belly.scale.set(2.28, .34, .62);
+    belly.position.set(.08, -.245, 0);
+    const brow = new THREE.Mesh(new THREE.SphereGeometry(.34, 9, 6), blue);
+    brow.scale.set(1.45, .62, .94);
+    brow.position.set(.92, -.005, 0);
+    const rostrum = new THREE.Mesh(new THREE.SphereGeometry(.27, 9, 6), blue);
+    rostrum.scale.set(1.45, .42, .9);
+    rostrum.position.set(1.18, -.08, 0);
+    const jaw = new THREE.Mesh(new THREE.SphereGeometry(.25, 9, 5), pale);
+    jaw.scale.set(1.48, .34, .76);
+    jaw.position.set(1.12, -.22, 0);
+    const dorsalShape = new THREE.Shape();
+    dorsalShape.moveTo(-.2, 0);
+    dorsalShape.lineTo(.17, 0);
+    dorsalShape.quadraticCurveTo(.02, .13, -.05, .3);
+    dorsalShape.quadraticCurveTo(-.11, .27, -.2, 0);
+    dorsalShape.closePath();
+    const dorsalGeometry = new THREE.ExtrudeGeometry(dorsalShape, {
+      depth: .09, bevelEnabled: true, bevelSegments: 1, bevelSize: .012, bevelThickness: .01, curveSegments: 2,
+    });
+    dorsalGeometry.translate(0, 0, -.045);
+    const dorsal = new THREE.Mesh(dorsalGeometry, blue);
+    dorsal.position.set(-.18, .25, 0);
     for (const side of [-1, 1]) {
-      const fluke = new THREE.Mesh(new THREE.SphereGeometry(.28, 7, 5), blue);
-      fluke.scale.set(.95, .13, .62);
-      fluke.position.set(-1.28, .02, side * .2);
-      fluke.rotation.y = side * .42;
-      whale.add(fluke);
-      const fin = new THREE.Mesh(new THREE.ConeGeometry(.13, .62, 5), blue);
-      fin.scale.z = .48;
-      fin.position.set(.05, -.08, side * .38);
+      const fin = new THREE.Mesh(new THREE.ConeGeometry(.15, .98, 7), blue);
+      fin.scale.x = .72;
+      fin.position.set(.18, -.12, side * .43);
       fin.rotation.x = side * Math.PI / 2;
+      fin.rotation.y = -side * .5;
       whale.add(fin);
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(.025, 6, 4), pale);
+      eye.scale.set(1.2, .72, .55);
+      eye.position.set(.98, .075, side * .35);
+      whale.add(eye);
     }
+    for (let index = 0; index < 5; index++) {
+      const tubercle = new THREE.Mesh(new THREE.SphereGeometry(.025, 5, 4), blue);
+      tubercle.position.set(1.08 + index % 3 * .09, .13 - Math.floor(index / 3) * .025, (index % 2 ? -1 : 1) * (.06 + index * .018));
+      whale.add(tubercle);
+    }
+    for (const side of [-1, 1]) {
+      const blowhole = new THREE.Mesh(new THREE.SphereGeometry(.027, 6, 4), pale);
+      blowhole.scale.set(1.45, .28, .65);
+      blowhole.position.set(.93, .205, side * .04);
+      whale.add(blowhole);
+    }
+    const tail = new THREE.Group();
+    tail.name = 'whale-tail';
+    tail.position.x = -1.13;
+    const tailStock = new THREE.Mesh(new THREE.CylinderGeometry(.055, .18, .66, 8), blue);
+    tailStock.rotation.z = Math.PI / 2;
+    tailStock.position.x = -.26;
+    tail.add(tailStock);
+    const flukeShape = new THREE.Shape();
+    flukeShape.moveTo(-.13, 0);
+    flukeShape.lineTo(-.24, .1);
+    flukeShape.lineTo(-.34, .42);
+    flukeShape.lineTo(-.5, .59);
+    flukeShape.lineTo(-.62, .51);
+    flukeShape.lineTo(-.55, .25);
+    flukeShape.lineTo(-.37, .045);
+    flukeShape.lineTo(-.46, 0);
+    flukeShape.lineTo(-.37, -.045);
+    flukeShape.lineTo(-.55, -.25);
+    flukeShape.lineTo(-.62, -.51);
+    flukeShape.lineTo(-.5, -.59);
+    flukeShape.lineTo(-.34, -.42);
+    flukeShape.lineTo(-.24, -.1);
+    flukeShape.closePath();
+    const flukeGeometry = new THREE.ExtrudeGeometry(flukeShape, {
+      depth: .055,
+      bevelEnabled: true,
+      bevelSegments: 1,
+      bevelSize: .012,
+      bevelThickness: .01,
+      curveSegments: 1,
+    });
+    flukeGeometry.translate(0, 0, -.0275);
+    flukeGeometry.rotateX(Math.PI / 2);
+    tail.add(new THREE.Mesh(flukeGeometry, blue));
+    consolidateActor(tail);
     const spout = new THREE.Group();
     spout.name = 'whale-spout';
     const spray = new THREE.MeshBasicMaterial({ color: 0xc5e2dd, transparent: true, opacity: .72, depthWrite: false });
-    for (let index = 0; index < 4; index++) {
-      const drop = new THREE.Mesh(new THREE.SphereGeometry(.035 + index * .008, 5, 4), spray);
-      drop.position.set(index * .025, index * .13, (index % 2 ? -1 : 1) * index * .025);
+    for (let index = 0; index < 7; index++) {
+      const height = index * .115;
+      const spread = Math.max(0, index - 2) * .045;
+      const drop = new THREE.Mesh(new THREE.SphereGeometry(.028 + index * .005, 5, 4), spray);
+      drop.scale.set(.75, 1.35, .75);
+      drop.position.set(-index * .006, height, (index % 2 ? -1 : 1) * spread);
       spout.add(drop);
     }
-    spout.position.set(.86, .22, 0);
-    whale.add(body, belly, dorsal, spout);
-    consolidateActor(whale, new Set([spout]));
-    addPickSphere(whale, 1.15);
+    spout.position.set(.93, .215, 0);
+    consolidateActor(spout);
+    whale.add(body, belly, brow, rostrum, jaw, dorsal, tail, spout);
+    consolidateActor(whale);
+    addPickSphere(whale, 1.35);
     whale.userData.baseScale = 1;
+    whale.userData.tail = tail;
     return whale;
   }
 
@@ -778,34 +1138,123 @@ export class FaunaSystem {
     const pod = new THREE.Group();
     pod.name = 'dolphin-pod';
     pod.userData.wildlifeObservation = 'dolphins' satisfies ObservableWildlife;
-    const blue = new THREE.MeshStandardMaterial({ color: 0x56828a, roughness: .76 });
+    const blue = new THREE.MeshStandardMaterial({ color: 0x56828a, roughness: .76, side: THREE.DoubleSide });
     const pale = new THREE.MeshStandardMaterial({ color: 0xa8bbb2, roughness: .86 });
+    const detail = new THREE.MeshStandardMaterial({ color: 0x173d43, roughness: .82 });
     const dolphinActors: THREE.Group[] = [];
+    const dorsalShape = new THREE.Shape();
+    dorsalShape.moveTo(-.12, 0);
+    dorsalShape.lineTo(.07, 0);
+    dorsalShape.quadraticCurveTo(0, .07, -.05, .18);
+    dorsalShape.quadraticCurveTo(-.082, .125, -.12, 0);
+    dorsalShape.closePath();
+    const pectoralShape = new THREE.Shape();
+    pectoralShape.moveTo(.065, 0);
+    pectoralShape.lineTo(-.045, 0);
+    pectoralShape.lineTo(-.085, .1);
+    pectoralShape.quadraticCurveTo(-.13, .27, -.105, .37);
+    pectoralShape.quadraticCurveTo(-.045, .29, .065, .035);
+    pectoralShape.closePath();
+    const flukeShape = new THREE.Shape();
+    flukeShape.moveTo(-.01, 0);
+    flukeShape.lineTo(-.05, .04);
+    flukeShape.lineTo(-.09, .2);
+    flukeShape.lineTo(-.16, .34);
+    flukeShape.lineTo(-.22, .3);
+    flukeShape.lineTo(-.17, .13);
+    flukeShape.lineTo(-.11, .025);
+    flukeShape.lineTo(-.16, 0);
+    flukeShape.lineTo(-.11, -.025);
+    flukeShape.lineTo(-.17, -.13);
+    flukeShape.lineTo(-.22, -.3);
+    flukeShape.lineTo(-.16, -.34);
+    flukeShape.lineTo(-.09, -.2);
+    flukeShape.lineTo(-.05, -.04);
+    flukeShape.closePath();
+    const bodyProfile = [
+      new THREE.Vector2(0, -.68),
+      new THREE.Vector2(.045, -.61),
+      new THREE.Vector2(.095, -.44),
+      new THREE.Vector2(.14, -.22),
+      new THREE.Vector2(.17, .05),
+      new THREE.Vector2(.168, .24),
+      new THREE.Vector2(.135, .43),
+      new THREE.Vector2(.07, .55),
+      new THREE.Vector2(0, .58),
+    ];
+    const formation = [
+      [.32, 0],
+      [-.36, -.58],
+      [-.52, .58],
+    ] as const;
     for (let index = 0; index < 3; index++) {
       const dolphin = new THREE.Group();
       dolphin.userData.podIndex = index;
       dolphin.userData.wildlifeObservation = 'dolphins' satisfies ObservableWildlife;
-      const body = new THREE.Mesh(new THREE.SphereGeometry(.25, 9, 6), blue);
-      body.scale.set(2.15, .55, .62);
-      const belly = new THREE.Mesh(new THREE.SphereGeometry(.2, 8, 5), pale);
-      belly.scale.set(1.8, .26, .48);
-      belly.position.set(.05, -.1, 0);
-      const beak = new THREE.Mesh(new THREE.CylinderGeometry(.045, .075, .3, 7), blue);
+      dolphin.name = `dolphin-${index + 1}`;
+      const bodyGeometry = new THREE.LatheGeometry(bodyProfile, 12);
+      bodyGeometry.rotateZ(-Math.PI / 2);
+      bodyGeometry.scale(1, 1, .86);
+      const body = new THREE.Mesh(bodyGeometry, blue);
+      const melon = new THREE.Mesh(new THREE.SphereGeometry(.13, 10, 7), blue);
+      melon.scale.set(1.22, .84, .92);
+      melon.position.set(.465, .035, 0);
+      const belly = new THREE.Mesh(new THREE.SphereGeometry(.18, 9, 6), pale);
+      belly.scale.set(1.95, .2, .52);
+      belly.position.set(.1, -.125, 0);
+      const beak = new THREE.Mesh(new THREE.CapsuleGeometry(.038, .19, 2, 7), blue);
       beak.rotation.z = Math.PI / 2;
-      beak.position.x = .62;
-      const dorsal = new THREE.Mesh(new THREE.ConeGeometry(.1, .29, 5), blue);
-      dorsal.position.set(-.08, .2, 0);
-      for (const side of [-1, 1]) {
-        const fluke = new THREE.Mesh(new THREE.SphereGeometry(.12, 6, 4), blue);
-        fluke.scale.set(.8, .13, .7);
-        fluke.position.set(-.62, 0, side * .09);
-        fluke.rotation.y = side * .4;
-        dolphin.add(fluke);
+      beak.position.set(.645, -.015, 0);
+      const lowerJaw = new THREE.Mesh(new THREE.CapsuleGeometry(.027, .155, 2, 7), pale);
+      lowerJaw.rotation.z = Math.PI / 2;
+      lowerJaw.position.set(.63, -.043, 0);
+      const dorsalGeometry = new THREE.ExtrudeGeometry(dorsalShape, {
+        depth: .05, bevelEnabled: true, bevelSegments: 1, bevelSize: .008, bevelThickness: .007, curveSegments: 2,
+      });
+      dorsalGeometry.translate(0, 0, -.025);
+      const dorsal = new THREE.Mesh(dorsalGeometry, blue);
+      dorsal.position.set(-.09, .1, 0);
+      const flukeGeometry = new THREE.ExtrudeGeometry(flukeShape, {
+        depth: .028, bevelEnabled: true, bevelSegments: 1, bevelSize: .006, bevelThickness: .005, curveSegments: 1,
+      });
+      flukeGeometry.translate(0, 0, -.014);
+      flukeGeometry.rotateX(Math.PI / 2);
+      const flukes = new THREE.Mesh(flukeGeometry, blue);
+      flukes.position.x = -.59;
+      dolphin.add(flukes);
+      for (const side of [-1, 1] as const) {
+        const pectoralGeometry = new THREE.ExtrudeGeometry(pectoralShape, {
+          depth: .022, bevelEnabled: true, bevelSegments: 1, bevelSize: .005, bevelThickness: .004, curveSegments: 2,
+        });
+        pectoralGeometry.translate(0, 0, -.011);
+        pectoralGeometry.rotateX(Math.PI / 2);
+        const pectoral = new THREE.Mesh(pectoralGeometry, blue);
+        pectoral.position.set(.11, -.07, side * .11);
+        pectoral.scale.z = side;
+        pectoral.rotation.x = side * .12;
+        pectoral.rotation.y = -side * .12;
+        dolphin.add(pectoral);
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(.014, 6, 4), detail);
+        eye.scale.set(1.2, .82, .62);
+        eye.position.set(.51, .07, side * .13);
+        const mouthCurve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(.555, -.04, side * .038),
+          new THREE.Vector3(.635, -.05, side * .04),
+          new THREE.Vector3(.715, -.043, side * .035),
+        ]);
+        const mouth = new THREE.Mesh(new THREE.TubeGeometry(mouthCurve, 4, .005, 4, false), detail);
+        dolphin.add(eye, mouth);
       }
-      dolphin.add(body, belly, beak, dorsal);
+      const blowhole = new THREE.Mesh(new THREE.SphereGeometry(.022, 6, 4), detail);
+      blowhole.scale.set(1.35, .25, .65);
+      blowhole.position.set(.37, .17, 0);
+      dolphin.add(body, melon, belly, beak, lowerJaw, dorsal, blowhole);
       consolidateActor(dolphin);
-      dolphin.position.set(-index * .48, 0, (index - 1) * .55);
-      dolphin.scale.setScalar(.84 + index * .06);
+      dolphin.position.set(formation[index][0], 0, formation[index][1]);
+      dolphin.userData.baseX = dolphin.position.x;
+      dolphin.userData.baseZ = dolphin.position.z;
+      dolphin.userData.motionPhase = -index * .72 + (hash(this.seed, index, 0, 4822) - .5) * .12;
+      dolphin.scale.setScalar(.88 + index * .045);
       pod.add(dolphin);
       dolphinActors.push(dolphin);
     }
@@ -819,27 +1268,40 @@ export class FaunaSystem {
     group.name = 'squid-group';
     group.userData.wildlifeObservation = 'squids' satisfies ObservableWildlife;
     const colors = [0xaa6f79, 0xc28782, 0x8d6e88, 0xb77c68];
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff, transparent: true, opacity: .72, roughness: .8, depthWrite: false,
+    });
+    const jellyfishActors: THREE.Group[] = [];
     for (let index = 0; index < 4; index++) {
       const squid = new THREE.Group();
       squid.userData.wildlifeObservation = 'squids' satisfies ObservableWildlife;
-      const material = new THREE.MeshStandardMaterial({
-        color: colors[index], transparent: true, opacity: .72, roughness: .8, depthWrite: false,
-      });
-      const bell = new THREE.Mesh(new THREE.ConeGeometry(.2, .5, 7), material);
-      bell.rotation.z = -Math.PI / 2;
-      for (let tentacle = 0; tentacle < 4; tentacle++) {
-        const arm = new THREE.Mesh(new THREE.CylinderGeometry(.018, .028, .36 + tentacle * .025, 5), material);
-        arm.rotation.z = Math.PI / 2;
-        arm.position.set(-.33, (tentacle - 1.5) * .045, (tentacle % 2 ? -1 : 1) * .07);
+      squid.userData.instanceColor = new THREE.Color(colors[index]);
+      const bell = new THREE.Mesh(new THREE.SphereGeometry(.2, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), material);
+      bell.scale.set(1.08, .78, 1.08);
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(.195, .023, 5, 10), material);
+      rim.rotation.x = Math.PI / 2;
+      for (let tentacle = 0; tentacle < 5; tentacle++) {
+        const angle = tentacle / 5 * Math.PI * 2;
+        const arm = new THREE.Mesh(new THREE.CylinderGeometry(.012, .022, .3 + tentacle % 2 * .09, 5), material);
+        arm.position.set(Math.cos(angle) * .105, -.17 - tentacle % 2 * .035, Math.sin(angle) * .105);
+        arm.rotation.z = Math.sin(angle) * .14;
+        arm.rotation.x = Math.cos(angle) * .14;
         squid.add(arm);
       }
-      squid.add(bell);
+      const oralArm = new THREE.Mesh(new THREE.CylinderGeometry(.025, .04, .34, 6), material);
+      oralArm.position.y = -.19;
+      squid.add(bell, rim, oralArm);
       consolidateActor(squid);
-      addPickSphere(squid, .42);
       squid.position.set(-index * .34, Math.sin(index) * .12, (index - 1.5) * .33);
-      squid.scale.setScalar(.8 + index * .055);
+      squid.userData.baseX = squid.position.x;
+      squid.userData.baseZ = squid.position.z;
+      squid.userData.baseScale = .8 + index * .055;
+      squid.userData.motionPhase = hash(this.seed, index, 0, 4927) * Math.PI * 2;
+      squid.scale.setScalar(squid.userData.baseScale);
       group.add(squid);
+      jellyfishActors.push(squid);
     }
+    this.createActorInstances(this.marineRoot, jellyfishActors);
     group.userData.baseScale = 1;
     return group;
   }
@@ -859,11 +1321,24 @@ export class FaunaSystem {
       const tail = new THREE.Mesh(new THREE.ConeGeometry(.1, .22, 3), silver);
       tail.rotation.z = -Math.PI / 2;
       tail.position.x = -.31;
-      fish.add(body, tail);
+      const dorsal = new THREE.Mesh(new THREE.ConeGeometry(.055, .16, 3), silver);
+      dorsal.position.set(-.06, .1, 0);
+      dorsal.scale.z = .38;
+      fish.add(body, tail, dorsal);
+      for (const side of [-1, 1]) {
+        const fin = new THREE.Mesh(new THREE.ConeGeometry(.03, .14, 3), silver);
+        fin.position.set(.01, -.025, side * .08);
+        fin.rotation.x = side * Math.PI / 2;
+        fin.rotation.z = -.32;
+        fish.add(fin);
+      }
       consolidateActor(fish);
       const row = Math.floor(index / 4);
       fish.position.set(-row * .36 - index % 4 * .18, (index % 3 - 1) * .08, (index % 4 - 1.5) * .25);
+      fish.userData.baseX = fish.position.x;
+      fish.userData.baseY = fish.position.y;
       fish.userData.baseZ = fish.position.z;
+      fish.userData.motionPhase = hash(this.seed, index, row, 5063) * Math.PI * 2;
       pack.add(fish);
       tunaActors.push(fish);
     }
@@ -885,37 +1360,70 @@ export class FaunaSystem {
       const progress = (time * visitor.speed + visitor.phase) % 1;
       const point = visitor.route.getPointAt(progress);
       const tangent = visitor.route.getTangentAt(progress);
+      const lateralDrift = Math.sin(time * .21 + visitor.phase * 13) * .09;
+      point.x += tangent.z * lateralDrift;
+      point.z -= tangent.x * lateralDrift;
       visitor.model.position.copy(point);
       visitor.model.rotation.y = Math.atan2(tangent.x, tangent.z) - Math.PI / 2;
       visitor.model.scale.setScalar(easedScale);
 
       if (kind === 'whale') {
-        visitor.model.position.y = -.31 + Math.sin(time * .55) * .045 - (1 - easedScale) * .45;
-        visitor.model.rotation.z = Math.sin(time * .55) * .018;
+        const breath = time * .43 + visitor.phase * Math.PI * 2;
+        const surface = THREE.MathUtils.smoothstep(Math.sin(breath), .05, .94);
+        visitor.model.position.y = -.54 + surface * .34 - (1 - easedScale) * .45;
+        visitor.model.rotation.x = Math.sin(time * .25) * .028;
+        visitor.model.rotation.y += Math.sin(time * .19) * .024;
+        visitor.model.rotation.z = Math.cos(breath) * .065;
+        const tail = visitor.model.userData.tail as THREE.Group | undefined;
+        if (tail) tail.rotation.z = Math.sin(time * 1.18 + visitor.phase * 5) * (.16 - surface * .055);
         const spout = visitor.model.getObjectByName('whale-spout');
         if (spout) {
-          const pulse = Math.max(0, Math.sin(time * .72));
-          spout.visible = pulse > .78;
-          spout.scale.setScalar(.45 + pulse * .75);
+          const pulse = surface * Math.pow(Math.max(0, Math.sin(breath * 2.7 + .55)), 2.4);
+          spout.visible = pulse > .38;
+          spout.scale.set(.52 + pulse * .68, .24 + pulse * 1.18, .52 + pulse * .68);
+          spout.rotation.x = Math.sin(time * .7) * .035;
         }
       } else if (kind === 'dolphins') {
-        visitor.model.position.y = -.28 - (1 - easedScale) * .36;
+        visitor.model.position.y = -.3 - (1 - easedScale) * .36;
+        visitor.model.rotation.z = Math.sin(time * .42) * .025;
         visitor.model.children.forEach((dolphin, index) => {
-          const leap = Math.max(0, Math.sin(time * 1.25 + index * 1.4));
-          dolphin.position.y = -.04 + leap * .58;
-          dolphin.rotation.z = (leap - .35) * .28;
+          const phase = time * 1.02 + dolphin.userData.motionPhase;
+          const wave = Math.sin(phase);
+          const leap = Math.pow(Math.max(0, wave), 1.55);
+          const dive = Math.pow(Math.max(0, -wave), 1.25) * .2;
+          const leapHeight = .7 + index * .055;
+          dolphin.position.x = dolphin.userData.baseX + Math.sin(time * .58 + index) * .055;
+          dolphin.position.y = -.055 + leap * leapHeight - dive;
+          dolphin.position.z = dolphin.userData.baseZ + Math.sin(time * .66 + index * 1.9) * .07;
+          dolphin.rotation.x = Math.sin(time * .72 + index * 1.5) * (.055 + leap * .055);
+          dolphin.rotation.y = Math.sin(time * 1.18 + index * 2.2) * .075;
+          dolphin.rotation.z = Math.cos(phase) * (wave > 0 ? .58 : .14);
         });
       } else if (kind === 'squids') {
-        visitor.model.position.y = -.38 - (1 - easedScale) * .35 + Math.sin(time * .9) * .06;
+        visitor.model.position.y = -.46 - (1 - easedScale) * .35 + Math.sin(time * .55) * .05;
+        visitor.model.rotation.y += Math.sin(time * .17) * .12;
         visitor.model.children.forEach((squid, index) => {
-          squid.scale.x = .78 + Math.sin(time * 2.2 + index) * .13;
-          squid.position.y = Math.sin(time * 1.15 + index * 1.7) * .12;
+          const phase = time * 2.05 + squid.userData.motionPhase;
+          const pulse = .5 + Math.sin(phase) * .5;
+          const baseScale = squid.userData.baseScale as number;
+          squid.scale.set(baseScale * (.92 + pulse * .13), baseScale * (1.06 - pulse * .13), baseScale * (.92 + pulse * .13));
+          squid.position.x = squid.userData.baseX + Math.sin(time * .46 + index) * .08;
+          squid.position.y = Math.sin(time * .78 + squid.userData.motionPhase) * .14;
+          squid.position.z = squid.userData.baseZ + Math.cos(time * .4 + index * 1.4) * .09;
+          squid.rotation.x = Math.sin(time * .38 + index) * .09;
+          squid.rotation.z = Math.cos(time * .33 + index * 1.7) * .08;
         });
       } else {
-        visitor.model.position.y = -.29 - (1 - easedScale) * .32 + Math.sin(time * 1.3) * .018;
+        visitor.model.position.y = -.31 - (1 - easedScale) * .32 + Math.sin(time * .72) * .025;
+        visitor.model.rotation.x = Math.sin(time * .86) * .035;
+        visitor.model.rotation.y += Math.sin(time * .3) * .035;
         visitor.model.children.forEach((fish, index) => {
-          fish.position.z = fish.userData.baseZ + Math.sin(time * 2.5 + index * 1.6) * .055;
-          fish.rotation.y = Math.sin(time * 3 + index) * .11;
+          const phase = time * 3.4 + fish.userData.motionPhase;
+          fish.position.x = fish.userData.baseX + Math.sin(phase * .45) * .045;
+          fish.position.y = fish.userData.baseY + Math.sin(time * 1.4 + index * .7) * .035;
+          fish.position.z = fish.userData.baseZ + Math.sin(time * 1.9 + index * 1.6) * .07;
+          fish.rotation.y = Math.sin(phase) * .14;
+          fish.rotation.z = Math.cos(phase * .55) * .055;
         });
       }
     }
@@ -923,9 +1431,27 @@ export class FaunaSystem {
 
   private updateAmbientBirds(time: number) {
     const angle = time * .085;
-    this.ambientBirds.position.set(this.townCenter.x + Math.cos(angle) * 9, 7.5 + Math.sin(time * .35), this.townCenter.z + Math.sin(angle) * 9);
+    this.ambientBirds.position.set(
+      this.townCenter.x + Math.cos(angle) * 8.6,
+      6.9 + Math.sin(time * .35) * .55,
+      this.townCenter.z + Math.sin(angle) * 8.6,
+    );
     this.ambientBirds.rotation.y = -angle;
-    this.ambientBirds.children.forEach((bird, index) => { bird.rotation.z = Math.sin(time * 5 + index) * .22; });
+    this.ambientBirdActors.forEach((bird, index) => {
+      const beat = time * (4.65 + index * .11) + bird.phase;
+      const effort = THREE.MathUtils.smoothstep(Math.sin(time * .27 + bird.phase), -.35, .7);
+      const flap = .1 + Math.sin(beat) * (.08 + effort * .43);
+      bird.model.position.set(
+        bird.baseX + Math.sin(time * .36 + bird.phase) * .075,
+        bird.baseY + Math.sin(time * .72 + bird.phase) * .1,
+        bird.baseZ + Math.cos(time * .31 + bird.phase) * .055,
+      );
+      bird.model.rotation.x = Math.cos(time * .34 + bird.phase) * .045;
+      bird.model.rotation.y = Math.sin(time * .29 + bird.phase) * .1;
+      bird.model.rotation.z = Math.sin(time * .41 + bird.phase) * .085;
+      bird.leftWing.rotation.z = -flap;
+      bird.rightWing.rotation.z = flap;
+    });
   }
 
   private updateGulls(time: number, daylight: number, timeOfDay: number, absoluteHours: number, rainIntensity: number) {
@@ -975,12 +1501,29 @@ export class FaunaSystem {
     if (!this.fishRoot.visible || !this.waterAnchors.length) return;
     this.fishSchools.forEach((school, schoolIndex) => {
       const anchor = this.waterAnchors[(schoolIndex * 3) % this.waterAnchors.length];
-      const angle = time * (.18 + schoolIndex * .03) + schoolIndex * 2.1;
-      school.position.set(anchor.x + Math.cos(angle) * .7, -.275 + Math.sin(time * 1.2 + schoolIndex) * .012, anchor.z + Math.sin(angle) * .7);
-      school.rotation.y = -angle;
-      school.children.forEach((fish, fishIndex) => {
-        fish.position.z = Math.sin(time * 1.8 + fishIndex * 1.7) * .18;
-        fish.rotation.y = Math.sin(time * 2.5 + fishIndex) * .16;
+      const angle = time * (.2 + schoolIndex * .027) + school.phase;
+      const orbitX = .62 + schoolIndex * .06;
+      const orbitZ = .54 + schoolIndex * .045;
+      const harmonic = angle * 2 + school.phase;
+      const x = Math.cos(angle) * orbitX + Math.cos(harmonic) * .085;
+      const z = Math.sin(angle) * orbitZ;
+      const dx = -Math.sin(angle) * orbitX - Math.sin(harmonic) * .17;
+      const dz = Math.cos(angle) * orbitZ;
+      const nearSurface = Math.pow(Math.max(0, Math.sin(time * .23 + school.phase)), 8) * .075;
+      school.model.position.set(anchor.x + x, -.305 + nearSurface + Math.sin(time * .9 + schoolIndex) * .016, anchor.z + z);
+      school.model.rotation.y = Math.atan2(-dz, dx);
+      school.model.rotation.z = Math.sin(time * .72 + school.phase) * .035;
+      school.fish.forEach((fish, fishIndex) => {
+        const beat = time * (7.2 + schoolIndex * .45) + fish.phase;
+        const loosen = .84 + Math.sin(time * .72 + fish.phase) * .16;
+        fish.model.position.set(
+          fish.baseX + Math.sin(beat * .5) * .025,
+          Math.sin(time * 1.6 + fish.phase) * .025,
+          fish.baseZ * loosen + Math.sin(time * 1.2 + fishIndex) * .025,
+        );
+        fish.model.rotation.y = Math.sin(beat) * .105;
+        fish.model.rotation.z = Math.cos(beat * .5) * .04;
+        fish.tail.rotation.y = Math.sin(beat + .65) * .52;
       });
     });
   }
@@ -1007,48 +1550,140 @@ export class FaunaSystem {
     const migrationActive = timeBefore(time, this.migrationUntil);
     const migrationProgress = migrationActive ? THREE.MathUtils.clamp((time - this.migrationStartedAt) / Math.max(.01, this.migrationUntil - this.migrationStartedAt), 0, 1) : 1;
     if (!migrationActive) this.migratingCatCount = 0;
+    const gathering = time < this.catGatherUntil && Boolean(this.catGatherCluster);
+    const gatheredAnchors = gathering ? this.catAnchors.filter((anchor) => anchor.cluster === this.catGatherCluster) : [];
     this.cats.forEach((cat, index) => {
-      const treeRest = rainIntensity < .1 && timeOfDay >= 12 && timeOfDay < 17 && index % 4 === 0
+      const treeRest = !gathering && rainIntensity < .1 && timeOfDay >= 12 && timeOfDay < 17 && index % 4 === 0
         ? this.matureTreeAnchors[index % Math.max(1, this.matureTreeAnchors.length)]
         : undefined;
-      const anchor = time < this.catGatherUntil && this.catGatherFocus ? this.catGatherFocus : treeRest ?? this.catAnchors[index % Math.max(1, this.catAnchors.length)];
+      const catAnchor = gathering
+        ? gatheredAnchors[index % Math.max(1, gatheredAnchors.length)]
+        : this.catAnchors[index % Math.max(1, this.catAnchors.length)];
+      const anchor = treeRest ?? catAnchor?.position;
       const migrating = migrationActive && index >= familySize && index < familySize + this.migratingCatCount;
-      cat.visible = this.catRoot.visible && (index < familySize || migrating) && Boolean(anchor ?? this.townCenter);
+      cat.model.visible = this.catRoot.visible && (index < familySize || migrating) && Boolean(anchor ?? this.townCenter);
       if (migrating) {
         const departureAngle = index * 2.17 + this.seed * .001;
         const distance = .5 + migrationProgress * 10;
-        cat.position.set(this.townCenter.x + Math.cos(departureAngle) * distance, .2, this.townCenter.z + Math.sin(departureAngle) * distance);
-        cat.rotation.y = -departureAngle;
-        cat.scale.setScalar(.9 * (1 - migrationProgress * .45));
+        const step = time * 8.2 + cat.phase;
+        cat.model.position.set(this.townCenter.x + Math.cos(departureAngle) * distance, .2 + Math.abs(Math.sin(step)) * .025, this.townCenter.z + Math.sin(departureAngle) * distance);
+        cat.model.rotation.y = -departureAngle;
+        cat.model.scale.setScalar(.9 * (1 - migrationProgress * .45));
+        cat.torso.rotation.z = Math.sin(step) * .025;
+        cat.head.position.set(.225, .245, 0);
+        cat.head.rotation.set(0, Math.sin(time * .8 + cat.phase) * .08, 0);
+        cat.tail.rotation.set(Math.sin(time * 2.4 + cat.phase) * .3, 0, 0);
         return;
       }
       if (!anchor) return;
-      const angle = time * (.16 + index * .03) + index * 2.5;
-      const roam = (1 - rainIntensity * .72) * (.32 + index * .06);
-      cat.position.set(anchor.x + Math.cos(angle) * roam, anchor.y, anchor.z + Math.sin(angle) * roam * .8);
-      cat.rotation.y = -angle - Math.PI / 2;
-      if (index < 3) cat.scale.setScalar(.9);
+      const routineRest = rainIntensity > .3 || timeOfDay >= 22 || timeOfDay < 5.5 || Boolean(treeRest);
+      const period = 14 + index % 4 * 2.3 + (routineRest ? 7 : 0);
+      const cycle = ((time + cat.phase * 2.4) % period) / period;
+      const firstWalkEnd = .37;
+      const secondWalkStart = .65;
+      let travel = Math.PI;
+      let moving = !routineRest;
+      if (cycle < firstWalkEnd) {
+        const amount = cycle / firstWalkEnd;
+        travel = amount * amount * (3 - amount * 2) * Math.PI;
+      } else if (cycle >= secondWalkStart) {
+        const amount = (cycle - secondWalkStart) / (1 - secondWalkStart);
+        travel += amount * amount * (3 - amount * 2) * Math.PI;
+      } else moving = false;
+      const angle = cat.phase + travel;
+      const gathered = gathering;
+      const roam = (gathered ? .24 : .34 + index * .045) * (routineRest ? .28 : 1) * (1 - rainIntensity * .55);
+      let x: number;
+      let z: number;
+      let dx: number;
+      let dz: number;
+      if (catAnchor?.outward && !treeRest) {
+        // Shop cats pace along the apron instead of orbiting back through the
+        // counter. Their bodies remain tangent to the façade at both rests.
+        const [outwardX, outwardZ] = catAnchor.outward;
+        const lateralX = outwardZ;
+        const lateralZ = -outwardX;
+        const storefrontRoam = (gathered ? .07 : .12) * (routineRest ? .35 : 1) * (1 - rainIntensity * .4);
+        const sideMotion = Math.cos(angle) * storefrontRoam;
+        const facing = Math.sin(angle) > 0 ? -1 : 1;
+        x = lateralX * sideMotion;
+        z = lateralZ * sideMotion;
+        dx = lateralX * facing;
+        dz = lateralZ * facing;
+      } else {
+        x = Math.cos(angle) * roam + Math.cos(angle * 2 + cat.phase) * roam * .08;
+        z = Math.sin(angle) * roam * .78 + Math.sin(angle * 3 + cat.phase) * roam * .05;
+        dx = -Math.sin(angle) * roam;
+        dz = Math.cos(angle) * roam * .78;
+      }
+      const step = time * (7.4 + index * .08) + cat.phase;
+      const walkBob = moving ? Math.abs(Math.sin(step)) * .018 : 0;
+      cat.model.position.set(anchor.x + x, anchor.y + walkBob, anchor.z + z);
+      cat.model.rotation.y = Math.atan2(-dz, dx);
+      cat.model.rotation.x = moving ? Math.sin(step * .5) * .018 : 0;
+      cat.model.rotation.z = moving ? Math.sin(step) * .012 : 0;
+
+      const grooming = !moving && !routineRest && cycle > .46 && cycle < .57 && index % 3 !== 0;
+      const napping = !moving && (routineRest || index % 3 === 0);
+      cat.torso.position.y = moving ? Math.abs(Math.sin(step)) * .009 : .006;
+      cat.torso.rotation.set(0, 0, moving ? Math.sin(step) * .024 : napping ? -.035 : .13);
+      cat.torso.scale.set(1, napping ? .82 : 1, 1);
+      if (grooming) {
+        cat.head.position.set(.17, .205, Math.sin(time * 2.2 + cat.phase) * .035);
+        cat.head.rotation.set(0, Math.sin(time * 2.8 + cat.phase) * .25, -.68 + Math.sin(time * 3.5 + cat.phase) * .12);
+      } else if (napping) {
+        cat.head.position.set(.075, .17, 0);
+        cat.head.rotation.set(0, Math.sin(cat.phase) * .22, -.18);
+      } else {
+        cat.head.position.set(.215, moving ? .245 : .275, 0);
+        cat.head.rotation.set(0, Math.sin(time * .72 + cat.phase) * (moving ? .08 : .32), moving ? Math.sin(step) * .018 : .04);
+      }
+      cat.tail.rotation.x = Math.sin(time * (moving ? 2.25 : 1.15) + cat.phase) * (moving ? .32 : .22);
+      cat.tail.rotation.z = napping ? -.48 : moving ? 0 : -.24;
+
+      if (index < 3) cat.model.scale.setScalar(.9);
       else {
         const bornAt = (index - 2) * KITTEN_INTERVAL_HOURS;
         const kittenAge = Math.max(0, colonyAge - bornAt);
-        cat.scale.setScalar(.5 + THREE.MathUtils.clamp(kittenAge / KITTEN_GROWTH_HOURS, 0, 1) * .4);
+        cat.model.scale.setScalar(.5 + THREE.MathUtils.clamp(kittenAge / KITTEN_GROWTH_HOURS, 0, 1) * .4);
       }
     });
   }
 
   private updateTurtles(time: number) {
     if (!this.turtleRoot.visible || !this.waterAnchors.length) return;
+    const localTime = (time + hash(this.seed, 0, 0, 3629) * TURTLE_VISIT_CYCLE) % TURTLE_VISIT_CYCLE;
+    const visiting = localTime < TURTLE_VISIT_DURATION;
+    const edge = Math.min(1, localTime / 2.4, (TURTLE_VISIT_DURATION - localTime) / 2.4);
+    const visitScale = THREE.MathUtils.smoothstep(edge, 0, 1);
     this.turtles.forEach((turtle, index) => {
+      turtle.model.visible = visiting;
+      if (!visiting) return;
       const anchor = this.waterAnchors[(index * 5 + 1) % this.waterAnchors.length];
-      const angle = time * (.075 + index * .008) + index * 1.73;
+      const strokePhase = time * (1.55 + index * .055) + turtle.phase;
+      const powerStroke = Math.sin(strokePhase);
+      const angle = time * (.088 + index * .009) + turtle.phase + powerStroke * .024;
       const radius = .72 + index * .11;
-      turtle.position.set(
-        anchor.x + Math.cos(angle) * radius,
-        -.17 + Math.sin(time * .62 + index) * .025,
-        anchor.z + Math.sin(angle) * radius,
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle * 2) * radius * .42;
+      const dx = -Math.sin(angle) * radius;
+      const dz = Math.cos(angle * 2) * radius * .84;
+      const surfacing = THREE.MathUtils.smoothstep(Math.sin(time * .46 + turtle.phase), .2, .95);
+      turtle.model.position.set(
+        anchor.x + x,
+        anchor.y - .06 + surfacing * .12 + Math.sin(time * .7 + turtle.phase) * .01,
+        anchor.z + z,
       );
-      turtle.rotation.y = -angle;
-      turtle.rotation.z = Math.sin(time * .8 + index * 1.4) * .035;
+      turtle.model.scale.setScalar(TURTLE_SCALE * visitScale);
+      turtle.model.rotation.y = Math.atan2(-dz, dx);
+      turtle.model.rotation.x = Math.sin(strokePhase * .5) * .045;
+      turtle.model.rotation.z = Math.cos(angle * .5 + turtle.phase) * .075 + Math.cos(strokePhase) * .018;
+      turtle.frontFlippers.forEach((flipper, flipperIndex) => {
+        const side = flipperIndex === 0 ? -1 : 1;
+        const turnBias = Math.cos(angle * .5 + turtle.phase) * .08;
+        flipper.rotation.x = side * (powerStroke * .66 + turnBias);
+        flipper.rotation.y = -side * (.18 + Math.cos(strokePhase) * .07);
+      });
     });
   }
 

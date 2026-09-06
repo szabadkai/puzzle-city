@@ -1,12 +1,14 @@
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenKind, type CitizenSave, type JournalEntry, type JournalIllustration, type PlaceIdentityId, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenKind, type CitizenSave, type ConfluenceId, type JournalEntry, type JournalIllustration, type PlaceIdentityId, keyOf } from './types';
 import { analyzeWaterTopology } from './water';
 import { findPlazaAnchors } from './topology';
 import type { MemoryMetric, TownMemorySnapshot } from './memory';
 import { PLACE_IDENTITY_BY_ID, placeLandmarkSocket, type PlaceIdentityOccurrence } from './place-identities';
+import { CONFLUENCE_BY_ID, confluenceLandmarkSocket, type ConfluenceOccurrence } from './confluences';
 
 export type TopologyFeature = 'courtyard' | 'arch' | 'bridge' | 'tower' | 'plaza';
 export type GridPoint = Readonly<{ x: number; z: number }>;
 export type PlaceSnapshot = Readonly<{ id: PlaceIdentityId; x: number; z: number; visitors: number }>;
+export type ConfluenceSnapshot = Readonly<{ id: ConfluenceId; x: number; z: number; visitors: number }>;
 
 export type WorldSnapshot = Readonly<{
   cells: readonly Readonly<Cell>[];
@@ -20,6 +22,7 @@ export type WorldSnapshot = Readonly<{
   relationshipCount: number;
   water: Readonly<{ dockCount: number; canalCount: number; shelteredCount: number }>;
   places: readonly PlaceSnapshot[];
+  confluences: readonly ConfluenceSnapshot[];
   priorDiscoveries: readonly string[];
   memory: TownMemorySnapshot;
 }>;
@@ -42,6 +45,7 @@ export type DiscoveryCondition =
   | { kind: 'citizen'; occupation?: string; trait?: string; ageGroup?: CitizenAgeGroup; residentKind?: CitizenKind; atLeast: number }
   | { kind: 'water'; feature: 'dock' | 'canal' | 'sheltered'; atLeast: number }
   | { kind: 'place-identity'; identityId: PlaceIdentityId; atLeast: number; visitorsAtLeast?: number; businessType?: BusinessType }
+  | { kind: 'confluence'; confluenceId: ConfluenceId; atLeast: number; visitorsAtLeast?: number }
   | { kind: 'memory'; metric: MemoryMetric; atLeast: number }
   | { kind: 'discovered'; eventId: string };
 
@@ -49,6 +53,7 @@ export type DiscoveryFocus =
   | { kind: 'topology'; feature: TopologyFeature }
   | { kind: 'business'; businessType: BusinessType }
   | { kind: 'place-identity'; identityId: PlaceIdentityId }
+  | { kind: 'confluence'; confluenceId: ConfluenceId }
   | { kind: 'town' };
 
 export type DiscoveryEffect =
@@ -101,6 +106,8 @@ type SnapshotInput = {
   memory?: TownMemorySnapshot;
   placeIdentities?: readonly PlaceIdentityOccurrence[];
   placeVisitorCounts?: ReadonlyMap<PlaceIdentityId, number>;
+  confluences?: readonly ConfluenceOccurrence[];
+  confluenceVisitorCounts?: ReadonlyMap<ConfluenceId, number>;
 };
 
 const BUSINESS_TYPES: readonly BusinessType[] = [
@@ -159,8 +166,17 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
       visitors: input.placeVisitorCounts?.get(place.id) ?? 0,
     });
   });
+  const confluences = (input.confluences ?? []).map((confluence) => {
+    const landmark = confluenceLandmarkSocket(confluence);
+    return Object.freeze({
+      id: confluence.id,
+      x: landmark.x,
+      z: landmark.z,
+      visitors: input.confluenceVisitorCounts?.get(confluence.id) ?? 0,
+    });
+  });
   const memory = input.memory ?? Object.freeze({
-    patinaCells: 0, growingTrees: 0, matureTrees: 0, oldestTreeHours: 0,
+    growingTrees: 0, matureTrees: 0, oldestTreeHours: 0,
     oldestBuildingHours: 0, catPopulation: 0, catCapacity: 0, kittenCount: 0,
     migratingCats: 0, rainIntensity: 0, raining: false,
   });
@@ -187,6 +203,7 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
       shelteredCount: waterTopology.sheltered.length,
     }),
     places: Object.freeze(places),
+    confluences: Object.freeze(confluences),
     priorDiscoveries: Object.freeze([...input.priorDiscoveries]),
     memory: Object.freeze({ ...memory }),
   });
@@ -253,6 +270,9 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
         return Math.abs(x - place.x) + Math.abs(z - place.z) <= 4;
       });
     }).length >= condition.atLeast;
+    case 'confluence': return snapshot.confluences.filter((confluence) =>
+      confluence.id === condition.confluenceId && confluence.visitors >= (condition.visitorsAtLeast ?? 0),
+    ).length >= condition.atLeast;
     case 'memory': return snapshot.memory[condition.metric] >= condition.atLeast;
     case 'discovered': return snapshot.priorDiscoveries.includes(condition.eventId);
     case 'time': {
@@ -265,6 +285,7 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
 }
 
 type ConditionProgress = { value: number; hint: string };
+type DiscoveryProgressResolver = (eventId: string) => ConditionProgress | null;
 
 const BUSINESS_LABELS: Record<BusinessType, string> = {
   bakery: 'bakery', cafe: 'café', 'flower-shop': 'flower shop', workshop: 'workshop', bookstore: 'bookstore',
@@ -283,16 +304,20 @@ function formatHour(hour: number) {
   return `${String(Math.floor(hour) % 24).padStart(2, '0')}:00`;
 }
 
-function conditionProgress(condition: DiscoveryCondition, snapshot: WorldSnapshot): ConditionProgress {
+function conditionProgress(
+  condition: DiscoveryCondition,
+  snapshot: WorldSnapshot,
+  resolveDiscovery?: DiscoveryProgressResolver,
+): ConditionProgress {
   const ratio = (current: number, target: number) => Math.min(1, current / Math.max(1, target));
   switch (condition.kind) {
     case 'all': {
-      const parts = condition.conditions.map((candidate) => conditionProgress(candidate, snapshot));
+      const parts = condition.conditions.map((candidate) => conditionProgress(candidate, snapshot, resolveDiscovery));
       const incomplete = parts.filter((part) => part.value < 1).sort((a, b) => a.value - b.value);
       return { value: parts.reduce((sum, part) => sum + part.value, 0) / Math.max(1, parts.length), hint: incomplete[0]?.hint ?? 'Listen for the town to answer.' };
     }
     case 'any': {
-      const best = condition.conditions.map((candidate) => conditionProgress(candidate, snapshot)).sort((a, b) => b.value - a.value)[0];
+      const best = condition.conditions.map((candidate) => conditionProgress(candidate, snapshot, resolveDiscovery)).sort((a, b) => b.value - a.value)[0];
       return best ?? { value: 0, hint: 'Try another shape for the harbor.' };
     }
     case 'not': return evaluateCondition(condition, snapshot)
@@ -375,10 +400,18 @@ function conditionProgress(condition: DiscoveryCondition, snapshot: WorldSnapsho
       if (visitors < target) return { value: .78 + .2 * ratio(visitors, target), hint: `Let ${target - visitors} more ${target - visitors === 1 ? 'neighbor' : 'neighbors'} visit the ${definition?.landmark.title.toLowerCase() ?? 'landmark'}.` };
       return { value: 1, hint: `${definition?.landmark.title ?? 'The landmark'} is alive with use.` };
     }
+    case 'confluence': {
+      const matching = snapshot.confluences.filter((confluence) => confluence.id === condition.confluenceId);
+      const definition = CONFLUENCE_BY_ID.get(condition.confluenceId);
+      if (!matching.length) return { value: 0, hint: definition?.hint ?? 'Bring all three formations mutually close.' };
+      const visitors = Math.max(0, ...matching.map((confluence) => confluence.visitors));
+      const target = condition.visitorsAtLeast ?? 0;
+      if (visitors < target) return { value: .78 + .2 * ratio(visitors, target), hint: `Let ${target - visitors} more ${target - visitors === 1 ? 'neighbor' : 'neighbors'} visit the ${definition?.landmark.title.toLowerCase() ?? 'grand landmark'}.` };
+      return { value: 1, hint: `${definition?.landmark.title ?? 'The grand landmark'} is alive with use.` };
+    }
     case 'memory': {
       const current = snapshot.memory[condition.metric];
       const hints: Record<MemoryMetric, string> = {
-        patinaCells: 'Let the harbor weather a wall in its own way.',
         matureTrees: 'Give a sheltered courtyard tree three days to fill its canopy.',
         catPopulation: 'Give the harbor cats time and enough welcoming habitat.',
         oldestBuildingHours: 'Let the oldest walls remain standing as the tides pass.',
@@ -386,13 +419,17 @@ function conditionProgress(condition: DiscoveryCondition, snapshot: WorldSnapsho
       };
       return { value: ratio(current, condition.atLeast), hint: hints[condition.metric] };
     }
-    case 'discovered': return { value: snapshot.priorDiscoveries.includes(condition.eventId) ? 1 : 0, hint: 'Another observation must reveal itself first.' };
+    case 'discovered': {
+      if (snapshot.priorDiscoveries.includes(condition.eventId)) return { value: 1, hint: 'The town remembers this part of the story.' };
+      return resolveDiscovery?.(condition.eventId) ?? { value: 0, hint: 'Another observation must reveal itself first.' };
+    }
   }
 }
 
 function prerequisitesMet(condition: DiscoveryCondition, snapshot: WorldSnapshot): boolean {
   if (condition.kind === 'discovered') return snapshot.priorDiscoveries.includes(condition.eventId);
   if (condition.kind === 'place-identity') return snapshot.places.some((place) => place.id === condition.identityId);
+  if (condition.kind === 'confluence') return snapshot.confluences.some((confluence) => confluence.id === condition.confluenceId);
   if (condition.kind === 'all') return condition.conditions.every((candidate) => prerequisitesMet(candidate, snapshot));
   if (condition.kind === 'any') return condition.conditions.some((candidate) => prerequisitesMet(candidate, snapshot));
   if (condition.kind === 'not') return prerequisitesMet(condition.condition, snapshot);
@@ -411,19 +448,21 @@ export class GrowSystem {
     eventLastTriggeredAt: Record<string, number>,
     private readonly commitEffect: (effect: DiscoveryEffect, discovery: TriggeredDiscovery) => void,
   ) {
-    this.discovered = new Set(discovered);
+    const activeEventIds = new Set(events.map((event) => event.id));
+    this.discovered = new Set(discovered.filter((eventId) => activeEventIds.has(eventId)));
     for (const entry of journal) {
+      if (!activeEventIds.has(entry.eventId)) continue;
       const absoluteHours = entry.day * 24 + entry.timeOfDay;
       this.lastTriggeredAt.set(entry.eventId, Math.max(this.lastTriggeredAt.get(entry.eventId) ?? -Infinity, absoluteHours));
     }
     for (const [eventId, absoluteHours] of Object.entries(eventLastTriggeredAt)) {
-      if (!Number.isFinite(absoluteHours)) continue;
+      if (!activeEventIds.has(eventId) || !Number.isFinite(absoluteHours)) continue;
       this.lastTriggeredAt.set(eventId, Math.max(this.lastTriggeredAt.get(eventId) ?? -Infinity, absoluteHours));
     }
     const seenEventIds = new Set<string>();
     this.journal = journal
       .filter((entry) => {
-        if (seenEventIds.has(entry.eventId)) return false;
+        if (!activeEventIds.has(entry.eventId) || seenEventIds.has(entry.eventId)) return false;
         seenEventIds.add(entry.eventId);
         return true;
       })
@@ -510,6 +549,31 @@ export class GrowSystem {
         focus: resolveFocus(event.focus, snapshot),
       }));
   }
+
+  progressFor(eventId: string, snapshot: WorldSnapshot): DiscoveryClue | null {
+    const event = this.events.find((candidate) => candidate.id === eventId);
+    if (!event) return null;
+    const resolve = (id: string, trail: ReadonlySet<string>): ConditionProgress | null => {
+      if (snapshot.priorDiscoveries.includes(id)) return { value: 1, hint: 'The town remembers this part of the story.' };
+      if (trail.has(id)) return { value: 0, hint: 'This story is waiting on itself.' };
+      const dependency = this.events.find((candidate) => candidate.id === id);
+      if (!dependency) return null;
+      const nextTrail = new Set(trail);
+      nextTrail.add(id);
+      return conditionProgress(dependency.condition, snapshot, (dependencyId) => resolve(dependencyId, nextTrail));
+    };
+    const progress = this.discovered.has(eventId)
+      ? { value: 1, hint: 'This lantern is already part of the harbor’s light.' }
+      : resolve(eventId, new Set()) ?? { value: 0, hint: 'Listen for the town to answer.' };
+    return {
+      eventId: event.id,
+      title: event.title,
+      illustration: event.illustration,
+      progress: progress.value,
+      hint: progress.hint,
+      focus: resolveFocus(event.focus, snapshot),
+    };
+  }
 }
 
 const all = (...conditions: DiscoveryCondition[]): DiscoveryCondition => ({ kind: 'all', conditions });
@@ -540,15 +604,9 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: standardEffects('The first stone rises above the tide.', 'stone', 'watching the first walls settle'),
   },
   {
-    id: 'first-patina', repeatable: false, title: 'What the Tide Leaves', illustration: 'foundation',
-    note: 'The wall had not changed all at once. Salt, rain, and shelter had simply begun writing in the margins.',
-    condition: all(discovered('first-foundation'), { kind: 'memory', metric: 'patinaCells', atLeast: 1 }), focus: { kind: 'town' },
-    effects: standardEffects('The first wall has begun to remember the weather.', 'stone', 'noticing the tide marks on an old wall'),
-  },
-  {
     id: 'oldest-house', repeatable: false, title: 'Five Days Standing', illustration: 'street',
     note: 'Five days of doors, footsteps, salt air, and lamplight had made the oldest house look as though it had always been there.',
-    condition: all(discovered('first-patina'), { kind: 'memory', metric: 'oldestBuildingHours', atLeast: 120 }), focus: { kind: 'town' },
+    condition: all(discovered('first-foundation'), { kind: 'memory', metric: 'oldestBuildingHours', atLeast: 120 }), focus: { kind: 'town' },
     effects: standardEffects('The oldest house has become part of the harbor’s memory.', 'warm', 'remembering the first house'),
   },
   {
@@ -933,6 +991,191 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: placeEffects('The lantern theatre draws the square into its first evening.', 'warm', 'gathering for the lantern theatre'),
   },
   {
+    id: 'place-ferry-quarter', repeatable: false, title: 'The Water Learns a Stop', illustration: 'inn',
+    note: 'A painted board went up beside the square. Before noon, a little ferry nosed beneath it as though the route had always been there.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'ferry-quarter', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'time', after: 7, before: 20 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'ferry-quarter' },
+    effects: placeEffects('The Ferry House welcomes its first daily boat.', 'water', 'waiting together for the first ferry'),
+  },
+  {
+    id: 'place-tidepool-cloister', repeatable: false, title: 'Shells After Rain', illustration: 'rain',
+    note: 'Rain followed the chains into the broad stone basin. When it cleared, three tiny crabs were exploring the cloister moss.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'tidepool-cloister', atLeast: 1, visitorsAtLeast: 1 },
+      discovered('quay-crabs'),
+      { kind: 'time', after: 6, before: 19 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'tidepool-cloister' },
+    effects: [
+      ...placeEffects('The tide cistern holds rain, shells, and a few curious visitors.', 'green', 'looking for shells beside the tide cistern'),
+      { kind: 'wildlife', action: 'gather', animal: 'crabs' },
+    ],
+  },
+  {
+    id: 'place-story-court', repeatable: false, title: 'The Chalk Story', illustration: 'friendship',
+    note: 'A child drew half a boat beneath the arcade. By evening an elder had added a sail, a storm, and a safe harbor in the garden.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'story-court', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'any', conditions: [
+        { kind: 'citizen', ageGroup: 'child', atLeast: 1 },
+        { kind: 'place-identity', identityId: 'story-court', businessType: 'bookstore', atLeast: 1 },
+      ] },
+      { kind: 'time', after: 10, before: 20 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'story-court' },
+    effects: placeEffects('A story passes from chalk to voice beneath the reading loggia.', 'people', 'finishing the chalk story in the story court'),
+  },
+  {
+    id: 'place-windloom-quarter', repeatable: false, title: 'Color Takes the Wind', illustration: 'tools',
+    note: 'The first long cloth crossed the loom blue, gold, and red. Every roof turned toward it when the harbor wind arrived.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'windloom-quarter', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'any', conditions: [
+        { kind: 'place-identity', identityId: 'windloom-quarter', businessType: 'weaver', atLeast: 1 },
+        { kind: 'place-identity', identityId: 'windloom-quarter', businessType: 'workshop', atLeast: 1 },
+      ] },
+      { kind: 'time', after: 8, before: 18 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'windloom-quarter' },
+    effects: placeEffects('Bright cloth rises from the wind loom over the garden roofs.', 'warm', 'helping raise the first windloom cloth'),
+  },
+  {
+    id: 'place-bell-steps', repeatable: false, title: 'One Bell, Many Doors', illustration: 'tower',
+    note: 'The tide bell sounded once. Doors opened from the top of the stair to the far side of the square, each at its own pace.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'bell-steps', atLeast: 1, visitorsAtLeast: 2 },
+      { kind: 'time', after: 17, before: 20.5 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'bell-steps' },
+    effects: placeEffects('The tide bell gathers the lantern stair and square into one evening ritual.', 'warm', 'descending the bell steps together'),
+  },
+  {
+    id: 'place-messengers-row', repeatable: false, title: 'A Letter Finds Its Door', illustration: 'street',
+    note: 'The lookout spotted a blue-sailed courier. Before the boat tied up, Messenger’s Row already knew which door the letter needed.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'messengers-row', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'time', after: 8, before: 18 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'messengers-row' },
+    effects: [
+      ...placeEffects('The Post House sorts its first letter for the harbor.', 'people', 'carrying the first letter along messenger’s row'),
+      { kind: 'citizens', action: 'spawn-visitor', name: 'Tavi', occupation: 'Courier' },
+    ],
+  },
+  {
+    id: 'place-star-garden', repeatable: false, title: 'The Garden Looks Up', illustration: 'blossom-night',
+    note: 'The brass dial crossed one bright star, then another. Below it, every blue flower held still in the night air.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'star-garden', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'time', after: 19, before: 4.5 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'star-garden' },
+    effects: placeEffects('The star dial gives the high garden a map of the night.', 'green', 'reading the stars above the high garden'),
+  },
+  {
+    id: 'place-kite-steps', repeatable: false, title: 'A Roof Full of Sky', illustration: 'festival',
+    note: 'One paper kite climbed above the court. Then five more followed, each with a child below and half the town offering advice.',
+    condition: all(
+      { kind: 'place-identity', identityId: 'kite-steps', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'any', conditions: [
+        { kind: 'citizen', ageGroup: 'child', atLeast: 1 },
+        { kind: 'place-identity', identityId: 'kite-steps', businessType: 'weaver', atLeast: 1 },
+      ] },
+      { kind: 'time', after: 12, before: 18.5 },
+    ),
+    focus: { kind: 'place-identity', identityId: 'kite-steps' },
+    effects: placeEffects('The kite loft sends a small fleet of color into the afternoon sky.', 'people', 'flying kites above the roof court'),
+  },
+  {
+    id: 'confluence-grand-exchange', repeatable: false, title: 'Three Routes, One Bell', illustration: 'market',
+    note: 'The passenger bell rang as a cargo boat arrived. Under the broad pier roof, a basket crossed hands three times before its owner had stepped ashore.',
+    condition: all(
+      { kind: 'confluence', confluenceId: 'grand-exchange', atLeast: 1, visitorsAtLeast: 2 },
+      { kind: 'time', after: 7, before: 18 },
+    ),
+    focus: { kind: 'confluence', confluenceId: 'grand-exchange' },
+    effects: [
+      ...placeEffects('Passengers, cargo, and the square meet beneath the exchange pier.', 'water', 'meeting boats beneath the exchange pier'),
+      { kind: 'ambience', action: 'refresh' },
+    ],
+  },
+  {
+    id: 'confluence-tide-sanctuary', repeatable: false, title: 'The Basin Blooms', illustration: 'rain',
+    note: 'Rain descended from leaf to chain to shell basin. When the clouds passed, a pale tide flower had opened where fresh water met salt.',
+    condition: all(
+      { kind: 'confluence', confluenceId: 'tide-sanctuary', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'memory', metric: 'rainIntensity', atLeast: .18 },
+    ),
+    focus: { kind: 'confluence', confluenceId: 'tide-sanctuary' },
+    effects: [
+      ...placeEffects('A rare tide flower opens in the rain temple basin.', 'green', 'tending the rain temple basins'),
+      { kind: 'ambience', action: 'refresh' },
+    ],
+  },
+  {
+    id: 'confluence-house-of-hands', repeatable: false, title: 'The Useful Lesson', illustration: 'tools',
+    note: 'A child drew a crooked watering scoop. A gardener corrected the curve, an artisan shaped it, and by afternoon every planter had one.',
+    condition: all(
+      { kind: 'confluence', confluenceId: 'house-of-hands', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'any', conditions: [
+        { kind: 'citizen', ageGroup: 'child', atLeast: 1 },
+        { kind: 'citizen', occupation: 'Teacher', atLeast: 1 },
+      ] },
+      { kind: 'time', after: 9, before: 18 },
+    ),
+    focus: { kind: 'confluence', confluenceId: 'house-of-hands' },
+    effects: placeEffects('A shared sketch becomes the commons hall’s first useful invention.', 'people', 'learning and making in the commons hall'),
+  },
+  {
+    id: 'confluence-festival-crown', repeatable: false, title: 'The Roof Gives the Signal', illustration: 'festival',
+    note: 'A ribbon lifted from the high pavilion. The stair answered with lanterns, the square answered with music, and the whole town found the same walking pace.',
+    condition: all(
+      { kind: 'confluence', confluenceId: 'festival-crown', atLeast: 1, visitorsAtLeast: 2 },
+      { kind: 'time', after: 18, before: 22.5 },
+    ),
+    focus: { kind: 'confluence', confluenceId: 'festival-crown' },
+    effects: [
+      ...placeEffects('The first procession descends from roof to stair to square.', 'warm', 'joining the festival crown procession'),
+      { kind: 'ambience', action: 'celebrate' },
+    ],
+  },
+  {
+    id: 'confluence-celestial-beacon', repeatable: false, title: 'Two Kinds of Weather', illustration: 'blossom-night',
+    note: 'The harbor lamp marked the safe water. Above it, the brass rings caught a thin halo around the moon and promised rain before dawn.',
+    condition: all(
+      { kind: 'confluence', confluenceId: 'celestial-beacon', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'time', after: 19, before: 4.5 },
+    ),
+    focus: { kind: 'confluence', confluenceId: 'celestial-beacon' },
+    effects: [
+      ...placeEffects('The observatory beacon reads a route at sea and a change in the sky.', 'water', 'reading sea and sky from the observatory beacon'),
+      { kind: 'ambience', action: 'refresh' },
+    ],
+  },
+  {
+    id: 'confluence-banner-guild', repeatable: false, title: 'The Town Chooses Its Colors', illustration: 'festival',
+    note: 'Three long cloths rose above the loom. Neighbors chose the blue of deep water, the gold of lit windows, and the red of roofs after rain.',
+    condition: all(
+      { kind: 'confluence', confluenceId: 'banner-guild', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'time', after: 10, before: 18.5 },
+    ),
+    focus: { kind: 'confluence', confluenceId: 'banner-guild' },
+    effects: placeEffects('The banner house raises the town’s first shared colors.', 'warm', 'raising new cloth at the banner house'),
+  },
+  {
+    id: 'confluence-archive-tower', repeatable: false, title: 'A Shelf for the Harbor', illustration: 'town',
+    note: 'The courier brought a route, the teacher brought a story, and the lookout brought a weather map. By sunset, all three had found the same shelf.',
+    condition: all(
+      { kind: 'confluence', confluenceId: 'archive-tower', atLeast: 1, visitorsAtLeast: 1 },
+      { kind: 'time', after: 9, before: 20 },
+    ),
+    focus: { kind: 'confluence', confluenceId: 'archive-tower' },
+    effects: placeEffects('The harbor archive records its first complete day.', 'people', 'adding a record to the harbor archive'),
+  },
+  {
     id: 'town-remembers', repeatable: false, title: 'The Town Remembers', illustration: 'town',
     note: 'Stone, garden, bridge, work, and friendship now hold one another together. The town has a memory of its own.',
     condition: all(discovered('sheltered-courtyard'), discovered('high-bridge'), discovered('lookout-tower'), discovered('familiar-faces'), discovered('harbor-market'), { kind: 'population', atLeast: 7 }), focus: { kind: 'town' },
@@ -986,7 +1229,15 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   {
     id: 'lantern-finale', repeatable: false, title: 'All the Lanterns', illustration: 'lanterns',
     note: 'Every window answered another. Seen from the water, the town was a constellation that had chosen to stay.',
-    condition: all(discovered('blossom-evening'), discovered('shared-supper'), discovered('evening-chorus'), discovered('clock-tower'), discovered('ferry-route'), { kind: 'time', after: 19, before: 23 }), focus: { kind: 'town' },
+    condition: all(
+      discovered('blossom-evening'),
+      discovered('shared-supper'),
+      discovered('evening-chorus'),
+      discovered('clock-tower'),
+      discovered('ferry-route'),
+      { kind: 'place-identity', identityId: 'lantern-square', atLeast: 1 },
+      { kind: 'time', after: 19, before: 23 },
+    ), focus: { kind: 'place-identity', identityId: 'lantern-square' },
     effects: [
       { kind: 'city', action: 'decorate' },
       { kind: 'ambience', action: 'celebrate' },
@@ -1049,6 +1300,10 @@ export function resolveFocus(focus: DiscoveryFocus, snapshot: WorldSnapshot): Gr
   if (focus.kind === 'place-identity') {
     const place = snapshot.places.find((candidate) => candidate.id === focus.identityId);
     return place ? { x: place.x, z: place.z } : null;
+  }
+  if (focus.kind === 'confluence') {
+    const confluence = snapshot.confluences.find((candidate) => candidate.id === focus.confluenceId);
+    return confluence ? { x: confluence.x, z: confluence.z } : null;
   }
   const cell = snapshot.cells[0];
   return cell ? { x: cell.x, z: cell.z } : null;

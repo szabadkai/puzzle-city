@@ -339,7 +339,7 @@ function conditionProgress(
       const remaining = Math.max(0, condition.atLeast - snapshot.relationshipCount);
       return { value: ratio(snapshot.relationshipCount, condition.atLeast), hint: `Let ${remaining} more ${remaining === 1 ? 'friendship' : 'friendships'} take root.` };
     }
-    case 'day': return { value: ratio(snapshot.day, condition.atLeast), hint: `Let the town settle until day ${condition.atLeast}.` };
+    case 'day': return { value: ratio(snapshot.day, condition.atLeast), hint: `Keep building until day ${condition.atLeast}.` };
     case 'time': return evaluateCondition(condition, snapshot)
       ? { value: 1, hint: 'The hour is right. Watch the harbor closely.' }
       : { value: .72, hint: `Return between ${formatHour(condition.after)} and ${formatHour(condition.before)}.` };
@@ -394,7 +394,7 @@ function conditionProgress(
       const matching = snapshot.places.filter((place) => place.id === condition.identityId);
       const definition = PLACE_IDENTITY_BY_ID.get(condition.identityId);
       if (!matching.length) return { value: 0, hint: definition?.hint ?? 'Bring the required formations close together.' };
-      if (condition.businessType && !evaluateCondition(condition, snapshot)) return { value: .68, hint: `Let a ${BUSINESS_LABELS[condition.businessType]} settle close to the ${definition?.title.toLowerCase() ?? 'living place'}.` };
+      if (condition.businessType && !evaluateCondition(condition, snapshot)) return { value: .68, hint: `Open a ${BUSINESS_LABELS[condition.businessType]} close to the ${definition?.title.toLowerCase() ?? 'living place'}.` };
       const visitors = Math.max(0, ...matching.map((place) => place.visitors));
       const target = condition.visitorsAtLeast ?? 0;
       if (visitors < target) return { value: .78 + .2 * ratio(visitors, target), hint: `Let ${target - visitors} more ${target - visitors === 1 ? 'neighbor' : 'neighbors'} visit the ${definition?.landmark.title.toLowerCase() ?? 'landmark'}.` };
@@ -563,7 +563,7 @@ export class GrowSystem {
       return conditionProgress(dependency.condition, snapshot, (dependencyId) => resolve(dependencyId, nextTrail));
     };
     const progress = this.discovered.has(eventId)
-      ? { value: 1, hint: 'This lantern is already part of the harbor’s light.' }
+      ? { value: 1, hint: 'This lantern is already part of the harbor\'s light.' }
       : resolve(eventId, new Set()) ?? { value: 0, hint: 'Listen for the town to answer.' };
     return {
       eventId: event.id,
@@ -607,7 +607,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     id: 'oldest-house', repeatable: false, title: 'Five Days Standing', illustration: 'street',
     note: 'Five days of doors, footsteps, salt air, and lamplight had made the oldest house look as though it had always been there.',
     condition: all(discovered('first-foundation'), { kind: 'memory', metric: 'oldestBuildingHours', atLeast: 120 }), focus: { kind: 'town' },
-    effects: standardEffects('The oldest house has become part of the harbor’s memory.', 'warm', 'remembering the first house'),
+    effects: standardEffects('The oldest house now holds five days of harbor history.', 'warm', 'remembering the first house'),
   },
   {
     id: 'first-rain', repeatable: false, title: 'Rain on Warm Stone', illustration: 'rain',
@@ -625,7 +625,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     id: 'canal-waters', repeatable: false, title: 'Between Two Banks', illustration: 'arch',
     note: 'Two rows of houses left a blue lane between them. Even the tide seemed to know where to go.',
     condition: all(discovered('first-foundation'), { kind: 'water', feature: 'canal', atLeast: 1 }), focus: { kind: 'town' },
-    effects: standardEffects('The water has become a narrow canal.', 'water', 'leaning over the canal wall'),
+    effects: standardEffects('Water now runs through a narrow canal.', 'water', 'leaning over the canal wall'),
   },
   {
     id: 'fishing-boat', repeatable: false, title: 'Before the Harbor Wakes', illustration: 'fish',
@@ -682,7 +682,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     id: 'mature-courtyard-tree', repeatable: false, title: 'A Room Made of Shade', illustration: 'garden',
     note: 'The sapling had become a canopy. People began giving directions by it, as if the tree had been part of the town before the walls.',
     condition: all(discovered('sheltered-courtyard'), { kind: 'memory', metric: 'matureTrees', atLeast: 1 }), focus: { kind: 'topology', feature: 'courtyard' },
-    effects: standardEffects('A courtyard tree has grown broad enough to gather beneath.', 'green', 'resting in the tree’s new shade'),
+    effects: standardEffects('A courtyard tree has grown broad enough to gather beneath.', 'green', 'resting in the tree\'s new shade'),
   },
   {
     id: 'harbor-plaza', repeatable: false, title: 'Room to Linger', illustration: 'street',
@@ -724,7 +724,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     id: 'village-street', repeatable: false, title: 'A Street of Names', illustration: 'street',
     note: 'Five doorways, five names, and a path worn familiar between them.',
     condition: all(discovered('first-neighbors'), { kind: 'population', atLeast: 5 }), focus: { kind: 'town' },
-    effects: standardEffects('The quay has become a neighborhood.', 'people', 'learning every name on the street'),
+    effects: standardEffects('Five households now share the quay.', 'people', 'learning every name on the street'),
   },
   {
     id: 'familiar-faces', repeatable: false, title: 'Familiar Faces', illustration: 'friendship',
@@ -745,8 +745,8 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: standardEffects('Tea is being poured by the window.', 'warm', 'lingering over a cup of tea'),
   },
   {
-    id: 'makers-door', repeatable: false, title: 'The Maker’s Door', illustration: 'tools',
-    note: 'The tap of patient tools began to travel across the afternoon water.',
+    id: 'makers-door', repeatable: false, title: 'The Maker\'s Door', illustration: 'tools',
+    note: 'The tap of patient tools carried across the afternoon water.',
     condition: all(discovered('village-street'), { kind: 'business', businessType: 'workshop', atLeast: 1 }, { kind: 'time', after: 9, before: 19 }), focus: { kind: 'business', businessType: 'workshop' },
     effects: standardEffects('Small tools are singing behind an open door.', 'stone', 'watching the artisan work'),
   },
@@ -768,11 +768,11 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'first-kitten', repeatable: false, title: 'Four Pawprints Become Eight', illustration: 'inn',
-    note: 'A smaller face appeared beneath the fishmonger’s step, wearing an old coat pattern in a new arrangement.',
+    note: 'A smaller face appeared beneath the fishmonger\'s step, wearing an old coat pattern in a new arrangement.',
     condition: all(discovered('harbor-cats'), { kind: 'memory', metric: 'catPopulation', atLeast: 4 }), focus: { kind: 'business', businessType: 'fishmonger' },
     effects: [
       { kind: 'wildlife', action: 'gather', animal: 'cats' },
-      { kind: 'citizens', action: 'notice', activity: 'meeting the harbor’s first kitten' },
+      { kind: 'citizens', action: 'notice', activity: 'meeting the harbor\'s first kitten' },
       reveal('The harbor-cat family has welcomed its first kitten.', 'people'),
     ],
   },
@@ -784,7 +784,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'courtyard-market', repeatable: false, title: 'Stems Beside the Bread', illustration: 'market',
-    note: 'The florist set green buckets beside the baker’s baskets, and the courtyard became a morning market without anyone naming it.',
+    note: 'The florist set green buckets beside the baker\'s baskets, and the courtyard became a morning market without anyone naming it.',
     condition: all(discovered('morning-bread'), { kind: 'business', businessType: 'flower-shop', atLeast: 1 }, { kind: 'adjacency', businessType: 'bakery', feature: 'courtyard' }, { kind: 'time', after: 7, before: 11 }), focus: { kind: 'topology', feature: 'courtyard' },
     effects: [
       { kind: 'city', action: 'decorate' },
@@ -794,7 +794,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'garden-butterflies', repeatable: false, title: 'Wings Among the Stems', illustration: 'garden',
-    note: 'The florist’s brightest stems drew tiny wings into the sheltered garden, each one no larger than a fallen petal.',
+    note: 'The florist\'s brightest stems drew tiny wings into the sheltered garden, each one no larger than a fallen petal.',
     condition: all(discovered('courtyard-market'), { kind: 'business', businessType: 'flower-shop', atLeast: 1 }, { kind: 'topology', feature: 'courtyard', atLeast: 1 }, { kind: 'time', after: 8, before: 18 }), focus: { kind: 'topology', feature: 'courtyard' },
     effects: [
       { kind: 'wildlife', action: 'reveal', animal: 'butterflies' },
@@ -858,18 +858,18 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: [
       { kind: 'ambience', action: 'refresh' },
       { kind: 'citizens', action: 'notice', activity: 'waiting for the last ferry' },
-      reveal('A ferry answers the inn’s last lantern.', 'warm'),
+      reveal('A ferry answers the inn\'s last lantern.', 'warm'),
     ],
   },
   {
     id: 'harbor-market', repeatable: false, title: 'A Harbor Market', illustration: 'market',
     note: 'Bread, tea, tools, silver fish, and a bed for travelers: the quay had learned to provide.',
     condition: all(discovered('morning-bread'), discovered('tea-table'), discovered('makers-door'), discovered('morning-catch'), discovered('last-lantern')), focus: { kind: 'town' },
-    effects: standardEffects('The whole harbor hums with trade.', 'people', 'making a slow round of the harbor market'),
+    effects: standardEffects('Five kinds of trade now share the quay.', 'people', 'making a round of the harbor market'),
   },
   {
     id: 'merchant-arrival', repeatable: false, title: 'Cargo on the Tide', illustration: 'market',
-    note: 'A broad little boat found the sheltered water and unloaded bright crates beside the market.',
+    note: 'A broad cargo boat entered the sheltered water and unloaded bright crates beside the market.',
     condition: all(discovered('harbor-market'), { kind: 'water', feature: 'dock', atLeast: 1 }, { kind: 'water', feature: 'sheltered', atLeast: 1 }), focus: { kind: 'town' },
     effects: [
       { kind: 'ambience', action: 'refresh' },
@@ -897,7 +897,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     id: 'rare-tree', repeatable: false, title: 'The Blue-Paper Seed', illustration: 'garden',
     note: 'Mara planted her seed in the most sheltered earth. Its silver-green leaves opened before anyone thought to doubt it.',
     condition: all(discovered('mysterious-traveler'), discovered('sheltered-courtyard'), { kind: 'day', atLeast: 3 }), focus: { kind: 'topology', feature: 'courtyard' },
-    effects: natureEffects('A rare silver tree takes root in the courtyard.', 'green', 'visiting the traveler’s rare tree'),
+    effects: natureEffects('A rare silver tree takes root in the courtyard.', 'green', 'visiting the traveler\'s rare tree'),
   },
   {
     id: 'birds-nest', repeatable: false, title: 'A Nest Above the Bell', illustration: 'gulls',
@@ -913,7 +913,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
       { kind: 'city', action: 'decorate' },
       { kind: 'ambience', action: 'celebrate' },
       { kind: 'citizens', action: 'gather', activity: 'gathering below the clock for its first chime' },
-      reveal('A clock face begins keeping the harbor’s many hours.', 'warm'),
+      reveal('A clock face keeps the harbor\'s many hours.', 'warm'),
     ],
   },
   {
@@ -951,7 +951,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
       { kind: 'time', after: 8, before: 18 },
     ),
     focus: { kind: 'place-identity', identityId: 'makers-walk' },
-    effects: placeEffects('The guild kiln gives the whole makers’ walk a working rhythm.', 'warm', 'sharing tools beside the guild kiln'),
+    effects: placeEffects('The guild kiln sets the pace along the whole makers\' walk.', 'warm', 'sharing tools beside the guild kiln'),
   },
   {
     id: 'place-roof-village', repeatable: false, title: 'Windows Across the Roofs', illustration: 'neighbors',
@@ -976,7 +976,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'place-lantern-square', repeatable: false, title: 'The First Evening Belongs Here', illustration: 'lanterns',
-    note: 'The little stage lit one lamp, then another. Chairs turned toward it as naturally as flowers turn toward morning.',
+    note: 'The little stage lit one lamp, then another. Chairs turned toward it before the second flame was steady.',
     condition: all(
       { kind: 'place-identity', identityId: 'lantern-square', atLeast: 1, visitorsAtLeast: 2 },
       { kind: 'any', conditions: [
@@ -1054,14 +1054,14 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'place-messengers-row', repeatable: false, title: 'A Letter Finds Its Door', illustration: 'street',
-    note: 'The lookout spotted a blue-sailed courier. Before the boat tied up, Messenger’s Row already knew which door the letter needed.',
+    note: 'The lookout spotted a blue-sailed courier. Before the boat tied up, Messenger\'s Row already knew which door the letter needed.',
     condition: all(
       { kind: 'place-identity', identityId: 'messengers-row', atLeast: 1, visitorsAtLeast: 1 },
       { kind: 'time', after: 8, before: 18 },
     ),
     focus: { kind: 'place-identity', identityId: 'messengers-row' },
     effects: [
-      ...placeEffects('The Post House sorts its first letter for the harbor.', 'people', 'carrying the first letter along messenger’s row'),
+      ...placeEffects('The Post House sorts its first letter for the harbor.', 'people', 'carrying the first letter along messenger\'s row'),
       { kind: 'citizens', action: 'spawn-visitor', name: 'Tavi', occupation: 'Courier' },
     ],
   },
@@ -1127,7 +1127,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
       { kind: 'time', after: 9, before: 18 },
     ),
     focus: { kind: 'confluence', confluenceId: 'house-of-hands' },
-    effects: placeEffects('A shared sketch becomes the commons hall’s first useful invention.', 'people', 'learning and making in the commons hall'),
+    effects: placeEffects('The commons hall builds its first useful invention from a shared sketch.', 'people', 'learning and making in the commons hall'),
   },
   {
     id: 'confluence-festival-crown', repeatable: false, title: 'The Roof Gives the Signal', illustration: 'festival',
@@ -1163,7 +1163,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
       { kind: 'time', after: 10, before: 18.5 },
     ),
     focus: { kind: 'confluence', confluenceId: 'banner-guild' },
-    effects: placeEffects('The banner house raises the town’s first shared colors.', 'warm', 'raising new cloth at the banner house'),
+    effects: placeEffects('The banner house raises the town\'s first shared colors.', 'warm', 'raising new cloth at the banner house'),
   },
   {
     id: 'confluence-archive-tower', repeatable: false, title: 'A Shelf for the Harbor', illustration: 'town',
@@ -1177,9 +1177,9 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'town-remembers', repeatable: false, title: 'The Town Remembers', illustration: 'town',
-    note: 'Stone, garden, bridge, work, and friendship now hold one another together. The town has a memory of its own.',
+    note: 'People now give directions by the old garden, meet on the bridge, and remember who opened the first shops. The town has a past.',
     condition: all(discovered('sheltered-courtyard'), discovered('high-bridge'), discovered('lookout-tower'), discovered('familiar-faces'), discovered('harbor-market'), { kind: 'population', atLeast: 7 }), focus: { kind: 'town' },
-    effects: standardEffects('For a moment, the whole town seems to remember.', 'warm', 'remembering how the town began'),
+    effects: standardEffects('Residents stop at the places where the town began.', 'warm', 'remembering how the town began'),
   },
   {
     id: 'rooftop-gardens', repeatable: false, title: 'Gardens Above the Quay', illustration: 'pots',
@@ -1216,7 +1216,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'festival-ribbons', repeatable: false, title: 'Ribbons Across the Street', illustration: 'festival',
-    note: 'Nobody announced a festival. Bright scraps simply crossed the street until celebration became inevitable.',
+    note: 'The first ribbon went up above the plaza. By afternoon, neighbors had strung bright cloth across every approach.',
     condition: all(discovered('town-remembers'), discovered('tower-bell'), discovered('harbor-plaza'), { kind: 'relationships', atLeast: 3 }), focus: { kind: 'topology', feature: 'plaza' },
     effects: natureEffects('Festival ribbons appear between the eaves.', 'warm', 'hanging bright ribbons over the quay'),
   },
@@ -1242,7 +1242,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
       { kind: 'city', action: 'decorate' },
       { kind: 'ambience', action: 'celebrate' },
       { kind: 'citizens', action: 'gather', activity: 'gathering along the quay for all the lanterns' },
-      reveal('The town seems happy.', 'warm'),
+      reveal('All five lanterns burn above a full square.', 'warm'),
     ],
   },
   {

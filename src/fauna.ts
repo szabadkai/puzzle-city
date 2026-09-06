@@ -421,7 +421,7 @@ export class FaunaSystem {
           title: 'Harbor cats',
           ageLabel: describeAge(ageInHours(colonyFoundedAt, absoluteHours)),
           detail: `${this.visibleCatCount} ${this.visibleCatCount === 1 ? 'cat lives' : 'cats live'} among the inns, gardens, and fishmongers.`,
-          note: this.kittenCount ? `${this.kittenCount} of them ${this.kittenCount === 1 ? 'is a growing kitten' : 'are growing kittens'}.` : 'The colony has settled into the town’s daily rhythm.',
+          note: this.kittenCount ? `${this.kittenCount} of them ${this.kittenCount === 1 ? 'is a growing kitten' : 'are growing kittens'}.` : 'The adult cats make the same rounds each day.',
         };
       }
       const observation = wildlife ? this.waterlifeObservation(wildlife) : null;
@@ -443,18 +443,18 @@ export class FaunaSystem {
     const observations: Record<Exclude<ObservableWildlife, 'cat'>, Omit<WildlifeMemoryInspection, 'kind'>> = {
       fish: {
         title: 'Silver shoal', ageLabel: 'Sheltered-water residents',
-        detail: 'Small fish circle slowly beneath the harbor’s calmer water.',
+        detail: 'Silver fish circle below the calmer water inside the harbor.',
         note: 'They gather where walls, canals, and quays soften the open tide.',
       },
       crab: {
         title: 'Quay crab', ageLabel: 'Low-tide forager',
-        detail: 'A little crab patrols the damp edge of the dock.',
+        detail: 'A red crab patrols the damp edge of the dock.',
         note: 'It moves sideways between barnacled stones and dropped scraps.',
       },
       turtle: {
         title: 'Harbor turtle', ageLabel: 'Rare tide-wanderer',
-        detail: 'A solitary sea turtle briefly rises from the deeper harbor water.',
-        note: 'A sighting is uncommon; before long it paddles quietly back out to sea.',
+        detail: 'A solitary sea turtle rises from the deeper harbor water.',
+        note: 'Sightings are rare. Before long, it paddles back out to sea.',
       },
       whale: {
         title: 'Passing whale', ageLabel: 'Deep-water visitor',
@@ -464,12 +464,12 @@ export class FaunaSystem {
       dolphins: {
         title: 'Dolphin pod', ageLabel: 'Playful visitors',
         detail: 'Three dolphins arc through the swell in a loose traveling pod.',
-        note: 'The leader rises first and the others follow around the town’s shoreline.',
+        note: 'The leader rises first and the others follow around the town\'s shoreline.',
       },
       squids: {
         title: 'Drifting jellyfish', ageLabel: 'Below the surface',
-        detail: 'A small group of translucent jellyfish pulses through the green-blue water.',
-        note: 'They become clearest when the tide carries them close to shore.',
+        detail: 'Translucent jellyfish pulse through the green-blue water.',
+        note: 'They are easiest to see when the tide carries them close to shore.',
       },
       tuna: {
         title: 'Passing tuna', ageLabel: 'Open-water school',

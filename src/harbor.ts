@@ -627,15 +627,15 @@ export class HarborAmbience {
       : this.merchantJourneyPhase < .38
         ? 'It is arriving from open water with grain, straight timber, river clay, and loom fiber on deck.'
         : this.merchantLoadedExport
-          ? 'It is heading back to open water with the harbor’s finished export crates.'
+          ? 'It is heading back to open water with the harbor\'s finished export crates.'
           : 'It is heading back beyond the harbor after making its call.';
     let passengerCount = 0;
     model.traverse((object) => { if (object.userData.vesselPassenger && object.visible) passengerCount += 1; });
     const observations: Record<BoatKind, Omit<BoatMemoryInspection, 'kind'>> = {
       rowboat: {
         title: 'Harbor rowboat', ageLabel: 'Shoreline wanderer',
-        detail: 'A small rowboat follows the changing edge of the town.',
-        note: 'Its route quietly reshapes itself whenever the harbor grows.',
+        detail: 'A rowboat loops around the exposed edge of town.',
+        note: 'Its route updates whenever new buildings change the shoreline.',
       },
       'fishing boat': {
         title: 'Working fishing boat', ageLabel: 'Harbor working vessel',
@@ -645,17 +645,17 @@ export class HarborAmbience {
       'merchant boat': {
         title: 'Merchant boat', ageLabel: 'Visiting cargo vessel',
         detail: merchantMakesJourney ? merchantJourneyDetail : merchantCargo.length
-          ? `Visible ${merchantCargo.join(', ')} ride on the broad working deck.`
-          : 'The broad working deck is ready for the harbor’s next real shipment.',
+          ? `The working deck carries ${merchantCargo.join(', ')}.`
+          : 'The working deck is empty until the next shipment.',
         note: merchantMakesJourney
-          ? 'Each round trip begins beyond the town, pauses at the working dock, and ends back in open water.'
+          ? 'Each trip starts in open water, stops at the working dock, then returns beyond the harbor.'
           : this.placeIdentities.has('canal-market')
-          ? 'The market barge’s painted awning draws it toward the town before evening.'
+          ? 'The market barge\'s painted awning draws it toward the town before evening.'
           : 'A working dock gives it somewhere to unload before evening.',
       },
       'signal boat': {
         title: 'Beacon survey boat', ageLabel: 'Outer-water scout',
-        detail: 'A small blue sail traces the edge of the harbor and reads the signals above the roofs.',
+        detail: 'A blue-sailed survey boat follows the harbor edge using signals from the roofs.',
         note: 'It appears only while a High Harbor keeps its signal beacon.',
       },
       ferry: {
@@ -804,7 +804,7 @@ export class HarborAmbience {
         : 'The marked bays are empty, waiting for the next tide-borne shipment.',
       note: this.unloading
         ? `Dockworkers are carrying ${this.unloading.good} ashore now.`
-        : 'Grain, straight timber, river clay, and loom fiber cannot be made locally; merchant crews carry them ashore here.',
+        : 'The town cannot make grain, straight timber, river clay, or loom fiber. Merchant crews carry them ashore here.',
     };
   }
 

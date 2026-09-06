@@ -116,13 +116,13 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button class="second-tide-close" id="second-tide-close" aria-label="Dismiss the living-places introduction">×</button>
       <span>Second tide</span>
       <strong>When shapes meet</strong>
-      <p id="second-tide-hint">You know enough kinds of shape to begin listening for what happens when they meet.</p>
+      <p id="second-tide-hint">You have found enough building forms to combine them. The Atlas has new clues.</p>
       <button class="second-tide-atlas" id="second-tide-atlas">Explore living places</button>
     </aside>
     <aside class="lantern-finale-card" id="lantern-finale-card" aria-live="polite">
       <span>Five lights, one harbor</span>
       <strong>All the Lanterns</strong>
-      <p>The harbor found its light. Its story is complete, but the town can keep changing.</p>
+      <p>All five lanterns are lit. The town will keep living while you keep building.</p>
       <div>
         <button id="finale-continue">Keep building</button>
         <button id="finale-journal">See the lanterns</button>
@@ -174,7 +174,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <button id="journal-tab-stories" role="tab" data-journal-view="stories" aria-selected="true">Stories <span id="story-count">0</span></button>
           <button id="journal-tab-atlas" role="tab" data-journal-view="atlas" aria-selected="false">Formations <span id="formation-count">0/18</span></button>
         </div>
-        <p class="journal-intro" id="journal-intro">No tasks to finish—only small things the town has shown you.</p>
+        <p class="journal-intro" id="journal-intro">Build at your own pace. The journal records what happens.</p>
         <div class="journal-list" id="journal-list" tabindex="0" aria-label="Journal entries"></div>
       </aside>
     </div>
@@ -183,9 +183,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button class="about-close" id="about-close" aria-label="Close About">×</button>
         <span class="about-kicker">A town from the sea</span>
         <h2 id="about-title">Little Tides</h2>
-        <p>Build without pressure and watch a tiny harbor find its own routines, friendships, and quiet surprises.</p>
+        <p>Place homes in the water. Residents move in, open shops, make friends, and leave stories in the journal.</p>
         <p class="creator-credit">Made by <a href="https://szabadkai.com" target="_blank" rel="noreferrer">Levente Szabadkai</a> · <a href="https://github.com/szabadkai/puzzle-city" target="_blank" rel="noreferrer">GitHub</a>.</p>
-        <p class="music-credit">Music: <a href="https://opengameart.org/content/caketown-cuteplayful" target="_blank" rel="noreferrer">“Caketown - Cute/playful”</a> by Matthew Pablo, licensed <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.<br><a href="https://opengameart.org/content/free-contemplative-fantasy-music-pack" target="_blank" rel="noreferrer">“Déjà Vus”</a> by <a href="https://yannz41.itch.io" target="_blank" rel="noreferrer">YannZ</a>, licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Transcoded from MP3 to 64 kbps AAC. <a href="https://open.spotify.com/intl-it/artist/76CUcHd0t0XViSm9YBbHBw" target="_blank" rel="noreferrer">Spotify</a> · <a href="mailto:yziango@gmail.com">Contact</a>.</p>
+        <p class="music-credit">Music: <a href="https://opengameart.org/content/caketown-cuteplayful" target="_blank" rel="noreferrer">&quot;Caketown - Cute/playful&quot;</a> by Matthew Pablo, licensed <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.<br><a href="https://opengameart.org/content/free-contemplative-fantasy-music-pack" target="_blank" rel="noreferrer">&quot;Déjà Vus&quot;</a> by <a href="https://yannz41.itch.io" target="_blank" rel="noreferrer">YannZ</a>, licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Transcoded from MP3 to 64 kbps AAC. <a href="https://open.spotify.com/intl-it/artist/76CUcHd0t0XViSm9YBbHBw" target="_blank" rel="noreferrer">Spotify</a> · <a href="mailto:yziango@gmail.com">Contact</a>.</p>
       </section>
     </div>
     <div class="postcard-scrim" id="postcard-scrim" aria-hidden="true">
@@ -193,7 +193,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button class="postcard-close" id="postcard-close" aria-label="Close tide postcard">×</button>
         <span class="postcard-kicker">Keep this little harbor</span>
         <h2 id="postcard-title">Tide postcard</h2>
-        <p>Save a shareable, restorable PNG—or bring your harbor into the physical world.</p>
+        <p>Save a PNG that contains your town. Load it later, share the picture, or export the harbor for 3D printing.</p>
         <div class="postcard-preview" aria-hidden="true"><span class="postcard-stamp">潮</span><strong id="postcard-message-preview">Wish you were here by the water.</strong><i id="postcard-date-preview">Day 1</i></div>
         <label class="postcard-inscription" for="postcard-message">Inscription<input id="postcard-message" maxlength="60" value="Wish you were here by the water."></label>
         <button class="postcard-save" id="postcard-save">Save tide postcard</button>
@@ -810,8 +810,8 @@ function refreshFormations(announce: boolean) {
     const landmark = confluenceLandmarkSocket(occurrence);
     const firstDiscovery = revealedConfluences.some((revealed) => revealed.id === occurrence.id);
     if (definition) showToast(firstDiscovery
-      ? `${definition.title} has converged. Three formations raised its ${definition.landmark.title.toLowerCase()}.`
-      : `${definition.landmark.title} has converged here again.`);
+      ? `${definition.title} formed here. Three formations raised its ${definition.landmark.title.toLowerCase()}.`
+      : `${definition.landmark.title} has returned.`);
     controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .22);
     city.celebrateAt(landmark.x, landmark.z);
     citizens.gatherAt(landmark.x, landmark.z, `welcoming the new ${landmark.title.toLowerCase()}`);
@@ -826,8 +826,8 @@ function refreshFormations(announce: boolean) {
     const firstDiscovery = revealedPlaces.some((revealed) => revealed.id === occurrence.id);
     if (firstDiscovery) placeIntroductionSeen = true;
     if (identity) showToast(firstDiscovery
-      ? `${identity.title} has emerged. Its ${identity.landmark.title.toLowerCase()} could settle nowhere else.`
-      : `${identity.landmark.title} has settled here again.`);
+      ? `${identity.title} formed here. Its ${identity.landmark.title.toLowerCase()} marks the spot.`
+      : `${identity.landmark.title} has returned.`);
     controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .22);
     city.celebrateAt(landmark.x, landmark.z);
     citizens.gatherAt(landmark.x, landmark.z, `welcoming the new ${landmark.title.toLowerCase()}`);
@@ -924,11 +924,11 @@ function updateFirstTideGuide() {
   }
   const step = onboardingStep();
   const copy = [
-    ['Raise the first home', 'Build at the golden ripple—or anywhere in the nearby water.'],
+    ['Raise the first home', 'Build at the golden ripple or anywhere in the nearby water.'],
     ['Leave water between neighbors', 'The four ripples skip one water tile. Choose one for a second home.'],
     ['Lift both banks', 'Gold rings mark the two roofs. Add one storey to each to make a sea arch.'],
     ['Let buildings meet', 'Choose a nearby ripple. A shared wall will reshape both buildings.'],
-    ['Five lanterns wait for this harbor', 'Build freely—or follow the town’s stories to light them.'],
+    ['Five lanterns wait for this harbor', 'Keep building, or follow the town\'s stories to light them.'],
   ] as const;
   document.querySelector('#first-tide-progress')!.textContent = step === 4 ? 'First tide complete' : `First tide · ${step + 1} of 4`;
   document.querySelector('#first-tide-title')!.textContent = copy[step][0];
@@ -970,8 +970,8 @@ function updateSecondTideIntroduction() {
   const surfaced = PLACE_IDENTITY_CATALOG.filter((identity) =>
     knownPlaceIdentities.has(identity.id) || placeIdentityProgress(identity.id, formationOccurrences).state !== 'missing').length;
   document.querySelector('#second-tide-hint')!.textContent = surfaced === 1
-    ? 'One possibility has begun to surface. The Atlas will reveal only the part your town is ready to understand.'
-    : `${surfaced} possibilities have begun to surface. The Atlas will reveal only what your town is ready to understand.`;
+    ? 'The forms in town have unlocked one new Atlas clue.'
+    : `The forms in town have unlocked ${surfaced} new Atlas clues.`;
   const delayPassed = performance.now() - secondTideEligibleSince >= 4000;
   panel.classList.toggle('show', delayPassed && !journalOpen);
 }
@@ -1216,8 +1216,8 @@ function renderJournal() {
   document.querySelector('#journal-title')!.textContent = journalView === 'stories' ? 'Harbor Journal' : 'Formation Atlas';
   document.querySelector('.journal-kicker')!.textContent = journalView === 'stories' ? 'Observations from the water' : 'The shapes a town can remember';
   document.querySelector('#journal-intro')!.textContent = journalView === 'stories'
-    ? 'There is no wrong way to build. Five harbor stories are waiting to be lit.'
-    : 'Build around space, water, and neighboring roofs. Every form can be made again.';
+    ? 'Build at your own pace. Five longer stories will light the Harbor Lanterns.'
+    : 'Empty space, water, and roof heights determine each form. You can rebuild any form the Atlas remembers.';
   document.querySelectorAll<HTMLButtonElement>('[data-journal-view]').forEach((button) => {
     const selected = button.dataset.journalView === journalView;
     button.classList.toggle('active', selected);
@@ -1248,7 +1248,7 @@ function renderJournal() {
   if (!entries.length) {
     const empty = document.createElement('p');
     empty.className = 'journal-empty';
-    empty.textContent = 'The pages are waiting for the town’s first small surprise.';
+    empty.textContent = 'The first entry will appear when something changes in town.';
     list.append(empty);
     return;
   }
@@ -1319,7 +1319,7 @@ function renderLanternMap(list: HTMLDivElement, snapshot: ReturnType<typeof curr
       ? lit === lanterns.length ? 'All five lights are ready. Return between 19:00 and 23:00.' : 'The lantern theatre is ready to receive the remaining lights.'
       : lit >= 3
         ? 'The lights need a harbor plaza beside a higher courtyard or shared rooftop.'
-        : 'Someday the five lights will need a square in which to gather.';
+        : 'Keep following the lantern stories. The Atlas will reveal their meeting place.';
   destination.innerHTML = `<span aria-hidden="true">${square ? '✦' : '◇'}</span><span><strong>${destinationTitle}</strong><small>${destinationHint}</small></span><em>${square ? 'Visit' : 'Follow'}</em>`;
   destination.setAttribute('aria-label', `${destinationTitle}. ${destinationHint} ${square ? 'Visit it in town.' : 'Follow the Lantern Square clue.'}`);
   section.append(destination);
@@ -1341,7 +1341,7 @@ function renderFormationAtlas(list: HTMLDivElement) {
 
   const formationHeading = document.createElement('div');
   formationHeading.className = 'atlas-section-heading';
-  formationHeading.innerHTML = '<strong>Building formations</strong><span>The individual shapes that make a town’s vocabulary.</span>';
+  formationHeading.innerHTML = '<strong>Building formations</strong><span>Neighboring buildings create these forms.</span>';
   const grid = document.createElement('div');
   grid.className = 'atlas-grid';
   for (const formation of FORMATION_CATALOG) {
@@ -1376,20 +1376,15 @@ function renderFormationAtlas(list: HTMLDivElement) {
     if (learned) {
       const effect = formationInfluenceDetails(formation);
       const socialLine = document.createElement('span');
-      const socialLabel = document.createElement('strong');
-      socialLabel.textContent = 'Resident draw:';
-      socialLine.append(socialLabel, ` ${effect.socialEffect}`);
+      socialLine.textContent = effect.socialEffect;
 
       const tradeLine = document.createElement('span');
-      const tradeLabel = document.createElement('strong');
-      tradeLabel.textContent = 'Favored trades:';
       const openingBenefit = document.createElement('strong');
       openingBenefit.textContent = `${FORMATION_OPENING_ADVANCE} residents earlier`;
       const batchBenefit = document.createElement('strong');
       batchBenefit.textContent = `+${FORMATION_BATCH_BONUS} item per batch`;
       tradeLine.append(
-        tradeLabel,
-        ` ${effect.businesses}. When based nearby, they can open `,
+        `Nearby ${effect.businesses} can open `,
         openingBenefit,
         ' and produce ',
         batchBenefit,
@@ -1416,7 +1411,7 @@ function renderPlaceIdentityAtlas(list: HTMLDivElement) {
   const useCounts = citizens.identityUseCounts();
   const heading = document.createElement('div');
   heading.className = 'atlas-section-heading identity-heading';
-  heading.innerHTML = '<strong>Living places</strong><span>Active places give nearby blocks a visible character and steer what opens next. Trades they helped found keep that origin in the town’s history.</span>';
+  heading.innerHTML = '<strong>Living places</strong><span>Each active place decorates nearby blocks and affects which trades open there. Shops keep a record of the place that attracted them.</span>';
   const grid = document.createElement('div');
   grid.className = 'identity-grid';
   for (const identity of PLACE_IDENTITY_CATALOG) {
@@ -1449,27 +1444,27 @@ function renderPlaceIdentityAtlas(list: HTMLDivElement) {
       ? `${active} currently in town, reaching ${influencedHomes} homes${gathering ? ` with ${gathering} visiting` : ''}; visit landmark.`
       : following ? 'Currently following this clue.'
       : canFollow ? 'Follow this clue.'
-      : 'Its formation recipe has not surfaced yet.'}`);
+      : 'Its formation recipe is still hidden.'}`);
     const mark = document.createElement('span');
     mark.className = 'identity-mark';
     mark.textContent = learned ? identity.mark : surfaced ? '◌' : '◇';
     const copy = document.createElement('span');
     copy.className = 'identity-copy';
     const kicker = document.createElement('small');
-    kicker.textContent = learned ? `emergent neighborhood · ${identity.influenceRadius}-tile reach` : surfaced ? 'a clue has surfaced' : 'harbor rumor';
+    kicker.textContent = learned ? `living place · ${identity.influenceRadius}-tile reach` : surfaced ? 'clue available' : 'harbor rumor';
     const title = document.createElement('strong');
     title.textContent = visibleTitle;
     const description = document.createElement('span');
     description.textContent = visibleDescription;
     const influence = document.createElement('span');
     influence.className = 'atlas-influence';
-    influence.textContent = learned ? `${identity.landmark.title}: ${identity.landmark.effect} ${identity.trace} ${identity.influence}` : '';
+    influence.textContent = learned ? `${identity.landmark.title}. ${identity.landmark.effect} ${identity.trace} ${identity.influence}` : '';
     const status = document.createElement('em');
     status.textContent = active
       ? `${influencedHomes} ${influencedHomes === 1 ? 'home' : 'homes'} in reach${gathering ? ` · ${gathering} ${gathering === 1 ? 'visitor' : 'visitors'}` : ''}${legacyTrades ? ` · ${legacyTrades} lasting ${legacyTrades === 1 ? 'trade' : 'trades'}` : ''} · focus`
       : following ? `following · ${Math.round(progress.value * 100)}%`
       : learned ? `Remembered${legacyTrades ? ` · ${legacyTrades} lasting ${legacyTrades === 1 ? 'trade' : 'trades'}` : ''} · follow to rebuild`
-      : surfaced ? 'Follow the surfaced clue'
+      : surfaced ? 'Follow this clue'
       : 'Listen for one of its forms';
     copy.append(kicker, title, description);
     if (learned) copy.append(influence);
@@ -1486,7 +1481,7 @@ function renderConfluenceAtlas(list: HTMLDivElement) {
   const useCounts = citizens.confluenceUseCounts();
   const heading = document.createElement('div');
   heading.className = 'atlas-section-heading identity-heading confluence-heading';
-  heading.innerHTML = '<strong>Confluences</strong><span>Extraordinary places formed by three mutually close formations. Their grand landmark supersedes the component landmarks; the living places beneath it keep their original benefits.</span>';
+  heading.innerHTML = '<strong>Confluences</strong><span>Three nearby formations create each confluence. Its landmark replaces the smaller local landmarks, but their trade benefits remain.</span>';
   const grid = document.createElement('div');
   grid.className = 'identity-grid confluence-grid';
   for (const definition of CONFLUENCE_CATALOG) {
@@ -1509,27 +1504,27 @@ function renderConfluenceAtlas(list: HTMLDivElement) {
       ? `${active} currently in town${gathering ? ` with ${gathering} visiting` : ''}; visit grand landmark.`
       : following ? 'Currently following this three-formation clue.'
       : canFollow ? 'Follow this three-formation clue.'
-      : 'Its recipe has not surfaced yet.'}`);
+      : 'Its recipe is still hidden.'}`);
     const mark = document.createElement('span');
     mark.className = 'identity-mark confluence-mark';
     mark.textContent = learned ? definition.mark : surfaced ? '△' : '◇';
     const copy = document.createElement('span');
     copy.className = 'identity-copy';
     const kicker = document.createElement('small');
-    kicker.textContent = learned ? 'threefold living place' : surfaced ? 'three forms are stirring' : 'deep harbor rumor';
+    kicker.textContent = learned ? 'three-form place' : surfaced ? 'clue available' : 'harbor rumor';
     const title = document.createElement('strong');
     title.textContent = visibleTitle;
     const description = document.createElement('span');
     description.textContent = visibleDescription;
     const influence = document.createElement('span');
     influence.className = 'atlas-influence';
-    influence.textContent = learned ? `${definition.landmark.title}: ${definition.landmark.effect}` : '';
+    influence.textContent = learned ? `${definition.landmark.title}. ${definition.landmark.effect}` : '';
     const status = document.createElement('em');
     status.textContent = active
       ? `${gathering} ${gathering === 1 ? 'visitor' : 'visitors'} · focus`
       : following ? `following · ${Math.round(progress.value * 100)}%`
       : learned ? 'Remembered · follow to rebuild'
-      : surfaced ? 'Follow the threefold clue'
+      : surfaced ? 'Follow this clue'
       : 'Listen for its first formation';
     copy.append(kicker, title, description);
     if (learned) copy.append(influence);
@@ -1669,7 +1664,7 @@ function followThread(eventId: string) {
   if (clue?.focus) controls.target.lerp(city.worldPosition(clue.focus.x, clue.focus.z).setY(1), .4);
   setJournalOpen(false);
   const lantern = followedThreadId ? HARBOR_LANTERN_BY_EVENT.get(followedThreadId) : null;
-  showToast(`Following “${lantern?.title ?? clue?.title ?? 'a new thread'}”.`);
+  showToast(`Following "${lantern?.title ?? clue?.title ?? 'a new thread'}".`);
 }
 
 function followPlaceIdentity(id: PlaceIdentityId) {
@@ -1688,7 +1683,7 @@ function followPlaceIdentity(id: PlaceIdentityId) {
   const progress = placeIdentityProgress(id, formationOccurrences);
   if (progress.focus) controls.target.lerp(city.worldPosition(progress.focus.x, progress.focus.z).setY(1), .4);
   setJournalOpen(false);
-  showToast(`Following ${definition?.title ?? 'a living place'}: shape its formations, then bring them close.`);
+  showToast(`Following ${definition?.title ?? 'a living place'}. Shape its formations, then bring them close.`);
 }
 
 function followConfluence(id: ConfluenceId) {
@@ -1705,7 +1700,7 @@ function followConfluence(id: ConfluenceId) {
   const progress = confluenceProgress(id, formationOccurrences);
   if (progress.focus) controls.target.lerp(city.worldPosition(progress.focus.x, progress.focus.z).setY(1), .4);
   setJournalOpen(false);
-  showToast(`Following ${definition?.title ?? 'a confluence'}: shape all three forms and keep every pair close.`);
+  showToast(`Following ${definition?.title ?? 'a confluence'}. Shape all three forms and keep every pair close.`);
 }
 
 function revisitDiscovery(eventId: string) {
@@ -1939,8 +1934,8 @@ async function savePostcard() {
   const button = document.querySelector<HTMLButtonElement>('#postcard-save')!;
   const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
   button.disabled = true;
-  button.textContent = 'Painting postcard…';
-  note.textContent = 'Holding the harbor still for just a moment.';
+  button.textContent = 'Painting postcard...';
+  note.textContent = 'Capturing the harbor and packing the town data into the PNG.';
   try {
     saveTown();
     const inscription = document.querySelector<HTMLInputElement>('#postcard-message')!.value;
@@ -1961,8 +1956,8 @@ async function saveTownModel() {
   const button = document.querySelector<HTMLButtonElement>('#postcard-stl')!;
   const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
   button.disabled = true;
-  button.textContent = 'Building 3D model…';
-  note.textContent = 'Joining the harbor onto a small print base.';
+  button.textContent = 'Building 3D model...';
+  note.textContent = 'Joining the visible buildings to a printable base.';
   try {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     const model = makeTownStl(city.root);
@@ -1980,7 +1975,7 @@ async function saveTownModel() {
 
 async function loadPostcard(file: File) {
   const note = document.querySelector<HTMLParagraphElement>('#postcard-note')!;
-  note.textContent = 'Reading the tide tucked inside this picture…';
+  note.textContent = 'Reading the town data inside this picture...';
   try {
     const town = await readTidePostcard(file);
     const townDay = town.day ?? 1;
@@ -2007,12 +2002,12 @@ function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
     ignoreNextPerformanceSample = true;
   }
   if (announce && update.closed[0]) {
-    showToast(`${update.closed[0].name} has quietly closed its shutters.`);
+    showToast(`${update.closed[0].name} has closed its shutters.`);
   }
   if (announce && update.hired[0]) {
     const hire = update.hired[0];
     const citizen = citizens.card(hire.citizenId);
-    showToast(`${citizen?.name ?? 'A neighbor'} has begun helping at ${hire.business.name}.`);
+    showToast(`${citizen?.name ?? 'A neighbor'} now helps at ${hire.business.name}.`);
     playCue('door');
   }
   if (announce && update.opened[0]) {
@@ -2020,7 +2015,7 @@ function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
     const [x, z] = opened.cellKey.split(',').map(Number);
     const affinity = placeBusinessAffinity(opened.type, { x, z }, formationOccurrences);
     const foundingPlace = opened.placeIdentityId ? PLACE_IDENTITY_BY_ID.get(opened.placeIdentityId) : affinity.identity;
-    if (foundingPlace) showToast(`${opened.name} opens under ${foundingPlace.title}’s influence. That origin will remain part of its history.`);
+    if (foundingPlace) showToast(`${foundingPlace.title} helped ${opened.name} open here. The shop will keep that origin in its history.`);
     else if (affinity.formation) showToast(`${opened.name} opens near the ${affinity.formation.title.toLowerCase()}. The place suits the trade.`);
   }
   persistSoon();
@@ -2471,7 +2466,7 @@ function animate() {
     if (grow.discoveredIds().includes('clock-tower')) playCue('bell');
   }
   const daylight = daylightAt(timeOfDay);
-  // Keep two thirds of each cycle in the light: 04:00–20:00 is day,
+  // Keep two thirds of each cycle in the light. Day runs from 04:00 to 20:00,
   // leaving an eight-hour night without losing the dawn and dusk transitions.
   const nextNightMode = timeOfDay < daylightStartHour || timeOfDay >= daylightEndHour;
   if (nextNightMode !== nightMode) {

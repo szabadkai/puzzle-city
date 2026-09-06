@@ -654,7 +654,7 @@ try {
     const animatedLandmark = landmarkCity.root.children.find((child) => child.userData.cellX === targetX && child.userData.cellZ === targetZ);
     if (!animatedLandmark || animatedLandmark.scale.y >= 1) throw new Error(`${landmarkCase.title} did not receive its arrival animation.`);
     const memory = landmarkCity.memoryAt(targetX, targetZ, 0);
-    if (memory?.kind !== 'landmark' || memory.title !== landmarkCase.title || !memory.note.includes('It can only settle')) {
+    if (memory?.kind !== 'landmark' || memory.title !== landmarkCase.title || !memory.note.includes('This landmark remains only while')) {
       throw new Error(`${landmarkCase.title} did not replace its formation socket with an inspectable landmark.`);
     }
     if (landmarkCase.id === 'garden-commons' && !landmarkCity.root.children.some((child) => child.userData.seedHouseTrays)) {
@@ -739,7 +739,7 @@ try {
     }
     if (confluenceCase.id === 'archive-tower') {
       if (!landmarkGroup.userData.archiveReplacesTowerRoof || landmarkGroup.userData.hasPitchedTowerRoof) {
-        throw new Error('The Harbor Archive did not replace the lookout’s intersecting pitched roof.');
+        throw new Error("The Harbor Archive did not replace the lookout's intersecting pitched roof.");
       }
       if (landmarkGroup.userData.archiveWindowCount !== 8) {
         throw new Error('The Harbor Archive is missing its four paired record-room window bays.');

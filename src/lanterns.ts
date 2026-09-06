@@ -24,7 +24,7 @@ export const HARBOR_LANTERNS: readonly HarborLanternDefinition[] = [
     eventId: 'blossom-evening',
     awakensOn: 'sheltered-courtyard',
     anchor: 'courtyard',
-    promise: 'A sheltered garden must live long enough to meet the festival at blue hour.',
+    promise: 'Let an old courtyard tree bloom, hang festival ribbons, then visit at blue hour.',
   },
   {
     id: 'table',
@@ -33,7 +33,7 @@ export const HARBOR_LANTERNS: readonly HarborLanternDefinition[] = [
     eventId: 'shared-supper',
     awakensOn: 'familiar-faces',
     anchor: 'table',
-    promise: 'Friendships need an evening table where separate households can sit together.',
+    promise: 'Give old friends a cafe or inn where they can share an evening table.',
   },
   {
     id: 'chorus',
@@ -42,7 +42,7 @@ export const HARBOR_LANTERNS: readonly HarborLanternDefinition[] = [
     eventId: 'evening-chorus',
     awakensOn: 'gulls-return',
     anchor: 'lookout',
-    promise: 'A lookout, returning wings, and familiar voices will teach dusk its song.',
+    promise: 'Build a lookout, welcome the gulls back, then listen after 17:30.',
   },
   {
     id: 'clock',
@@ -51,7 +51,7 @@ export const HARBOR_LANTERNS: readonly HarborLanternDefinition[] = [
     eventId: 'clock-tower',
     awakensOn: 'tower-bell',
     anchor: 'clock-tower',
-    promise: 'A bell, a patient maker, and a nest must learn to share the highest roof.',
+    promise: 'A patient maker must fit a clock below the nest on the bell tower.',
   },
   {
     id: 'welcome',
@@ -60,7 +60,7 @@ export const HARBOR_LANTERNS: readonly HarborLanternDefinition[] = [
     eventId: 'ferry-route',
     awakensOn: 'last-lantern',
     anchor: 'ferry-dock',
-    promise: 'An inn must keep one light beside the tide until the ferry learns its way home.',
+    promise: 'Keep an inn open by the water until a ferry finds its light after dark.',
   },
 ] as const;
 

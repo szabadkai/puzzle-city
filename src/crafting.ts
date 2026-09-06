@@ -46,42 +46,42 @@ const RECIPES: readonly CraftRecipe[] = [
   {
     id: 'morning-catch', profession: 'Fisher', producer: 'fishmonger', inputs: {}, output: 'fish', amount: 2,
     deliveryTo: ['fishmonger'], discoveries: ['fishing-boat'], activeAt: (hour) => hour >= 5 && hour < 11,
-    milestone: 'The first catch has travelled from boat to fishmonger.',
+    milestone: 'A fisher has carried the first catch from the boat to the fishmonger.',
   },
   {
     id: 'garden-herbs', profession: 'Gardener', producer: 'flower-shop', inputs: {}, output: 'herbs',
     deliveryTo: ['tea-house', 'cafe', 'restaurant'], activeAt: (hour) => hour >= 7 && hour < 17,
-    milestone: 'Fresh harbor herbs have entered the town’s kitchens.',
+    milestone: 'Gardeners have delivered the first harbor herbs to the kitchens.',
   },
   {
     id: 'grain-landing', imported: true, inputs: {}, output: 'grain', amount: 2, deliveryTo: ['mill'],
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 8 && hour < 17,
-    milestone: 'The merchant boat has landed its first sacks of grain.',
+    milestone: 'Dockworkers have unloaded the first sacks of grain.',
   },
   {
     id: 'timber-landing', imported: true, inputs: {}, output: 'timber', amount: 2, deliveryTo: ['workshop', 'shipyard'],
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 8 && hour < 17,
-    milestone: 'Straight harbor timber has been carried ashore.',
+    milestone: 'Dockworkers have carried the first straight timber ashore.',
   },
   {
     id: 'clay-landing', imported: true, inputs: {}, output: 'clay', amount: 2, deliveryTo: ['pottery'],
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 8 && hour < 17,
-    milestone: 'The pottery has received its first river clay.',
+    milestone: 'Dockworkers have delivered the first river clay to the pottery.',
   },
   {
     id: 'fiber-landing', imported: true, inputs: {}, output: 'fiber', amount: 2, deliveryTo: ['weaver'],
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 8 && hour < 17,
-    milestone: 'Bundles of fiber have arrived for the loom.',
+    milestone: 'Dockworkers have delivered the first bundles of fiber to the loom.',
   },
   {
     id: 'milled-flour', producer: 'mill', inputs: { grain: 2 }, output: 'flour', deliveryTo: ['bakery'],
     activeAt: (hour) => hour >= 5 && hour < 15,
-    milestone: 'The mill has ground the harbor’s first flour.',
+    milestone: 'The mill has ground the harbor\'s first flour.',
   },
   {
     id: 'baked-bread', producer: 'bakery', inputs: { flour: 1 }, output: 'bread', amount: 2,
     deliveryTo: ['cafe', 'inn', 'restaurant'], activeAt: (hour) => hour >= 5 && hour < 11,
-    milestone: 'A loaf has completed the journey from grain sack to bakery window.',
+    milestone: 'The bakery has put the first loaf made from imported grain in its window.',
   },
   {
     id: 'forged-tools', producer: 'workshop', inputs: { timber: 1 }, output: 'tools',
@@ -91,12 +91,12 @@ const RECIPES: readonly CraftRecipe[] = [
   {
     id: 'thrown-tableware', producer: 'pottery', inputs: { clay: 2, tools: 1 }, output: 'tableware', amount: 2,
     deliveryTo: ['tea-house', 'restaurant', 'inn'], activeAt: (hour) => hour >= 8 && hour < 18,
-    milestone: 'The first local cups and bowls have left the kiln.',
+    milestone: 'The potter has taken the first local cups and bowls from the kiln.',
   },
   {
     id: 'woven-cloth', producer: 'weaver', inputs: { fiber: 2 }, output: 'cloth', amount: 2,
     deliveryTo: ['inn', 'shipyard'], activeAt: (hour) => hour >= 8 && hour < 18,
-    milestone: 'The loom has produced the town’s first bolt of cloth.',
+    milestone: 'The loom has produced the town\'s first bolt of cloth.',
   },
   {
     id: 'smoked-catch', producer: 'smokehouse', inputs: { fish: 2, timber: 1 }, output: 'smoked-fish', amount: 2,
@@ -106,12 +106,12 @@ const RECIPES: readonly CraftRecipe[] = [
   {
     id: 'tea-service', producer: 'tea-house', inputs: { herbs: 1, tableware: 1 }, output: 'tea', amount: 2,
     deliveryTo: ['cafe', 'inn'], activeAt: (hour) => hour >= 10 && hour < 20,
-    milestone: 'Local herbs and local cups have become a proper tea service.',
+    milestone: 'The tea house has served local herbs in cups from the town kiln.',
   },
   {
     id: 'harbor-supper', producer: 'restaurant', inputs: { fish: 1, bread: 1, tableware: 1 }, output: 'supper', amount: 2,
     deliveryTo: ['inn'], activeAt: (hour) => hour >= 16 && hour < 22,
-    milestone: 'Three trades have met at one table for the first harbor supper.',
+    milestone: 'The restaurant has served its first supper with local fish, bread, and bowls.',
   },
   {
     id: 'made-welcome', producer: 'inn', inputs: { bread: 1, tea: 1, cloth: 1 }, output: 'hospitality',
@@ -126,7 +126,7 @@ const RECIPES: readonly CraftRecipe[] = [
   {
     id: 'harbor-export', producer: 'shipyard', inputs: { 'smoked-fish': 1, tableware: 1, cloth: 1, hospitality: 1 }, output: 'harbor-goods',
     discoveries: ['merchant-arrival'], activeAt: (hour) => hour >= 9 && hour < 18,
-    milestone: 'The harbor has completed its first home-made export cargo.',
+    milestone: 'The shipyard has packed the harbor\'s first locally made export cargo.',
   },
 ] as const;
 

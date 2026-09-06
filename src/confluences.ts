@@ -62,73 +62,73 @@ export type ConfluenceLandmarkSocket = Readonly<{
 export const CONFLUENCE_CATALOG: readonly ConfluenceDefinition[] = [
   {
     id: 'grand-exchange', title: 'Grand Exchange', mark: '◈',
-    description: 'A working water lane, covered street, and public square become one harbor-wide point of arrival and exchange.',
+    description: 'A ferry stop, market street, and plaza meet at one pier for passengers and cargo.',
     hint: 'Bring a water crossing, arcade row, and harbor plaza into one close cluster.',
     mysteryTitle: 'Three routes, one arrival',
     rumor: 'Boat crews, shopkeepers, and people waiting in the square all seem to be describing the same missing place.',
     requirements: ['water crossing', 'arcade row', 'harbor plaza'], range: 3,
     places: ['canal-market', 'ferry-quarter'],
-    landmark: { kind: 'exchange-pier', title: 'Exchange Pier', description: 'A broad roofed pier joins passenger steps, cargo tables, and the square’s public route.', activity: 'meeting boats beneath the exchange pier', effect: 'Merchant and passenger arrivals share one busy timetable and occasionally bring unusual harbor goods.' },
+    landmark: { kind: 'exchange-pier', title: 'Exchange Pier', description: 'A broad roof covers the passenger steps and cargo tables beside the square.', activity: 'meeting boats beneath the exchange pier', effect: 'Merchant and passenger boats use the same timetable and sometimes bring goods that the regular route does not carry.' },
   },
   {
     id: 'tide-sanctuary', title: 'Tide Sanctuary', mark: '❈',
-    description: 'A sea arch, cloister, and planted stair gather rain, salt, shade, and sunlight into one living garden.',
+    description: 'Rain from a terraced garden drains through a cloister and meets salt water below the sea arch.',
     hint: 'Bring a sea arch, cloister garden, and terraced garden close together.',
     mysteryTitle: 'A garden held by three waters',
     rumor: 'The cloister keeps finding shells below and petals above, as though two gardens are trying to meet there.',
     requirements: ['sea arch', 'cloister garden', 'terraced garden'], range: 3,
     places: ['tidepool-cloister', 'garden-commons'],
-    landmark: { kind: 'rain-temple', title: 'Rain Temple', description: 'A tiered open shrine gathers rain into planted shell basins at the cloister’s heart.', activity: 'tending the rain temple basins', effect: 'After showers, crabs, butterflies, and gardeners share the sanctuary around a rare tide bloom.' },
+    landmark: { kind: 'rain-temple', title: 'Rain Temple', description: 'A tiered shrine channels rain into planted shell basins in the cloister.', activity: 'tending the rain temple basins', effect: 'A rare tide flower opens after rain, drawing gardeners, butterflies, and crabs.' },
   },
   {
     id: 'house-of-hands', title: 'House of Hands', mark: '✥',
-    description: 'Arcade, courtyard, and stepped route form a complete civic triangle where stories, gardens, and practical work teach one another.',
+    description: 'The workshops in an arcade share lessons and tools with a courtyard and stepped garden.',
     hint: 'Bring an arcade row, courtyard garden, and stepped terrace close together.',
     mysteryTitle: 'A house the whole town builds',
     rumor: 'Lessons leave the garden as sketches, then return from the workshops as useful things.',
     requirements: ['arcade row', 'courtyard garden', 'stepped terrace'], range: 3,
     places: ['story-court', 'garden-commons', 'makers-walk'],
-    landmark: { kind: 'commons-hall', title: 'Commons Hall', description: 'An open hall of worktables, shelves, and planters settles where all three neighborhood paths meet.', activity: 'learning and making in the commons hall', effect: 'Teachers, children, gardeners, and artisans begin sharing lessons and small communal projects.' },
+    landmark: { kind: 'commons-hall', title: 'Commons Hall', description: 'An open hall puts worktables beside the shelves and planters used by the three neighborhoods.', activity: 'learning and making in the commons hall', effect: 'Teachers, children, gardeners, and artisans use the hall for lessons and shared projects.' },
   },
   {
     id: 'festival-crown', title: 'Festival Crown', mark: '✺',
-    description: 'A lantern stair, harbor plaza, and roof pavilion turn an ordinary evening route into the town’s ceremonial heart.',
+    description: 'A lantern stair links the plaza stage to a rooftop pavilion, giving processions a route through town.',
     hint: 'Bring a lantern stair, harbor plaza, and rooftop pavilion close together.',
     mysteryTitle: 'An evening waiting to begin',
     rumor: 'The square has a stage and the stair has lights, but the rooftops still seem to be waiting for a signal.',
     requirements: ['lantern stair', 'harbor plaza', 'rooftop pavilion'], range: 3,
     places: ['bell-steps', 'lantern-square'],
-    landmark: { kind: 'festival-pavilion', title: 'Festival Pavilion', description: 'A tall public canopy combines a stage, civic bell, and rooftop viewing gallery.', activity: 'preparing the festival pavilion', effect: 'On certain evenings, ribbons and residents process down the stair toward a performance in the square.' },
+    landmark: { kind: 'festival-pavilion', title: 'Festival Pavilion', description: 'A tall canopy joins the stage and town bell below a rooftop viewing gallery.', activity: 'preparing the festival pavilion', effect: 'On festival evenings, residents carry ribbons down the stair to a performance in the square.' },
   },
   {
     id: 'celestial-beacon', title: 'Celestial Beacon', mark: '✹',
-    description: 'A high crossing, lookout, and hanging garden read the water and the night sky as parts of the same map.',
+    description: 'A lookout above a high crossing tracks boats by day and weather above the hanging garden at night.',
     hint: 'Bring a high water crossing, lookout tower, and hanging roof garden close together.',
     mysteryTitle: 'A signal beyond the horizon',
     rumor: 'The beacon watches ships by day, while the highest flowers appear to watch something else after dark.',
     requirements: ['high water crossing', 'lookout tower', 'hanging roof garden'], range: 3,
     places: ['high-harbor', 'star-garden'],
-    landmark: { kind: 'observatory-beacon', title: 'Observatory Beacon', description: 'Brass sky rings and a harbor lamp crown the lookout above the hanging garden.', activity: 'reading sea and sky from the observatory beacon', effect: 'Its signals guide the survey boat after dark and offer the town an early hint of tomorrow’s weather.' },
+    landmark: { kind: 'observatory-beacon', title: 'Observatory Beacon', description: 'Brass sky rings surround a harbor lamp on the lookout above the garden.', activity: 'reading sea and sky from the observatory beacon', effect: 'The lamp guides the survey boat after dark. The rings give the town an early forecast for tomorrow.' },
   },
   {
     id: 'banner-guild', title: 'Banner Guild', mark: '≋',
-    description: 'A covered working street, planted stair, and roof pavilion carry craft from shaded tables into sun and wind.',
+    description: 'An arcade connects its workshops to garden dyes and a roof pavilion where cloth can dry.',
     hint: 'Bring an arcade row, terraced garden, and rooftop pavilion close together.',
     mysteryTitle: 'A pattern climbing the roofs',
     rumor: 'Workshop sketches keep reappearing as colored threads in the upper garden, each time a little larger.',
     requirements: ['arcade row', 'terraced garden', 'rooftop pavilion'], range: 3,
     places: ['makers-walk', 'windloom-quarter'],
-    landmark: { kind: 'banner-house', title: 'Banner House', description: 'A broad dye loft and roof loom stretch ceremonial cloth above the working lane.', activity: 'raising new cloth at the banner house', effect: 'Finished banners gradually appear along the town’s busiest routes before festivals.' },
+    landmark: { kind: 'banner-house', title: 'Banner House', description: 'A dye loft and roof loom hang ceremonial cloth above the working lane.', activity: 'raising new cloth at the banner house', effect: 'Finished banners appear along the busiest routes before festivals.' },
   },
   {
     id: 'archive-tower', title: 'Archive Tower', mark: '⌘',
-    description: 'A shaded street, garden court, and lookout turn passing messages into a lasting memory of the harbor.',
+    description: 'A lookout sends letters and weather notes down to an arcade and the storytellers in its garden court.',
     hint: 'Bring an arcade row, courtyard garden, and lookout tower close together.',
     mysteryTitle: 'A tower full of remembered roads',
     rumor: 'Letters pass through the arcade and stories gather in the court, but neither yet has a place to stay.',
     requirements: ['arcade row', 'courtyard garden', 'lookout tower'], range: 3,
     places: ['story-court', 'messengers-row'],
-    landmark: { kind: 'harbor-archive', title: 'Harbor Archive', description: 'A many-windowed record room crowns the lookout with shelves for letters, maps, and town stories.', activity: 'reading the harbor archive', effect: 'Couriers and teachers contribute small records that become new fragments of the town’s journal.' },
+    landmark: { kind: 'harbor-archive', title: 'Harbor Archive', description: 'A record room above the lookout stores letters, maps, and town stories.', activity: 'reading the harbor archive', effect: 'Couriers and teachers add new records to the town journal.' },
   },
 ] as const;
 
@@ -181,7 +181,7 @@ export function detectConfluences(formations: readonly FormationOccurrence[]): r
 export function confluenceProgress(id: ConfluenceId, formations: readonly FormationOccurrence[]): ConfluenceProgress {
   const definition = CONFLUENCE_BY_ID.get(id)!;
   const active = detectConfluences(formations).find((occurrence) => occurrence.id === id);
-  if (active) return Object.freeze({ value: 1, state: 'active', requirements: definition.requirements, found: [true, true, true] as const, hint: `${definition.landmark.title} has settled here.`, focus: { x: active.x, z: active.z } });
+  if (active) return Object.freeze({ value: 1, state: 'active', requirements: definition.requirements, found: [true, true, true] as const, hint: `${definition.landmark.title} stands here.`, focus: { x: active.x, z: active.z } });
   const roles = ([0, 1, 2] as const).map((role) => formations.filter((formation) => roleMatches(id, role, formation)));
   const found = roles.map((matches) => matches.length > 0) as [boolean, boolean, boolean];
   const foundCount = found.filter(Boolean).length;

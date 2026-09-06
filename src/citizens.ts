@@ -688,7 +688,7 @@ export class CitizenSystem {
       if (owner && owner.occupation !== 'Fisher') owner.occupation = businessOccupation(business.type);
       for (const employeeId of business.employeeIds ?? []) {
         const employee = this.citizens.find((citizen) => citizen.id === employeeId);
-        if (employee && employee.occupation !== 'Fisher') employee.occupation = `${businessOccupation(business.type)}’s helper`;
+        if (employee && employee.occupation !== 'Fisher') employee.occupation = `${businessOccupation(business.type)}'s helper`;
       }
     }
   }
@@ -1010,7 +1010,7 @@ export class CitizenSystem {
           ? 'stopping to greet the harbor cats'
           : friendVisit
             ? `visiting ${friendVisit.friend.name} at home`
-            : citizen.traits.includes('quiet') ? 'watching the harbor' : 'walking past the neighbors’ doors';
+            : citizen.traits.includes('quiet') ? 'watching the harbor' : 'walking past the neighbors\' doors';
         target = confluencePlace?.node ?? identityPlace?.node ?? formationPlace?.node ?? catVisit ?? friendVisit?.target ?? this.graph.randomNode(choice, from.key);
       }
     } else if (hour < 21) {
@@ -1524,7 +1524,7 @@ export class CitizenSystem {
       occupation: citizen.occupation,
       home: citizen.residentKind === 'visitor'
         ? `Staying at ${this.businesses.find((business) => business.cellKey === citizen.homeKey)?.name ?? 'the harbor'}`
-        : `${citizen.ageGroup === 'child' ? 'Child' : citizen.ageGroup === 'elder' ? 'Elder' : 'Adult'} in household ${home.x + 10}–${home.z + 10}`,
+        : `${citizen.ageGroup === 'child' ? 'Child' : citizen.ageGroup === 'elder' ? 'Elder' : 'Adult'} in household ${home.x + 10}/${home.z + 10}`,
       likes: `${citizen.traits.join(', ')}${citizen.favoriteBusinessId ? ` · regular at ${this.businesses.find((business) => business.id === citizen.favoriteBusinessId)?.name ?? 'a local shop'}` : ''}`,
       activity: citizen.activity,
       destination: this.destinationLabel(citizen),
@@ -1551,7 +1551,7 @@ export class CitizenSystem {
     const friend = this.citizens.find((candidate) => candidate.id !== citizen.id
       && citizen.relationships.includes(candidate.id)
       && this.graph.entrance(candidate.homeKey)?.key === citizen.targetKey);
-    if (friend) return `${friend.name}’s home`;
+    if (friend) return `${friend.name}'s home`;
     if (/water|tide|harbor|boat|quay/.test(citizen.activity)) return 'Waterfront';
     return citizen.path.length ? 'A nearby street' : 'Staying here';
   }

@@ -537,7 +537,7 @@ export class CityRenderer {
         title: lantern.title,
         ageHours: 0,
         ageLabel: 'One of five harbor lanterns',
-        detail: `This light remembers “${lantern.promise}”`,
+        detail: `This light remembers "${lantern.promise}"`,
         note: 'When all five lanterns are lit, they will need a Lantern Square in which to gather.',
       };
     }
@@ -789,7 +789,7 @@ export class CityRenderer {
       ageHours: 0,
       ageLabel: 'A threefold landmark',
       detail: confluence.description,
-      note: `${confluence.effect} It can only remain while all three formations sustain ${CONFLUENCE_BY_ID.get(confluence.confluenceId)?.title ?? 'this confluence'}.`,
+      note: `${confluence.effect} This landmark remains only while all three formations stay close enough to hold ${CONFLUENCE_BY_ID.get(confluence.confluenceId)?.title ?? 'this confluence'} together.`,
     };
     const landmark = this.landmarkAt(x, z);
     if (landmark) return {
@@ -798,7 +798,7 @@ export class CityRenderer {
       ageHours: 0,
       ageLabel: 'A place-made landmark',
       detail: landmark.description,
-      note: `${landmark.effect} It can only settle while the surrounding formations sustain a ${PLACE_IDENTITY_BY_ID.get(landmark.identityId)?.title ?? 'living place'}.`,
+      note: `${landmark.effect} This landmark remains only while its two formations stay close enough to hold ${PLACE_IDENTITY_BY_ID.get(landmark.identityId)?.title ?? 'this living place'} together.`,
     };
     if (cell) {
       const ageHours = ageInHours(cell.foundedAt, absoluteHours);
@@ -806,11 +806,11 @@ export class CityRenderer {
       const activeIdentity = PLACE_IDENTITY_BY_ID.get(group?.userData.placeInfluence as PlaceIdentityId);
       const foundingIdentity = business?.placeIdentityId ? PLACE_IDENTITY_BY_ID.get(business.placeIdentityId) : undefined;
       const details = activeIdentity && group?.userData.placeInfluenceTrace
-        ? `${activeIdentity.title} has changed its details: ${activeIdentity.trace}`
-        : 'Its form follows the neighboring streets and water.';
+        ? `${activeIdentity.title} added these details: ${activeIdentity.trace}`
+        : 'Neighboring buildings and water determine its shape.';
       const history = foundingIdentity
-        ? `${business?.name ?? 'This trade'} first opened under ${foundingIdentity.title}’s influence; that origin remains part of its history.`
-        : activeIdentity ? `It stands within ${activeIdentity.title}’s local influence.` : '';
+        ? `${foundingIdentity.title} helped ${business?.name ?? 'this trade'} open here. The shop keeps that origin in its history.`
+        : activeIdentity ? `${activeIdentity.title} currently reaches this building.` : '';
       const construction = cell.renovatedAt && cell.renovatedAt > (cell.foundedAt ?? 0)
         ? `Last reshaped on Day ${Math.max(1, Math.floor(cell.renovatedAt / 24))}.`
         : `Raised on Day ${Math.max(1, Math.floor((cell.foundedAt ?? absoluteHours) / 24))}.`;

@@ -56,7 +56,7 @@ try {
   const { hash } = await server.ssrLoadModule('/src/random.ts');
   const { hasWaterStairs } = await server.ssrLoadModule('/src/water.ts');
   const { facadeDirectionAt } = await server.ssrLoadModule('/src/topology.ts');
-  const { walkableSteppedTerrace } = await server.ssrLoadModule('/src/architecture.ts');
+  const { isWalkableRoof, walkableSteppedTerrace } = await server.ssrLoadModule('/src/architecture.ts');
   const {
     CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_WALK_Y, QUAY_PATH_OFFSET,
     STOREFRONT_APRON_CENTER, STOREFRONT_APRON_DEPTH, STOREFRONT_CAT_OUTWARD,
@@ -117,14 +117,27 @@ try {
 
   const finaleEvent = DISCOVERY_EVENTS.find((event) => event.id === 'lantern-finale');
   const finaleCondition = JSON.stringify(finaleEvent?.condition);
-  for (const requirement of ['blossom-evening', 'shared-supper', 'evening-chorus', 'clock-tower', 'ferry-route', 'lantern-square']) {
+  for (const requirement of ['lit-lanterns', 'festival-crown', 'festival-invitation']) {
     if (!finaleCondition.includes(requirement)) throw new Error(`The lantern finale no longer requires ${requirement}.`);
+  }
+  const unattendedFinaleSnapshot = {
+    litLanternCount: 5,
+    festivalInvited: false,
+    timeOfDay: 20,
+    confluences: [{ id: 'festival-crown', x: 0, z: 0, visitors: 0 }],
+  };
+  if (evaluateCondition(finaleEvent.condition, unattendedFinaleSnapshot)) {
+    throw new Error('The lantern finale can still begin while the game runs unattended.');
+  }
+  if (!evaluateCondition(finaleEvent.condition, { ...unattendedFinaleSnapshot, festivalInvited: true })) {
+    throw new Error('An intentional Festival Pavilion observation cannot begin the ready lantern finale.');
   }
 
   const city = new CityRenderer(seed);
   city.load(cells, 240);
   city.setBusinesses(businesses);
   city.setDiscoveryState(discoveries);
+  city.setHarborLanterns(['blossom', 'table', 'chorus', 'clock', 'welcome']);
   city.update(1, 240);
   const earnedLanterns = city.root.getObjectByName('earned-harbor-lanterns');
   const lanternTargets = earnedLanterns?.children.filter((child) => child.userData.harborLanternId) ?? [];
@@ -222,6 +235,45 @@ try {
   if (!floatingLanterns.visible || !fireworks.visible) throw new Error('The firework beat did not retain the floating lanterns.');
   ambience.setLanternFinaleStage('complete');
   if (!floatingLanterns.visible || fireworks.visible) throw new Error('The finale did not settle back into its persistent quiet state.');
+  const lanternSquarePlace = {
+    id: 'lantern-square', x: 1, z: 0, formations: ['harbor-plaza', 'rooftop-pavilion'],
+    members: [{ id: 'harbor-plaza', x: 0, z: 0 }, { id: 'rooftop-pavilion', x: 2, z: 0 }],
+  };
+  ambience.setPlaceIdentities([lanternSquarePlace]);
+  ambience.update(12, .05, 19.5, 259.5, 0, 0);
+  const festivalDancers = ambience.root.getObjectByName('lantern-square-dancers');
+  const rooftopDancers = ambience.root.getObjectByName('lantern-rooftop-dancers');
+  if (!fireworks.visible || !festivalDancers?.visible || !rooftopDancers?.visible) {
+    throw new Error('Lantern Square did not begin its nightly fireworks and dancing on both levels.');
+  }
+  if (fireworks.geometry.getAttribute('position').count < 600 || !fireworks.geometry.getAttribute('color') || !fireworks.material.map) {
+    throw new Error('Lantern Square fireworks do not contain enough animated, glowing, multicolored sparks.');
+  }
+  if ((festivalDancers.getObjectByName('lantern-square-dancer-bodies')?.count ?? 0) < 10) {
+    throw new Error('Lantern Square did not draw a visible festival crowd.');
+  }
+  const flatRoofCount = cells.filter((cell) => isWalkableRoof(cell, cellMap)).length;
+  const rooftopBodyCount = rooftopDancers.getObjectByName('lantern-rooftop-dancer-bodies')?.count ?? 0;
+  const rooftopLanternCount = rooftopDancers.getObjectByName('lantern-rooftop-party-lanterns')?.count ?? 0;
+  const rooftopLights = rooftopDancers.children.filter((child) => child instanceof THREE.PointLight && child.visible);
+  if (rooftopDancers.userData.partyRoofCount !== flatRoofCount
+    || rooftopBodyCount !== flatRoofCount * 3
+    || rooftopLanternCount !== flatRoofCount * 2
+    || rooftopLights.length !== Math.min(flatRoofCount, 8)) {
+    throw new Error('Lantern Square did not place a lit dance party on every flat, walkable rooftop.');
+  }
+  if (!fireworks.children.some((child) => child instanceof THREE.PointLight && child.intensity > 0)) {
+    throw new Error('The firework globes did not cast a brief colored flash over the town.');
+  }
+  let fireworkSoundTriggered = false;
+  for (let testTime = 12; testTime < 13.2; testTime += .04) {
+    fireworkSoundTriggered ||= Boolean(ambience.update(testTime, .05, 19.5, 259.5, 0, 0).fireworkBurst);
+  }
+  if (!fireworkSoundTriggered) throw new Error('The evening firework cycle did not emit a restrained sound cue.');
+  ambience.update(13, .8, 12, 252, 0, 0);
+  if (fireworks.visible || festivalDancers.visible || rooftopDancers.visible) {
+    throw new Error('Lantern Square fireworks or dancers remained active outside the evening celebration.');
+  }
   const behavioralPlaces = [
     {
       id: 'canal-market', x: 1, z: 0, formations: ['narrow-canal', 'arcade-row'],
@@ -659,6 +711,13 @@ try {
     }
     if (landmarkCase.id === 'garden-commons' && !landmarkCity.root.children.some((child) => child.userData.seedHouseTrays)) {
       throw new Error('The Seed House did not spread planting trays to nearby homes.');
+    }
+    if (landmarkCase.id === 'lantern-square') {
+      const theatreLights = animatedLandmark.children.filter((child) => child instanceof THREE.PointLight);
+      const nightGlows = landmarkCity.root.getObjectByName('night-glows');
+      if (theatreLights.length !== 2 || (nightGlows?.geometry?.getAttribute('position').count ?? 0) < 9) {
+        throw new Error('The Lantern Theatre is missing its local lamps or layered night glows.');
+      }
     }
     if (landmarkCase.id === 'canal-market') {
       const barge = animatedLandmark.getObjectByName('market-barge-model');

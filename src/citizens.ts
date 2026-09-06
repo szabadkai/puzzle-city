@@ -37,6 +37,8 @@ type Citizen = CitizenSave & {
   model: THREE.Group;
   leftLeg: THREE.Object3D;
   rightLeg: THREE.Object3D;
+  leftArm: THREE.Object3D;
+  rightArm: THREE.Object3D;
   body: THREE.Object3D;
   head: THREE.Object3D;
   hair: THREE.Object3D;
@@ -169,12 +171,14 @@ export class NavGraph {
       }
       const landmark = placeLandmarkSocket(occurrence);
       const elevated = ['roof-hall', 'signal-beacon', 'wind-loom', 'tide-bell', 'post-house', 'star-dial', 'kite-loft'].includes(landmark.kind);
+      const landmarkX = landmark.x * CELL + (landmark.kind === 'lantern-theatre' ? CELL / 2 : 0);
+      const landmarkZ = landmark.z * CELL + (landmark.kind === 'lantern-theatre' ? CELL / 2 - .48 : 0);
       const allNodes = [...this.nodes.values()];
       const preferredNodes = allNodes.filter((node) => elevated ? this.rooftops.has(node.key) : !this.rooftops.has(node.key));
       const landmarkNode = (preferredNodes.length ? preferredNodes : allNodes)
         .sort((a, b) => {
-          const distanceA = Math.hypot(a.position.x - landmark.x * CELL, a.position.z - landmark.z * CELL);
-          const distanceB = Math.hypot(b.position.x - landmark.x * CELL, b.position.z - landmark.z * CELL);
+          const distanceA = Math.hypot(a.position.x - landmarkX, a.position.z - landmarkZ);
+          const distanceB = Math.hypot(b.position.x - landmarkX, b.position.z - landmarkZ);
           return distanceA - distanceB;
         })[0];
       if (landmarkNode) {
@@ -232,6 +236,12 @@ export class NavGraph {
 
   private build() {
     const plazaAnchors = findPlazaAnchors(this.cells);
+    const lanternTheatreAnchors = new Set(detectPlaceIdentities(detectFormations(this.cells))
+      .filter((identity) => identity.id === 'lantern-square')
+      .map((identity) => {
+        const landmark = placeLandmarkSocket(identity);
+        return keyOf(landmark.x, landmark.z);
+      }));
     const plazaCells = new Set<string>();
     for (const anchor of plazaAnchors) {
       plazaCells.add(keyOf(anchor.x, anchor.z));
@@ -296,6 +306,20 @@ export class NavGraph {
       this.connect(plazaNodes[0], plazaNodes[2]);
       this.connect(plazaNodes[1], plazaNodes[3]);
       this.connect(plazaNodes[2], plazaNodes[3]);
+      if (lanternTheatreAnchors.has(keyOf(anchor.x, anchor.z))) {
+        const danceX = (anchor.x + .5) * CELL;
+        const danceZ = (anchor.z + .5) * CELL - .48;
+        const danceNodes = Array.from({ length: 8 }, (_, index) => {
+          const angle = index / 8 * Math.PI * 2;
+          return this.addNode(danceX + Math.cos(angle) * .62, danceZ + Math.sin(angle) * .62);
+        });
+        danceNodes.forEach((node, index) => this.connect(node, danceNodes[(index + 1) % danceNodes.length]));
+        this.connect(danceNodes[0], plazaNodes[1]);
+        this.connect(danceNodes[2], plazaNodes[3]);
+        this.connect(danceNodes[4], plazaNodes[2]);
+        this.connect(danceNodes[6], plazaNodes[0]);
+        this.plazas.push(...danceNodes);
+      }
       for (const [x, z] of coordinates) {
         const center = this.addNode(x * CELL, z * CELL);
         CARDINALS.forEach(([dx, dz]) => {
@@ -607,6 +631,7 @@ export class CitizenSystem {
   private readonly headGeometry = new THREE.SphereGeometry(.09, 9, 7);
   private readonly hairGeometry = new THREE.SphereGeometry(.094, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
   private readonly legGeometry = new THREE.CylinderGeometry(.022, .027, .17, 6);
+  private readonly armGeometry = new THREE.CylinderGeometry(.019, .023, .19, 6);
   private readonly hatGeometry = new THREE.ConeGeometry(.145, .065, 12);
   private readonly cargoGeometry = new THREE.BoxGeometry(.2, .16, .18);
   private readonly cargoMaterial = new THREE.MeshStandardMaterial({ color: 0xc49a58, roughness: 1 });
@@ -614,6 +639,7 @@ export class CitizenSystem {
   private readonly headInstances: THREE.InstancedMesh;
   private readonly hairInstances: THREE.InstancedMesh;
   private readonly legInstances: THREE.InstancedMesh;
+  private readonly armInstances: THREE.InstancedMesh;
   private readonly hatInstances: THREE.InstancedMesh;
   private readonly cargoInstances: THREE.InstancedMesh;
   private readonly renderMatrix = new THREE.Matrix4();
@@ -629,10 +655,11 @@ export class CitizenSystem {
     this.headInstances = this.createInstanceBatch(this.headGeometry, this.skinMaterial, 'citizen-heads');
     this.hairInstances = this.createInstanceBatch(this.hairGeometry, this.darkMaterial, 'citizen-hair');
     this.legInstances = this.createInstanceBatch(this.legGeometry, this.darkMaterial, 'citizen-legs');
+    this.armInstances = this.createInstanceBatch(this.armGeometry, this.skinMaterial, 'citizen-arms');
     this.hatInstances = this.createInstanceBatch(this.hatGeometry, this.hatMaterial, 'citizen-hats');
     this.cargoInstances = this.createInstanceBatch(this.cargoGeometry, this.cargoMaterial, 'citizen-cargo');
     this.cargoTransform.position.set(.14, .35, 0);
-    this.renderRoot.add(...this.bodyInstances, this.headInstances, this.hairInstances, this.legInstances, this.hatInstances, this.cargoInstances);
+    this.renderRoot.add(...this.bodyInstances, this.headInstances, this.hairInstances, this.legInstances, this.armInstances, this.hatInstances, this.cargoInstances);
     this.debugRoot.name = 'citizen-navigation';
     this.debugRoot.visible = false;
     this.root.add(this.renderRoot, this.debugRoot);
@@ -803,6 +830,8 @@ export class CitizenSystem {
       model,
       leftLeg: model.userData.leftLeg as THREE.Object3D,
       rightLeg: model.userData.rightLeg as THREE.Object3D,
+      leftArm: model.userData.leftArm as THREE.Object3D,
+      rightArm: model.userData.rightArm as THREE.Object3D,
       body: model.userData.body as THREE.Object3D,
       head: model.userData.head as THREE.Object3D,
       hair: model.userData.hair as THREE.Object3D,
@@ -842,6 +871,15 @@ export class CitizenSystem {
       legs.push(leg);
       group.add(leg);
     }
+    const arms: THREE.Mesh[] = [];
+    for (const side of [-1, 1]) {
+      const arm = new THREE.Mesh(this.armGeometry, this.skinMaterial);
+      arm.position.set(side * .115, .31, 0);
+      arm.rotation.z = -side * .08;
+      arm.name = side < 0 ? 'arm-left' : 'arm-right';
+      arms.push(arm);
+      group.add(arm);
+    }
     let hat: THREE.Mesh | null = null;
     if (data.occupation === 'Fisher' || data.occupation === 'Gardener') {
       hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
@@ -852,6 +890,8 @@ export class CitizenSystem {
     group.add(body, head, hair);
     group.userData.leftLeg = legs[0];
     group.userData.rightLeg = legs[1];
+    group.userData.leftArm = arms[0];
+    group.userData.rightArm = arms[1];
     group.userData.body = body;
     group.userData.head = head;
     group.userData.hair = hair;
@@ -893,6 +933,7 @@ export class CitizenSystem {
     let heads = 0;
     let hairs = 0;
     let legs = 0;
+    let arms = 0;
     let hats = 0;
     let cargo = 0;
     const renderedCount = Math.min(this.citizens.length, MAX_RENDERED_CITIZENS);
@@ -905,6 +946,8 @@ export class CitizenSystem {
       this.setActorPart(this.hairInstances, hairs++, citizen.model, citizen.hair);
       this.setActorPart(this.legInstances, legs++, citizen.model, citizen.leftLeg);
       this.setActorPart(this.legInstances, legs++, citizen.model, citizen.rightLeg);
+      this.setActorPart(this.armInstances, arms++, citizen.model, citizen.leftArm);
+      this.setActorPart(this.armInstances, arms++, citizen.model, citizen.rightArm);
       if (citizen.hat) this.setActorPart(this.hatInstances, hats++, citizen.model, citizen.hat);
       if (citizen.carryingGood) this.setActorPart(this.cargoInstances, cargo++, citizen.model, this.cargoTransform);
     }
@@ -912,7 +955,7 @@ export class CitizenSystem {
       batch.count = bodyCounts[index];
       if (batch.count) batch.instanceMatrix.needsUpdate = true;
     });
-    for (const [batch, count] of [[this.headInstances, heads], [this.hairInstances, hairs], [this.legInstances, legs], [this.hatInstances, hats], [this.cargoInstances, cargo]] as const) {
+    for (const [batch, count] of [[this.headInstances, heads], [this.hairInstances, hairs], [this.legInstances, legs], [this.armInstances, arms], [this.hatInstances, hats], [this.cargoInstances, cargo]] as const) {
       batch.count = count;
       if (count) batch.instanceMatrix.needsUpdate = true;
     }
@@ -925,6 +968,19 @@ export class CitizenSystem {
     let target = home;
     const choice = hash(this.seed, Math.floor(absoluteHours * 4), this.citizens.indexOf(citizen), 1001);
     const businessVisit = this.chooseBusinessVisit(citizen, hour, choice, from.key);
+    const lanternTheatre = hour >= 18 && hour < 21.75 && choice < .84
+      ? this.graph.identityNodeFor('lantern-square', (choice * 4.17 + this.citizens.indexOf(citizen) * .137) % 1, from.key, true)
+      : undefined;
+    const rooftopPartyTarget = lanternTheatre && choice < .52
+      ? this.graph.rooftopNode(
+        (choice * 3.17 + this.citizens.indexOf(citizen) * .137) % 1,
+        from.key,
+      )
+      : undefined;
+    const lanternPartyTarget = lanternTheatre && !rooftopPartyTarget
+      ? this.graph.randomNode((choice * 3.71 + this.citizens.indexOf(citizen) * .193) % 1, from.key,
+        (node) => node.position.distanceToSquared(lanternTheatre.node.position) < 6.8) ?? lanternTheatre.node
+      : undefined;
     const signaturePlace = this.signatureLandmarkVisit(citizen, hour, choice, from.key);
     const confluencePlace = hour >= 9 && hour < 21 && choice < .84
       ? this.graph.confluenceNode((choice * 2.47 + this.citizens.indexOf(citizen) * .179) % 1, from.key)
@@ -941,6 +997,18 @@ export class CitizenSystem {
       : undefined;
     if (hour < 4.5 || (hour < 6 && citizen.occupation !== 'Fisher') || hour >= 22) {
       citizen.activity = 'sleeping at home';
+    } else if (rooftopPartyTarget && !businessVisit?.owned) {
+      citizen.activity = citizen.ageGroup === 'child'
+        ? 'dancing beneath the rooftop lanterns'
+        : 'joining the parties across the flat rooftops';
+      target = rooftopPartyTarget;
+    } else if (lanternPartyTarget && !businessVisit?.owned) {
+      citizen.activity = citizen.ageGroup === 'child'
+        ? 'dancing through the lantern light in the square'
+        : citizen.occupation === 'Cook'
+          ? 'sharing festival food beside the lantern theatre'
+          : 'dancing with neighbors beneath the lanterns';
+      target = lanternPartyTarget;
     } else if (businessVisit?.owned) {
       citizen.activity = this.ownerActivity(businessVisit.business.type);
       target = businessVisit.target;
@@ -1200,11 +1268,40 @@ export class CitizenSystem {
     const target = citizen.path[0];
     const left = citizen.leftLeg;
     const right = citizen.rightLeg;
+    const partying = /dancing|festival|procession|all the lanterns/i.test(citizen.activity);
+    const poseParty = (walking: boolean) => {
+      const beat = realTime * (walking ? 5.2 : 4.2) + citizen.stepPhase;
+      const bounce = Math.max(0, Math.sin(beat)) * (walking ? .025 : .065);
+      citizen.body.position.y = .285 + bounce;
+      citizen.head.position.y = .5 + bounce;
+      citizen.hair.position.y = .515 + bounce;
+      if (citizen.hat) citizen.hat.position.y = .61 + bounce;
+      citizen.body.rotation.z = Math.sin(beat * .5) * .13;
+      citizen.leftArm.rotation.z = .92 + Math.sin(beat) * .38;
+      citizen.rightArm.rotation.z = -.92 - Math.cos(beat) * .38;
+      citizen.leftArm.rotation.x = Math.sin(beat * .5) * .35;
+      citizen.rightArm.rotation.x = -Math.cos(beat * .5) * .35;
+    };
+    const resetPose = () => {
+      citizen.body.position.y = .285;
+      citizen.head.position.y = .5;
+      citizen.hair.position.y = .515;
+      if (citizen.hat) citizen.hat.position.y = .61;
+      citizen.body.rotation.z = 0;
+      citizen.leftArm.rotation.set(0, 0, .08);
+      citizen.rightArm.rotation.set(0, 0, -.08);
+    };
     if (!target) {
-      citizen.model.rotation.z = Math.sin(realTime * 1.4 + citizen.stepPhase) * .006;
+      citizen.model.rotation.z = partying
+        ? Math.sin(realTime * 2.1 + citizen.stepPhase) * .055
+        : Math.sin(realTime * 1.4 + citizen.stepPhase) * .006;
       if (left && right) left.rotation.x = right.rotation.x = 0;
+      if (partying) poseParty(false);
+      else resetPose();
       return;
     }
+    if (partying) poseParty(true);
+    else resetPose();
     const direction = this.walkDirection.copy(target).sub(citizen.model.position);
     const distance = direction.length();
     const step = Math.min(distance, deltaSeconds * .58);

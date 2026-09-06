@@ -30,6 +30,8 @@ export type SavedTown = {
   placeIdentities?: PlaceIdentityId[];
   /** Rare three-form places the town has discovered, even if later reshaped. */
   confluences?: ConfluenceId[];
+  /** Lanterns the player deliberately kindled at their matching Confluences. */
+  harborLanterns?: HarborLanternId[];
   /** Optional living-place clue currently followed in the shared tide tracker. */
   followedPlaceIdentityId?: PlaceIdentityId;
   /** Optional three-form clue currently followed in the shared tide tracker. */
@@ -72,6 +74,8 @@ export type ConfluenceId =
   | 'celestial-beacon'
   | 'banner-guild'
   | 'archive-tower';
+
+export type HarborLanternId = 'blossom' | 'table' | 'chorus' | 'clock' | 'welcome';
 
 export type JournalIllustration =
   | 'foundation' | 'rain' | 'garden' | 'arch' | 'bridge' | 'tower'

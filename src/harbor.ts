@@ -1,13 +1,40 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { BusinessSave, Cell, CitizenSave, CraftGood, PlaceIdentityId } from './types';
-import type { PlaceIdentityOccurrence } from './place-identities';
+import { placeLandmarkSocket, type PlaceIdentityOccurrence } from './place-identities';
 import { hash } from './random';
+import { roofWalkY } from './spatial';
+import { isWalkableRoof } from './architecture';
 import {
   analyzeWaterTopology, createDockNavigationPath, createShorelineRoute, WORLD_CELL_SIZE,
   type ShorelineEdge, type WaterPoint, type WaterTopology,
 } from './water';
 import { FaunaSystem, type WildlifeAction, type WildlifeKind, type WildlifeMemoryInspection } from './fauna';
+
+const FIREWORK_PALETTE = [
+  0xff3328, 0xffc51b, 0xffefad,
+  0xff4935, 0x35d49a, 0xffb51b,
+  0xff2f28, 0xffedbb, 0xffc21a,
+] as const;
+const MAX_ROOFTOP_PARTY_ROOFS = 384;
+const DANCERS_PER_ROOF = 3;
+
+function createFireworkGlowTexture() {
+  const size = 32;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const context = canvas.getContext('2d')!;
+  const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, 'rgba(255,255,255,1)');
+  gradient.addColorStop(.2, 'rgba(255,247,211,.98)');
+  gradient.addColorStop(.55, 'rgba(255,190,78,.5)');
+  gradient.addColorStop(1, 'rgba(255,150,40,0)');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, size, size);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 
 export function createWaterRoute(cells: Iterable<Cell>, seed: number, lane = 0) {
   return createShorelineRoute(cells, seed, lane);
@@ -187,6 +214,7 @@ export type HarborMemoryInspection = WildlifeMemoryInspection | BoatMemoryInspec
 
 export type HarborUpdate = Readonly<{
   exportDeparture?: { good: 'harbor-goods'; capacity: number };
+  fireworkBurst?: number;
 }>;
 
 type BoatActor = {
@@ -199,6 +227,32 @@ type BoatActor = {
   eligible: boolean;
 };
 
+type FireworkSpark = Readonly<{
+  burst: number;
+  spark: number;
+  direction: THREE.Vector3;
+  speed: number;
+  radiusScale: number;
+  color: THREE.Color;
+}>;
+
+type FestivalDancer = Readonly<{
+  x: number;
+  y: number;
+  z: number;
+  centerX: number;
+  centerZ: number;
+  phase: number;
+  scale: number;
+}>;
+
+type FestivalCrowdBatches = Readonly<{
+  bodies: THREE.InstancedMesh;
+  heads: THREE.InstancedMesh;
+  arms: THREE.InstancedMesh;
+  legs: THREE.InstancedMesh;
+}>;
+
 export type LanternFinaleStage = 'lanterns' | 'gathering' | 'water' | 'fireworks' | 'complete';
 
 export class HarborAmbience {
@@ -210,6 +264,19 @@ export class HarborAmbience {
   private readonly fireflies: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly floatingLanterns: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly fireworks: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+  private readonly fireworkSparks: FireworkSpark[] = [];
+  private readonly fireworkFlashLights: THREE.PointLight[] = [];
+  private readonly festivalCrowd: THREE.Group;
+  private readonly festivalDancers: FestivalDancer[] = [];
+  private festivalCrowdBatches!: FestivalCrowdBatches;
+  private readonly rooftopCrowd: THREE.Group;
+  private readonly rooftopDancers: FestivalDancer[] = [];
+  private rooftopCrowdBatches!: FestivalCrowdBatches;
+  private rooftopLanterns!: THREE.InstancedMesh;
+  private readonly rooftopPartyLights: THREE.PointLight[] = [];
+  private readonly festivalRootTransform = new THREE.Object3D();
+  private readonly festivalPartTransform = new THREE.Object3D();
+  private readonly festivalCombinedMatrix = new THREE.Matrix4();
   private readonly rain: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly importYard: THREE.Group;
   private readonly cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
@@ -221,11 +288,17 @@ export class HarborAmbience {
   private discoveries = new Set<string>();
   private lanternFinaleStage: LanternFinaleStage = 'complete';
   private placeIdentities = new Set<PlaceIdentityId>();
+  private lanternSquarePlace: PlaceIdentityOccurrence | null = null;
+  private lanternSquareCenter: THREE.Vector3 | null = null;
+  private rooftopPartyCenter: THREE.Vector3 | null = null;
+  private lastTimeOfDay = 12;
+  private lastRainIntensity = 0;
   private readonly cargoModels = new Map<CraftGood, THREE.Object3D[]>();
   private cargoState: Partial<Record<CraftGood, number>> = {};
   private readonly importQueue: ImportGood[] = [];
   private unloading?: { good: ImportGood; startedAt: number };
   private lastUpdateTime = 0;
+  private lastFireworkSoundAt = -Infinity;
   private merchantDocked = false;
   private merchantJourneyPhase = 0;
   private merchantCycle = Number.NaN;
@@ -247,7 +320,6 @@ export class HarborAmbience {
     this.root.add(this.importYard);
     this.fauna = new FaunaSystem(seed);
     this.root.add(this.fauna.root);
-    this.setTown(cells);
     this.createClouds();
     this.createStars();
     this.petals = this.createParticles(42, 0xf1a8ad, .1, 1700);
@@ -265,7 +337,17 @@ export class HarborAmbience {
     this.fireworks = this.createFireworks();
     this.fireworks.name = 'finale-fireworks';
     this.fireworks.visible = false;
+    this.fireworkFlashLights.push(...this.createFireworkFlashLights());
+    this.fireworks.add(...this.fireworkFlashLights);
     this.root.add(this.fireworks);
+    this.festivalCrowd = this.createFestivalCrowd(false);
+    this.festivalCrowd.name = 'lantern-square-dancers';
+    this.festivalCrowd.visible = false;
+    this.root.add(this.festivalCrowd);
+    this.rooftopCrowd = this.createFestivalCrowd(true);
+    this.rooftopCrowd.name = 'lantern-rooftop-dancers';
+    this.rooftopCrowd.visible = false;
+    this.root.add(this.rooftopCrowd);
     this.rain = this.createRain();
     this.rain.name = 'passing-rain';
     this.rain.visible = false;
@@ -277,6 +359,7 @@ export class HarborAmbience {
     this.sunDisc.position.set(-17, 14, -28);
     this.sunDisc.lookAt(camera.position);
     this.root.add(this.sunDisc);
+    this.setTown(cells);
   }
 
   setTown(cells: Iterable<Cell>, businesses: readonly BusinessSave[] = this.businesses, citizens: readonly CitizenSave[] = this.citizens, matureTreeAnchors: readonly THREE.Vector3[] = []) {
@@ -294,6 +377,8 @@ export class HarborAmbience {
     this.fauna.setTown(this.cells, this.businesses, matureTreeAnchors);
     this.syncVesselOccupants();
     this.positionImportYard();
+    this.syncLanternSquareAnchors();
+    this.syncLanternFinaleVisibility();
     this.refreshFleetVisibility();
   }
 
@@ -352,12 +437,98 @@ export class HarborAmbience {
     const discovered = this.discoveries.has('lantern-finale');
     this.floatingLanterns.visible = discovered
       && (this.lanternFinaleStage === 'water' || this.lanternFinaleStage === 'fireworks' || this.lanternFinaleStage === 'complete');
-    this.fireworks.visible = discovered && this.lanternFinaleStage === 'fireworks';
+    const finale = discovered && this.lanternFinaleStage === 'fireworks';
+    const squareParty = Boolean(this.lanternSquareCenter)
+      && this.lastTimeOfDay >= 18 && this.lastTimeOfDay < 21.75
+      && this.lastRainIntensity < .5;
+    this.fireworks.visible = finale || squareParty;
+    const finaleParty = discovered && ['gathering', 'water', 'fireworks'].includes(this.lanternFinaleStage);
+    this.festivalCrowd.visible = Boolean(this.lanternSquareCenter) && (squareParty || finaleParty);
+    this.rooftopCrowd.visible = Boolean(this.rooftopPartyCenter) && (squareParty || finaleParty);
   }
 
   setPlaceIdentities(identities: readonly PlaceIdentityOccurrence[]) {
     this.placeIdentities = new Set(identities.map((identity) => identity.id));
+    this.lanternSquarePlace = identities.find((identity) => identity.id === 'lantern-square') ?? null;
+    this.syncLanternSquareAnchors();
+    this.syncLanternFinaleVisibility();
     this.refreshFleetVisibility();
+  }
+
+  private syncLanternSquareAnchors() {
+    const theatre = this.lanternSquarePlace ? placeLandmarkSocket(this.lanternSquarePlace) : null;
+    this.lanternSquareCenter = theatre
+      ? new THREE.Vector3(theatre.x * WORLD_CELL_SIZE + WORLD_CELL_SIZE / 2, 0, theatre.z * WORLD_CELL_SIZE + WORLD_CELL_SIZE / 2)
+      : null;
+    if (this.lanternSquareCenter) {
+      this.fireworks.position.copy(this.lanternSquareCenter);
+      this.festivalCrowd.position.copy(this.lanternSquareCenter).setY(.2);
+    } else {
+      this.fireworks.position.set(0, 0, 0);
+      this.festivalCrowd.position.set(0, 0, 0);
+    }
+
+    this.rebuildRooftopParties(Boolean(theatre));
+  }
+
+  private rebuildRooftopParties(active: boolean) {
+    this.rooftopDancers.length = 0;
+    this.rooftopCrowd.position.set(0, 0, 0);
+    const cellMap = new Map(this.cells.map((cell) => [`${cell.x},${cell.z}`, cell]));
+    const rooftops = active
+      ? this.cells.filter((cell) => isWalkableRoof(cell, cellMap)).slice(0, MAX_ROOFTOP_PARTY_ROOFS)
+      : [];
+    const clothes = [0xd83a32, 0xe4a32b, 0x3d9b79, 0x657eb5, 0xb85872];
+    const dummy = this.festivalPartTransform;
+    for (const [roofIndex, cell] of rooftops.entries()) {
+      const centerX = cell.x * WORLD_CELL_SIZE;
+      const centerZ = cell.z * WORLD_CELL_SIZE;
+      const y = roofWalkY(cell.height) + .02;
+      const turn = hash(this.seed, cell.x, cell.z, 1920) * Math.PI * 2;
+      for (let dancerIndex = 0; dancerIndex < DANCERS_PER_ROOF; dancerIndex++) {
+        const index = roofIndex * DANCERS_PER_ROOF + dancerIndex;
+        const angle = turn + dancerIndex / DANCERS_PER_ROOF * Math.PI * 2;
+        const radius = .34 + hash(this.seed, cell.x + dancerIndex, cell.z, 1921) * .16;
+        this.rooftopDancers.push(Object.freeze({
+          x: centerX + Math.cos(angle) * radius,
+          y,
+          z: centerZ + Math.sin(angle) * radius,
+          centerX,
+          centerZ,
+          phase: hash(this.seed, roofIndex, dancerIndex, 1922) * Math.PI * 2,
+          scale: .78 + hash(this.seed, roofIndex, dancerIndex, 1923) * .2,
+        }));
+        this.rooftopCrowdBatches.bodies.setColorAt(index, new THREE.Color(clothes[(roofIndex + dancerIndex) % clothes.length]));
+      }
+      for (let lanternIndex = 0; lanternIndex < 2; lanternIndex++) {
+        const angle = turn + lanternIndex * Math.PI;
+        dummy.position.set(centerX + Math.cos(angle) * .7, y + .73, centerZ + Math.sin(angle) * .7);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(1, 1.3, 1);
+        dummy.updateMatrix();
+        this.rooftopLanterns.setMatrixAt(roofIndex * 2 + lanternIndex, dummy.matrix);
+      }
+    }
+    const dancerCount = this.rooftopDancers.length;
+    this.rooftopCrowdBatches.bodies.count = dancerCount;
+    this.rooftopCrowdBatches.heads.count = dancerCount;
+    this.rooftopCrowdBatches.arms.count = dancerCount * 2;
+    this.rooftopCrowdBatches.legs.count = dancerCount * 2;
+    if (this.rooftopCrowdBatches.bodies.instanceColor) this.rooftopCrowdBatches.bodies.instanceColor.needsUpdate = true;
+    this.rooftopLanterns.count = rooftops.length * 2;
+    if (this.rooftopLanterns.count) this.rooftopLanterns.instanceMatrix.needsUpdate = true;
+    const lightCount = Math.min(rooftops.length, this.rooftopPartyLights.length);
+    this.rooftopPartyLights.forEach((light, index) => {
+      light.visible = index < lightCount;
+      if (!light.visible) return;
+      const cell = rooftops[Math.floor(index * rooftops.length / lightCount)];
+      light.position.set(cell.x * WORLD_CELL_SIZE, roofWalkY(cell.height) + 1.05, cell.z * WORLD_CELL_SIZE);
+    });
+    this.rooftopPartyCenter = rooftops.length
+      ? new THREE.Vector3(rooftops[0].x * WORLD_CELL_SIZE, roofWalkY(rooftops[0].height), rooftops[0].z * WORLD_CELL_SIZE)
+      : null;
+    this.rooftopCrowd.userData.partyRoofCount = rooftops.length;
+    this.updateFestivalCrowd(this.lastUpdateTime, true);
   }
 
   waterTopology() { return this.topology; }
@@ -392,6 +563,9 @@ export class HarborAmbience {
 
   update(time: number, daylight: number, timeOfDay: number, absoluteHours: number, catColonyFoundedAt?: number, rainIntensity = 0): HarborUpdate {
     this.lastUpdateTime = time;
+    this.lastTimeOfDay = timeOfDay;
+    this.lastRainIntensity = rainIntensity;
+    this.syncLanternFinaleVisibility();
     let exportDeparture: HarborUpdate['exportDeparture'];
     for (const boat of this.fleet) {
       if (boat.kind === 'merchant boat' && this.discoveries.has('merchant-arrival') && this.preferredImportDock()) {
@@ -427,11 +601,11 @@ export class HarborAmbience {
     this.floatingLanterns.position.y = -.08 + Math.sin(time * .8) * .025;
     this.floatingLanterns.rotation.y = time * .008;
     this.floatingLanterns.material.opacity = Math.pow(1 - daylight, 1.3) * .92;
-    this.fireworks.rotation.y = time * .025;
-    this.fireworks.material.opacity = Math.pow(1 - daylight, 2) * (.38 + Math.pow(Math.max(0, Math.sin(time * 1.35)), 5) * .62);
-    this.fireworks.material.size = .11 + (Math.sin(time * 1.35) * .5 + .5) * .11;
+    const fireworkBurst = this.fireworks.visible ? this.updateFireworks(time, daylight) : undefined;
+    if (this.festivalCrowd.visible) this.updateFestivalCrowd(time, false);
+    if (this.rooftopCrowd.visible) this.updateFestivalCrowd(time, true);
     this.updateRain(time, rainIntensity);
-    return { exportDeparture };
+    return { exportDeparture, fireworkBurst };
   }
 
   private createRain() {
@@ -1459,16 +1633,243 @@ export class HarborAmbience {
 
   private createFireworks() {
     const positions: number[] = [];
-    const centers = [[-7, 8, -5], [6, 10, -8], [1, 7, -13]] as const;
-    centers.forEach(([cx, cy, cz], burst) => {
-      for (let index = 0; index < 28; index++) {
-        const angle = index / 28 * Math.PI * 2;
-        const radius = .8 + hash(this.seed, burst, index, 1890) * 1.7;
-        positions.push(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius, cz + Math.sin(angle * 3) * .42);
+    const colors: number[] = [];
+    const sparkCount = 84;
+    for (let burst = 0; burst < 9; burst++) {
+      for (let spark = 0; spark < sparkCount; spark++) {
+        const vertical = 1 - (spark + .5) / sparkCount * 2;
+        const spread = Math.sqrt(Math.max(0, 1 - vertical * vertical));
+        const azimuth = spark * 2.3999632297 + hash(this.seed, burst, 0, 1890) * Math.PI * 2;
+        const secondaryColor = spark % 11 === 0 ? 2 : burst % FIREWORK_PALETTE.length;
+        this.fireworkSparks.push(Object.freeze({
+          burst,
+          spark,
+          direction: new THREE.Vector3(Math.cos(azimuth) * spread, vertical, Math.sin(azimuth) * spread),
+          speed: .82 + hash(this.seed, burst, spark, 1892) * .38,
+          radiusScale: burst % 3 === 0 && spark % 2 === 0
+            ? .72
+            : .92 + hash(this.seed, burst, spark, 1893) * .16,
+          color: new THREE.Color(FIREWORK_PALETTE[secondaryColor]),
+        }));
+        positions.push(0, -100, 0);
+        colors.push(0, 0, 0);
       }
-    });
+    }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    return new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xffbf70, size: .16, transparent: true, opacity: 0, depthWrite: false }));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    (geometry.getAttribute('position') as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
+    (geometry.getAttribute('color') as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
+    const fireworks = new THREE.Points(geometry, new THREE.PointsMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      map: createFireworkGlowTexture(),
+      size: .34,
+      transparent: true,
+      opacity: 1,
+      alphaTest: .01,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    }));
+    fireworks.frustumCulled = false;
+    fireworks.renderOrder = 5;
+    return fireworks;
+  }
+
+  private createFireworkFlashLights() {
+    return Array.from({ length: 3 }, (_, index) => {
+      const light = new THREE.PointLight(FIREWORK_PALETTE[index], 0, 30, 1.8);
+      light.name = `firework-flash-${index + 1}`;
+      return light;
+    });
+  }
+
+  private createFestivalCrowd(rooftop: boolean) {
+    const count = rooftop ? MAX_ROOFTOP_PARTY_ROOFS * DANCERS_PER_ROOF : 10;
+    const group = new THREE.Group();
+    const bodies = new THREE.InstancedMesh(
+      new THREE.CapsuleGeometry(.09, .16, 3, 7),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .94 }),
+      count,
+    );
+    const heads = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(.09, 9, 7),
+      new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 }),
+      count,
+    );
+    const arms = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(.019, .023, .19, 6),
+      new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 }),
+      count * 2,
+    );
+    const legs = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(.022, .027, .17, 6),
+      new THREE.MeshStandardMaterial({ color: 0x302b32, roughness: 1 }),
+      count * 2,
+    );
+    const prefix = rooftop ? 'lantern-rooftop-dancer' : 'lantern-square-dancer';
+    bodies.name = `${prefix}-bodies`;
+    heads.name = `${prefix}-heads`;
+    arms.name = `${prefix}-arms`;
+    legs.name = `${prefix}-legs`;
+    const dancers = rooftop ? this.rooftopDancers : this.festivalDancers;
+    const clothes = [0xd83a32, 0xe4a32b, 0x3d9b79, 0x657eb5, 0xb85872];
+    const initialDancerCount = rooftop ? 0 : count;
+    for (let index = 0; index < initialDancerCount; index++) {
+      const angle = index / count * Math.PI * 2 + hash(this.seed, index, 0, 1910) * .28;
+      const radius = .32 + index % 3 * .18;
+      dancers.push(Object.freeze({
+        x: Math.cos(angle) * radius,
+        y: 0,
+        z: -.48 + Math.sin(angle) * radius,
+        centerX: 0,
+        centerZ: -.48,
+        phase: hash(this.seed, index, 1, 1911) * Math.PI * 2,
+        scale: .82 + hash(this.seed, index, 2, 1912) * .22,
+      }));
+      bodies.setColorAt(index, new THREE.Color(clothes[index % clothes.length]));
+    }
+    if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;
+    for (const batch of [bodies, heads, arms, legs]) {
+      batch.frustumCulled = false;
+      batch.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    }
+    const batches = Object.freeze({ bodies, heads, arms, legs });
+    if (rooftop) this.rooftopCrowdBatches = batches;
+    else this.festivalCrowdBatches = batches;
+    bodies.count = initialDancerCount;
+    heads.count = initialDancerCount;
+    arms.count = initialDancerCount * 2;
+    legs.count = initialDancerCount * 2;
+    group.add(bodies, heads, arms, legs);
+    if (rooftop) {
+      const lanternMaterial = new THREE.MeshStandardMaterial({
+        color: 0xffb647,
+        emissive: 0xff6a22,
+        emissiveIntensity: 3,
+        roughness: .72,
+        toneMapped: false,
+      });
+      this.rooftopLanterns = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(.075, 8, 6),
+        lanternMaterial,
+        MAX_ROOFTOP_PARTY_ROOFS * 2,
+      );
+      this.rooftopLanterns.name = 'lantern-rooftop-party-lanterns';
+      this.rooftopLanterns.count = 0;
+      this.rooftopLanterns.frustumCulled = false;
+      this.rooftopLanterns.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      group.add(this.rooftopLanterns);
+      for (let index = 0; index < 8; index++) {
+        const light = new THREE.PointLight(0xff9c3d, 2.5, 5.2, 1.8);
+        light.name = `lantern-rooftop-party-light-${index + 1}`;
+        light.visible = false;
+        this.rooftopPartyLights.push(light);
+        group.add(light);
+      }
+    }
+    this.updateFestivalCrowd(0, rooftop);
+    return group;
+  }
+
+  private updateFestivalCrowd(time: number, rooftop: boolean) {
+    const { bodies, heads, arms, legs } = rooftop ? this.rooftopCrowdBatches : this.festivalCrowdBatches;
+    const dancers = rooftop ? this.rooftopDancers : this.festivalDancers;
+    const part = this.festivalPartTransform;
+    const root = this.festivalRootTransform;
+    const setPart = (mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, rotationX = 0, rotationZ = 0) => {
+      part.position.set(x, y, z);
+      part.rotation.set(rotationX, 0, rotationZ);
+      part.scale.setScalar(1);
+      part.updateMatrix();
+      mesh.setMatrixAt(index, this.festivalCombinedMatrix.multiplyMatrices(root.matrix, part.matrix));
+    };
+    for (const [index, dancer] of dancers.entries()) {
+      const beat = time * (3.8 + index % 3 * .35) + dancer.phase;
+      const bounce = Math.max(0, Math.sin(beat)) * .07;
+      root.position.set(dancer.x, dancer.y, dancer.z);
+      root.rotation.set(0, Math.atan2(dancer.centerX - dancer.x, dancer.centerZ - dancer.z) + Math.sin(beat * .5) * .18, 0);
+      root.scale.setScalar(dancer.scale);
+      root.updateMatrix();
+      setPart(bodies, index, 0, .285 + bounce, 0, 0, Math.sin(beat * .5) * .13);
+      setPart(heads, index, 0, .5 + bounce, 0);
+      setPart(arms, index * 2, -.115, .32 + bounce, 0, Math.sin(beat * .5) * .3, .9 + Math.sin(beat) * .42);
+      setPart(arms, index * 2 + 1, .115, .32 + bounce, 0, -Math.cos(beat * .5) * .3, -.9 - Math.cos(beat) * .42);
+      setPart(legs, index * 2, -.047, .085, 0, Math.sin(beat) * .26);
+      setPart(legs, index * 2 + 1, .047, .085, 0, -Math.sin(beat) * .26);
+    }
+    for (const batch of [bodies, heads, arms, legs]) batch.instanceMatrix.needsUpdate = true;
+  }
+
+  private updateFireworks(time: number, daylight: number) {
+    const positions = this.fireworks.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const colors = this.fireworks.geometry.getAttribute('color') as THREE.BufferAttribute;
+    const cycleDuration = 6.1;
+    const launchDuration = .76;
+    const burstDuration = 3.05;
+    const night = Math.pow(1 - daylight, 1.25);
+    const burstStates = Array.from({ length: 9 }, (_, burst) => {
+      const elapsed = ((time * .9 - burst * .64) % cycleDuration + cycleDuration) % cycleDuration;
+      const age = elapsed - launchDuration;
+      return {
+        burst,
+        elapsed,
+        age,
+        centerX: (hash(this.seed, burst, 0, 1901) - .5) * 10.5,
+        centerY: 7.8 + hash(this.seed, burst, 1, 1902) * 5.4,
+        centerZ: (hash(this.seed, burst, 2, 1903) - .5) * 7.5 - 2,
+        flash: age >= 0 && age < .58 ? Math.pow(1 - age / .58, 2) * night : 0,
+      };
+    });
+    let fireworkBurst: number | undefined;
+    const sounding = burstStates.find((state) => state.age >= 0 && state.age < .08);
+    if (sounding && time - this.lastFireworkSoundAt > .72) {
+      this.lastFireworkSoundAt = time;
+      fireworkBurst = .48 + hash(this.seed, sounding.burst, Math.floor(time * 10), 1905) * .3;
+    }
+    for (let index = 0; index < this.fireworkSparks.length; index++) {
+      const meta = this.fireworkSparks[index];
+      const state = burstStates[meta.burst];
+      let brightness = 0;
+      if (state.elapsed < launchDuration && meta.spark < 10) {
+        const launch = state.elapsed / launchDuration;
+        const tail = meta.spark / 10 * .68;
+        positions.setXYZ(
+          index,
+          state.centerX * launch,
+          .8 + state.centerY * Math.max(0, launch - tail),
+          state.centerZ * launch,
+        );
+        brightness = Math.max(0, 1 - tail - Math.abs(Math.sin(launch * Math.PI * 8)) * .12);
+      } else if (state.age >= 0 && state.age < burstDuration) {
+        const radius = (.24 + state.age * 2.38) * meta.speed * meta.radiusScale;
+        const willowDrop = state.age * state.age * (meta.burst % 3 === 1 ? .72 : .5);
+        positions.setXYZ(
+          index,
+          state.centerX + meta.direction.x * radius,
+          state.centerY + meta.direction.y * radius - willowDrop,
+          state.centerZ + meta.direction.z * radius,
+        );
+        const fade = Math.pow(1 - state.age / burstDuration, 1.12);
+        const twinkle = .72 + Math.max(0, Math.sin(time * 15 + meta.spark * 2.17)) * .4;
+        brightness = fade * twinkle * (state.age < .16 ? 1.62 : 1.12);
+      } else {
+        positions.setXYZ(index, 0, -100, 0);
+      }
+      colors.setXYZ(index, meta.color.r * brightness * night, meta.color.g * brightness * night, meta.color.b * brightness * night);
+    }
+    const flashes = burstStates.filter((state) => state.flash > 0).sort((a, b) => b.flash - a.flash);
+    this.fireworkFlashLights.forEach((light, index) => {
+      const flash = flashes[index];
+      light.intensity = flash ? flash.flash * 38 : 0;
+      if (!flash) return;
+      light.position.set(flash.centerX, flash.centerY, flash.centerZ);
+      light.color.setHex(FIREWORK_PALETTE[flash.burst % FIREWORK_PALETTE.length]);
+    });
+    positions.needsUpdate = true;
+    colors.needsUpdate = true;
+    this.fireworks.material.size = .31 + Math.max(0, Math.sin(time * 15)) * .13;
+    return fireworkBurst;
   }
 }

@@ -23,6 +23,8 @@ export type WorldSnapshot = Readonly<{
   water: Readonly<{ dockCount: number; canalCount: number; shelteredCount: number }>;
   places: readonly PlaceSnapshot[];
   confluences: readonly ConfluenceSnapshot[];
+  litLanternCount: number;
+  festivalInvited: boolean;
   priorDiscoveries: readonly string[];
   memory: TownMemorySnapshot;
 }>;
@@ -46,6 +48,8 @@ export type DiscoveryCondition =
   | { kind: 'water'; feature: 'dock' | 'canal' | 'sheltered'; atLeast: number }
   | { kind: 'place-identity'; identityId: PlaceIdentityId; atLeast: number; visitorsAtLeast?: number; businessType?: BusinessType }
   | { kind: 'confluence'; confluenceId: ConfluenceId; atLeast: number; visitorsAtLeast?: number }
+  | { kind: 'lit-lanterns'; atLeast: number }
+  | { kind: 'festival-invitation' }
   | { kind: 'memory'; metric: MemoryMetric; atLeast: number }
   | { kind: 'discovered'; eventId: string };
 
@@ -108,6 +112,8 @@ type SnapshotInput = {
   placeVisitorCounts?: ReadonlyMap<PlaceIdentityId, number>;
   confluences?: readonly ConfluenceOccurrence[];
   confluenceVisitorCounts?: ReadonlyMap<ConfluenceId, number>;
+  litLanternCount?: number;
+  festivalInvited?: boolean;
 };
 
 const BUSINESS_TYPES: readonly BusinessType[] = [
@@ -204,6 +210,8 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
     }),
     places: Object.freeze(places),
     confluences: Object.freeze(confluences),
+    litLanternCount: input.litLanternCount ?? 0,
+    festivalInvited: input.festivalInvited ?? false,
     priorDiscoveries: Object.freeze([...input.priorDiscoveries]),
     memory: Object.freeze({ ...memory }),
   });
@@ -273,6 +281,8 @@ export function evaluateCondition(condition: DiscoveryCondition, snapshot: World
     case 'confluence': return snapshot.confluences.filter((confluence) =>
       confluence.id === condition.confluenceId && confluence.visitors >= (condition.visitorsAtLeast ?? 0),
     ).length >= condition.atLeast;
+    case 'lit-lanterns': return snapshot.litLanternCount >= condition.atLeast;
+    case 'festival-invitation': return snapshot.festivalInvited;
     case 'memory': return snapshot.memory[condition.metric] >= condition.atLeast;
     case 'discovered': return snapshot.priorDiscoveries.includes(condition.eventId);
     case 'time': {
@@ -409,6 +419,16 @@ function conditionProgress(
       if (visitors < target) return { value: .78 + .2 * ratio(visitors, target), hint: `Let ${target - visitors} more ${target - visitors === 1 ? 'neighbor' : 'neighbors'} visit the ${definition?.landmark.title.toLowerCase() ?? 'grand landmark'}.` };
       return { value: 1, hint: `${definition?.landmark.title ?? 'The grand landmark'} is alive with use.` };
     }
+    case 'lit-lanterns': {
+      const remaining = Math.max(0, condition.atLeast - snapshot.litLanternCount);
+      return {
+        value: ratio(snapshot.litLanternCount, condition.atLeast),
+        hint: remaining ? `Kindle ${remaining} more harbor ${remaining === 1 ? 'lantern' : 'lanterns'}.` : 'All five harbor lanterns are lit.',
+      };
+    }
+    case 'festival-invitation': return snapshot.festivalInvited
+      ? { value: 1, hint: 'The Festival Pavilion has been called to life.' }
+      : { value: 0, hint: 'Begin the gathering from the Harbor Journal, then observe the Festival Pavilion.' };
     case 'memory': {
       const current = snapshot.memory[condition.metric];
       const hints: Record<MemoryMetric, string> = {
@@ -430,6 +450,7 @@ function prerequisitesMet(condition: DiscoveryCondition, snapshot: WorldSnapshot
   if (condition.kind === 'discovered') return snapshot.priorDiscoveries.includes(condition.eventId);
   if (condition.kind === 'place-identity') return snapshot.places.some((place) => place.id === condition.identityId);
   if (condition.kind === 'confluence') return snapshot.confluences.some((confluence) => confluence.id === condition.confluenceId);
+  if (condition.kind === 'festival-invitation') return snapshot.festivalInvited;
   if (condition.kind === 'all') return condition.conditions.every((candidate) => prerequisitesMet(candidate, snapshot));
   if (condition.kind === 'any') return condition.conditions.some((candidate) => prerequisitesMet(candidate, snapshot));
   if (condition.kind === 'not') return prerequisitesMet(condition.condition, snapshot);
@@ -490,6 +511,12 @@ export class GrowSystem {
   force(eventId: string, snapshot: WorldSnapshot) {
     const event = this.events.find((candidate) => candidate.id === eventId);
     return event ? this.trigger(event, snapshot) : null;
+  }
+
+  triggerEligible(eventId: string, snapshot: WorldSnapshot) {
+    const event = this.events.find((candidate) => candidate.id === eventId);
+    if (!event || this.discovered.has(eventId) || !evaluateCondition(event.condition, snapshot)) return null;
+    return this.trigger(event, snapshot);
   }
 
   private trigger(event: DiscoveryEvent, snapshot: WorldSnapshot) {
@@ -563,7 +590,7 @@ export class GrowSystem {
       return conditionProgress(dependency.condition, snapshot, (dependencyId) => resolve(dependencyId, nextTrail));
     };
     const progress = this.discovered.has(eventId)
-      ? { value: 1, hint: 'This lantern is already part of the harbor\'s light.' }
+      ? { value: 1, hint: 'This story is already in the Harbor Journal.' }
       : resolve(eventId, new Set()) ?? { value: 0, hint: 'Listen for the town to answer.' };
     return {
       eventId: event.id,
@@ -1230,14 +1257,11 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     id: 'lantern-finale', repeatable: false, title: 'All the Lanterns', illustration: 'lanterns',
     note: 'Every window answered another. Seen from the water, the town was a constellation that had chosen to stay.',
     condition: all(
-      discovered('blossom-evening'),
-      discovered('shared-supper'),
-      discovered('evening-chorus'),
-      discovered('clock-tower'),
-      discovered('ferry-route'),
-      { kind: 'place-identity', identityId: 'lantern-square', atLeast: 1 },
+      { kind: 'lit-lanterns', atLeast: 5 },
+      { kind: 'confluence', confluenceId: 'festival-crown', atLeast: 1 },
       { kind: 'time', after: 19, before: 23 },
-    ), focus: { kind: 'place-identity', identityId: 'lantern-square' },
+      { kind: 'festival-invitation' },
+    ), focus: { kind: 'confluence', confluenceId: 'festival-crown' },
     effects: [
       { kind: 'city', action: 'decorate' },
       { kind: 'ambience', action: 'celebrate' },

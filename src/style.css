@@ -527,6 +527,7 @@ button:active { transform: translateY(1px); }
 .lantern-constellation { display: flex; flex: 0 0 auto; gap: 5px; }
 .lantern-constellation i { width: 7px; height: 7px; border: 1px solid rgba(70,91,78,.28); border-radius: 50%; background: rgba(70,91,78,.08); }
 .lantern-constellation i.stirring { border-color: rgba(83,122,111,.62); background: rgba(83,122,111,.38); }
+.lantern-constellation i.ready { border-color: #b8713f; background: #e4a956; box-shadow: 0 0 5px rgba(228,169,86,.42); }
 .lantern-constellation i.lit { border-color: #c47b43; background: #ffc96a; box-shadow: 0 0 8px rgba(255,181,75,.72); }
 .lantern-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .lantern-card {
@@ -547,6 +548,7 @@ button:active { transform: translateY(1px); }
 .lantern-card:hover { transform: none; background: rgba(255,251,236,.5); }
 .lantern-card.following { border-color: rgba(168,75,66,.55); background: rgba(242,226,188,.5); }
 .lantern-card.stirring { border-color: rgba(83,122,111,.36); }
+.lantern-card.ready { border-color: rgba(184,113,63,.58); background: rgba(247,226,170,.38); }
 .lantern-card.lit { border-color: rgba(196,123,67,.46); background: rgba(255,239,189,.42); }
 .lantern-mark {
   display: grid;
@@ -559,6 +561,7 @@ button:active { transform: translateY(1px); }
   font: 600 16px/1 'Fraunces', serif;
 }
 .lantern-card.stirring .lantern-mark { color: #fff7dc; background: #668078; }
+.lantern-card.ready .lantern-mark { color: #5d3f29; background: #dda14d; box-shadow: 0 0 9px rgba(221,161,77,.3); }
 .lantern-card.lit .lantern-mark { color: #5d3f29; background: #f2b75d; box-shadow: 0 0 13px rgba(255,181,75,.42); }
 .lantern-copy { min-width: 0; }
 .lantern-copy strong { display: block; color: inherit; font: 600 13px/1.08 'Fraunces', serif; }
@@ -731,6 +734,19 @@ button:active { transform: translateY(1px); }
   color: rgba(49,62,53,.72);
   font: 11px/1.5 'DM Sans', sans-serif;
 }
+.about-panel .feedback-link {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 8px 11px;
+  border: 1px solid rgba(70,91,78,.18);
+  border-radius: 9px;
+  color: #fff5da;
+  background: #5b746b;
+  font: 600 10px/1.2 'DM Sans', sans-serif;
+  text-decoration: none;
+}
+.about-panel .feedback-link:hover { background: #667f76; }
+.about-panel .feedback-link:focus-visible { outline: 2px solid #a8463e; outline-offset: 2px; }
 .about-panel .music-credit {
   margin-top: 15px;
   padding-top: 14px;

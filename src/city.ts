@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type PlaceIdentityId, keyOf } from './types';
+import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type HarborLanternId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { facadeDirectionAt, plazaAnchorAt, type CardinalDirection as Direction } from './topology';
@@ -34,10 +34,9 @@ import {
   type ConfluenceOccurrence,
 } from './confluences';
 import {
+  HARBOR_LANTERNS,
   HARBOR_LANTERN_BY_ID,
-  harborLanternStates,
   type HarborLanternDefinition,
-  type HarborLanternId,
 } from './lanterns';
 
 const CELL = CELL_SIZE;
@@ -292,6 +291,7 @@ export class CityRenderer {
   private readonly placeLandmarks = new Map<string, readonly PlaceLandmarkSocket[]>();
   private readonly confluenceLandmarks = new Map<string, ConfluenceLandmarkSocket>();
   private readonly harborLanternRoot = new THREE.Group();
+  private readonly litHarborLanternIds = new Set<HarborLanternId>();
   private harborLanternAnchors: HarborLanternWorldAnchor[] = [];
   private lanternFinaleRevealed = true;
   private readonly nightGlowGeometry = new THREE.BufferGeometry();
@@ -403,6 +403,15 @@ export class CityRenderer {
     this.discoveries.clear();
     for (const id of next) this.discoveries.add(id);
     this.rebuildAll(false);
+    this.syncHarborLanterns();
+    this.syncNightLights();
+  }
+
+  setHarborLanterns(ids: Iterable<HarborLanternId>) {
+    const next = new Set(ids);
+    if (next.size === this.litHarborLanternIds.size && [...next].every((id) => this.litHarborLanternIds.has(id))) return;
+    this.litHarborLanternIds.clear();
+    for (const id of next) this.litHarborLanternIds.add(id);
     this.syncHarborLanterns();
     this.syncNightLights();
   }
@@ -537,8 +546,8 @@ export class CityRenderer {
         title: lantern.title,
         ageHours: 0,
         ageLabel: 'One of five harbor lanterns',
-        detail: `This light remembers "${lantern.promise}"`,
-        note: 'When all five lanterns are lit, they will need a Lantern Square in which to gather.',
+        detail: `This light was kindled after the town fulfilled its promise: "${lantern.promise}"`,
+        note: 'When all five are lit, you can call them together at the Festival Crown.',
       };
     }
     return null;
@@ -722,6 +731,12 @@ export class CityRenderer {
     this.warmLight.emissiveIntensity = .4 + night * 3.8;
     this.nightGlowMaterial.opacity = Math.max(0, night * .72 - .08);
     this.nightGlows.visible = this.nightGlowCount > 0 && this.nightGlowMaterial.opacity > .01;
+    for (const group of this.pieces.values()) {
+      const theatreLights = group.userData.theatreLights as THREE.PointLight[] | undefined;
+      if (theatreLights) for (const [index, light] of theatreLights.entries()) {
+        light.intensity = night * (index === 0 ? 4.2 : 2.7);
+      }
+    }
   }
 
   setWeather(rainIntensity: number) {
@@ -3071,8 +3086,8 @@ export class CityRenderer {
     }
     this.harborLanternAnchors = [];
     const geometries: THREE.BufferGeometry[] = [];
-    for (const lantern of harborLanternStates(this.discoveries)) {
-      if (lantern.state !== 'lit') continue;
+    for (const lantern of HARBOR_LANTERNS) {
+      if (!this.litHarborLanternIds.has(lantern.id)) continue;
       const anchor = this.harborLanternAnchor(lantern);
       if (!anchor) continue;
       const model = this.createHarborLantern(lantern.id);
@@ -3116,7 +3131,17 @@ export class CityRenderer {
       positions.push(x * CELL, Math.min(2.4, .9 + cell.height * .65), z * CELL);
     }
     for (const sockets of this.placeLandmarks.values()) for (const landmark of sockets) {
-      if (landmark.kind === 'lantern-theatre') positions.push(landmark.x * CELL + CELL / 2, 1.18, landmark.z * CELL + CELL / 2);
+      if (landmark.kind === 'lantern-theatre') {
+        const centerX = landmark.x * CELL + CELL / 2;
+        const centerZ = landmark.z * CELL + CELL / 2;
+        positions.push(centerX, 1.42, centerZ);
+        for (const side of [-1, 1]) {
+          positions.push(centerX + side * .88, 1.72, centerZ - .82);
+          positions.push(centerX + side * .88, 1.72, centerZ + .82);
+          positions.push(centerX + side * .46, .48, centerZ - .74);
+          positions.push(centerX + side * .46, .48, centerZ + .5);
+        }
+      }
       if (landmark.kind === 'tide-bell' || landmark.kind === 'star-dial') {
         const cell = this.get(landmark.x, landmark.z);
         positions.push(landmark.x * CELL, (cell?.height ?? 1) * FLOOR + 1.35, landmark.z * CELL);
@@ -3602,26 +3627,105 @@ export class CityRenderer {
 
   private buildLanternTheatre(group: THREE.Group) {
     const center = CELL / 2;
+    const red = this.cachedMaterial(this.colorMaterials, 0xb84d47, .92);
+    const teal = this.cachedMaterial(this.colorMaterials, 0x397975, .92);
+    const gold = this.cachedMaterial(this.colorMaterials, 0xd9a741, .8);
     const platform = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .96, .18, CELL * .96, 1, .06), this.stone));
     platform.position.y = .08;
-    const stage = shadow(new THREE.Mesh(new RoundedBoxGeometry(1.4, .24, .9, 1, .08), this.wood));
-    stage.position.set(center, .3, center);
-    group.add(platform, stage);
-    for (const side of [-.58, .58]) {
-      const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.045, .055, 1.18, 7), this.dark), false);
-      post.position.set(center + side, .92, center + .28);
-      const lantern = new THREE.Mesh(new THREE.SphereGeometry(.105, 9, 7), this.warmLight);
-      lantern.scale.y = 1.35;
-      lantern.position.set(center + side, 1.21, center + .28);
-      group.add(post, lantern);
+    const danceFloor = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.92, .98, .075, 16), this.cream), false);
+    danceFloor.position.set(center, .235, center - .48);
+    const danceRing = new THREE.Mesh(new THREE.TorusGeometry(.67, .035, 6, 28), gold);
+    danceRing.rotation.x = Math.PI / 2;
+    danceRing.position.set(center, .285, center - .48);
+    const stage = shadow(new THREE.Mesh(new RoundedBoxGeometry(1.82, .28, 1.02, 1, .09), this.wood));
+    stage.position.set(center, .34, center + .48);
+    group.add(platform, danceFloor, danceRing, stage);
+
+    for (const step of [0, 1]) {
+      const stair = shadow(new THREE.Mesh(new RoundedBoxGeometry(1.12 + step * .24, .09, .24, 1, .035), this.stoneDark), false);
+      stair.position.set(center, .2 + step * .07, center - .08 + step * .14);
+      group.add(stair);
     }
-    const roof = shadow(new THREE.Mesh(new THREE.ConeGeometry(.92, .42, 4), this.cream));
-    roof.position.set(center, 1.54, center + .1);
+
+    const postCorners = [
+      [center - .92, center - .92], [center + .92, center - .92],
+      [center + .92, center + .92], [center - .92, center + .92],
+    ] as const;
+    for (const [x, z] of postCorners) {
+      const post = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.045, .065, 1.82, 8), this.dark), false);
+      post.position.set(x, 1.08, z);
+      const finial = shadow(new THREE.Mesh(new THREE.ConeGeometry(.095, .25, 7), gold), false);
+      finial.position.set(x, 2.1, z);
+      group.add(post, finial);
+    }
+
+    const cordBetween = (from: THREE.Vector3, to: THREE.Vector3) => {
+      const direction = to.clone().sub(from);
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(.012, .012, direction.length(), 5), this.dark);
+      cord.position.copy(from).add(to).multiplyScalar(.5);
+      cord.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+      group.add(cord);
+    };
+    for (let edge = 0; edge < postCorners.length; edge++) {
+      const [fromX, fromZ] = postCorners[edge];
+      const [toX, toZ] = postCorners[(edge + 1) % postCorners.length];
+      cordBetween(new THREE.Vector3(fromX, 1.9, fromZ), new THREE.Vector3(toX, 1.9, toZ));
+      for (let index = 0; index < 4; index++) {
+        const progress = (index + .5) / 4;
+        const sag = Math.sin(progress * Math.PI) * .16;
+        const x = THREE.MathUtils.lerp(fromX, toX, progress);
+        const y = 1.83 - sag;
+        const z = THREE.MathUtils.lerp(fromZ, toZ, progress);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(.07, .08, .04, 7), this.metal);
+        cap.position.set(x, y + .12, z);
+        const body = new THREE.Mesh(new THREE.SphereGeometry(.095, 9, 7), this.warmLight);
+        body.position.set(x, y, z);
+        body.scale.y = 1.35;
+        const tassel = new THREE.Mesh(new THREE.ConeGeometry(.026, .11, 5), edge % 2 ? red : teal);
+        tassel.position.set(x, y - .16, z);
+        tassel.rotation.z = Math.PI;
+        group.add(cap, body, tassel);
+      }
+    }
+
+    const roof = shadow(new THREE.Mesh(new THREE.ConeGeometry(1.22, .56, 4), red));
+    roof.position.set(center, 2.13, center + .42);
     roof.rotation.y = Math.PI / 4;
-    const screen = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.84, .56), this.flagMaterial), false);
-    screen.position.set(center, .86, center + .46);
+    roof.scale.z = .72;
+    const screen = shadow(new THREE.Mesh(new THREE.PlaneGeometry(1.22, .65), this.flagMaterial), false);
+    screen.position.set(center, 1.16, center + .94);
     screen.rotation.y = Math.PI;
     group.add(roof, screen);
+
+    for (const side of [-.66, -.33, 0, .33, .66]) {
+      const footlight = new THREE.Mesh(new THREE.SphereGeometry(.07, 8, 6), this.warmLight);
+      footlight.position.set(center + side, .52, center - .02);
+      group.add(footlight);
+    }
+    for (const side of [-.48, .48]) {
+      const drum = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.16, .19, .31, 10), side < 0 ? teal : red), false);
+      drum.rotation.z = Math.PI / 2;
+      drum.position.set(center + side, .61, center + .5);
+      const drumhead = new THREE.Mesh(new THREE.CircleGeometry(.16, 10), this.cream);
+      drumhead.rotation.y = side < 0 ? -Math.PI / 2 : Math.PI / 2;
+      drumhead.position.set(center + side + Math.sign(side) * .16, .61, center + .5);
+      group.add(drum, drumhead);
+    }
+    for (const side of [-.72, .72]) {
+      const table = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.25, .29, .12, 10), this.wood), false);
+      table.position.set(center + side, .36, center - .7);
+      const tableLantern = new THREE.Mesh(new THREE.SphereGeometry(.08, 8, 6), this.warmLight);
+      tableLantern.scale.y = 1.25;
+      tableLantern.position.set(center + side, .55, center - .7);
+      group.add(table, tableLantern);
+    }
+
+    const mainLight = new THREE.PointLight(0xffa84f, 0, 6.5, 1.7);
+    mainLight.position.set(center, 1.55, center - .35);
+    const stageLight = new THREE.PointLight(0xffd27a, 0, 4.5, 1.8);
+    stageLight.position.set(center, 1.35, center + .5);
+    group.add(mainLight, stageLight);
+    group.userData.theatreLights = [mainLight, stageLight];
     group.userData.placeLandmark = 'lantern-theatre';
   }
 

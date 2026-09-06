@@ -148,7 +148,7 @@ export const PLACE_IDENTITY_CATALOG: readonly PlaceIdentityDefinition[] = [
     trace: 'Paired doorway lanterns and handbills spread outward along the evening approaches.',
     businesses: ['restaurant', 'tea-house', 'cafe', 'inn', 'bookstore'],
     requirements: ['harbor plaza', 'tier-two courtyard or rooftop'], range: 3, influenceRadius: 5,
-    landmark: { kind: 'lantern-theatre', title: 'Lantern Theatre', description: 'A public stage replaces the fountain where the plaza meets the routes from above.', activity: 'watching the lantern theatre prepare for evening', effect: 'Its lamps draw an audience to the square each night.' },
+    landmark: { kind: 'lantern-theatre', title: 'Lantern Theatre', description: 'A public stage, dance floor, food tables, and a crown of lantern strings replace the fountain where the plaza meets the routes from above.', activity: 'dancing to the lantern theatre music', effect: 'Its music and lamps draw dancers into the square and onto every flat rooftop each night.' },
   },
   {
     id: 'ferry-quarter', title: 'Ferry Quarter', mark: '⇝',
@@ -463,7 +463,11 @@ export function placeIdentityActivity(id: PlaceIdentityId, ageGroup?: string, oc
   if (id === 'makers-walk') return ageGroup === 'child' ? 'watching the makers at work along the makers\' walk' : 'carrying small errands along the makers\' walk';
   if (id === 'roof-village') return 'visiting neighbors across the roof village';
   if (id === 'high-harbor') return 'watching sails cross beneath the high harbor';
-  if (id === 'lantern-square') return 'meeting neighbors as the lanterns light the square';
+  if (id === 'lantern-square') return ageGroup === 'child'
+    ? 'dancing through the lantern light in the square'
+    : occupation === 'Cook'
+      ? 'sharing festival food beside the lantern theatre'
+      : 'dancing with neighbors beneath the lanterns';
   if (id === 'ferry-quarter') return occupation === 'Caretaker' ? 'helping travelers at the ferry quarter' : 'waiting for the next ferry in the square';
   if (id === 'tidepool-cloister') return occupation === 'Gardener' ? 'tending moss beside the tide cistern' : 'looking for shells in the tidepool cloister';
   if (id === 'story-court') return ageGroup === 'child' ? 'listening to a story in the story court' : occupation === 'Teacher' ? 'sharing a lesson in the story court' : 'reading beneath the story court arcade';

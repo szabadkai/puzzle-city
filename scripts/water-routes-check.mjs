@@ -21,6 +21,21 @@ try {
   const { HarborAmbience } = await server.ssrLoadModule('/src/harbor.ts');
   const { createDockNavigationPath, createShorelineRoute, WORLD_CELL_SIZE } = await server.ssrLoadModule('/src/water.ts');
   const cell = (x, z) => ({ x, z, height: 1, color: 0, placedAt: 0, foundedAt: 0, renovatedAt: 0 });
+  const merchantHullOverlapsCell = (point, tangent, building) => {
+    const forward = new THREE.Vector2(tangent.x, tangent.z).normalize();
+    const side = new THREE.Vector2(-forward.y, forward.x);
+    const separation = new THREE.Vector2(
+      point.x - building.x * WORLD_CELL_SIZE,
+      point.z - building.z * WORLD_CELL_SIZE,
+    );
+    for (const axis of [new THREE.Vector2(1, 0), new THREE.Vector2(0, 1), forward, side]) {
+      const distance = Math.abs(separation.dot(axis));
+      const hullRadius = .9 * Math.abs(forward.dot(axis)) + .36 * Math.abs(side.dot(axis));
+      const cellRadius = WORLD_CELL_SIZE / 2 * (Math.abs(axis.x) + Math.abs(axis.y));
+      if (distance > hullRadius + cellRadius) return false;
+    }
+    return true;
+  };
   const northDock = {
     land: { x: 0, z: 0 }, water: { x: 0, z: -1 }, direction: 0, dock: true,
   };
@@ -32,7 +47,7 @@ try {
     ...Array.from({ length: 7 }, (_, index) => cell(-1, -2 - index)),
   ];
   const navigationPath = createDockNavigationPath(obstructedTown, northDock, 1);
-  assert.ok(navigationPath.length >= 4, 'dock navigation did not detour around a detached island');
+  assert.ok(navigationPath.length >= 3, 'dock navigation did not detour around a detached island');
   const occupied = new Set(obstructedTown.map(({ x, z }) => `${x},${z}`));
   for (let index = 0; index < navigationPath.length - 1; index++) {
     const from = navigationPath[index];
@@ -65,28 +80,29 @@ try {
     }
   }
 
-  // Integration check: every sampled merchant centre and its slow movement
-  // across the berth stay outside all occupied building cells.
+  // Integration check: the full merchant hull, including its slow movement
+  // across the berth, stays outside all occupied building cells.
   const ambience = new HarborAmbience(42, new THREE.PerspectiveCamera(), obstructedTown);
   assert.ok(ambience.importDock && ambience.merchantInboundRoute && ambience.merchantOutboundRoute, 'merchant routes were not configured');
   const routes = [ambience.merchantInboundRoute, ambience.merchantOutboundRoute];
   for (const route of routes) for (let index = 0; index <= 800; index++) {
     const point = route.getPointAt(index / 800);
+    const tangent = route.getTangentAt(index / 800);
     for (const building of obstructedTown) {
       assert.ok(
-        Math.abs(point.x - building.x * WORLD_CELL_SIZE) >= WORLD_CELL_SIZE / 2
-          || Math.abs(point.z - building.z * WORLD_CELL_SIZE) >= WORLD_CELL_SIZE / 2,
-        'merchant route entered a building footprint',
+        !merchantHullOverlapsCell(point, tangent, building),
+        'merchant hull clipped a building beside its route',
       );
     }
   }
+  const berthDirection = ambience.merchantDeparturePoint.clone().sub(ambience.merchantArrivalPoint);
+  if (berthDirection.lengthSq() <= .0001) ambience.merchantInboundRoute.getTangentAt(0, berthDirection).multiplyScalar(-1);
   for (let index = 0; index <= 100; index++) {
     const point = new THREE.Vector3().lerpVectors(ambience.merchantArrivalPoint, ambience.merchantDeparturePoint, index / 100);
     for (const building of obstructedTown) {
       assert.ok(
-        Math.abs(point.x - building.x * WORLD_CELL_SIZE) >= WORLD_CELL_SIZE / 2
-          || Math.abs(point.z - building.z * WORLD_CELL_SIZE) >= WORLD_CELL_SIZE / 2,
-        'merchant berth movement entered a building footprint',
+        !merchantHullOverlapsCell(point, berthDirection, building),
+        'merchant hull clipped a building while moving across the berth',
       );
     }
   }

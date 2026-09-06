@@ -50,16 +50,29 @@ export function createDockNavigationPath(cells: Iterable<Cell>, dock: ShorelineE
   const outwardZ = dock.water.z - dock.land.z;
   const lateralX = outwardZ;
   const lateralZ = -outwardX;
-  const start = {
-    x: dock.water.x + lateralX * side,
-    z: dock.water.z + lateralZ * side,
-  };
-  if (blocked.has(keyOf(start.x, start.z))) return Object.freeze([]) as readonly WaterPoint[];
-
   const minCellX = Math.min(dock.land.x, ...cellList.map((cell) => cell.x));
   const maxCellX = Math.max(dock.land.x, ...cellList.map((cell) => cell.x));
   const minCellZ = Math.min(dock.land.z, ...cellList.map((cell) => cell.z));
   const maxCellZ = Math.max(dock.land.z, ...cellList.map((cell) => cell.z));
+  const maximumBerthRun = Math.max(maxCellX - minCellX, maxCellZ - minCellZ) + 3;
+  let start: WaterPoint | undefined;
+  for (let step = 1; step <= maximumBerthRun; step++) {
+    const candidate = {
+      x: dock.water.x + lateralX * side * step,
+      z: dock.water.z + lateralZ * side * step,
+    };
+    // The vessel travels lengthwise along this waterfront run. Any occupied
+    // cell on it closes that side of the berth completely.
+    if (blocked.has(keyOf(candidate.x, candidate.z))) return Object.freeze([]) as readonly WaterPoint[];
+    // Do not turn the long hull until both the turn cell and the cell farther
+    // offshore are clear. This avoids clipping the corner of a diagonal isle.
+    if (!blocked.has(keyOf(candidate.x + outwardX, candidate.z + outwardZ))) {
+      start = candidate;
+      break;
+    }
+  }
+  if (!start) return Object.freeze([]) as readonly WaterPoint[];
+
   const openWaterPadding = 12;
   const lateralOffset = 3 * side;
   const goal = {

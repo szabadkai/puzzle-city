@@ -731,8 +731,8 @@ export class HarborAmbience {
     const outboundPath = outboundSide === 1 ? selected.positive : selected.negative;
     this.merchantArrivalPoint.copy(this.merchantBerthPoint(selected.dock, inboundSide));
     this.merchantDeparturePoint.copy(this.merchantBerthPoint(selected.dock, outboundSide));
-    this.merchantInboundRoute = this.createMerchantWaterCurve(selected.dock, inboundSide, this.merchantArrivalPoint, inboundPath);
-    this.merchantOutboundRoute = this.createMerchantWaterCurve(selected.dock, outboundSide, this.merchantDeparturePoint, outboundPath);
+    this.merchantInboundRoute = this.createMerchantWaterCurve(selected.dock, this.merchantArrivalPoint, inboundPath);
+    this.merchantOutboundRoute = this.createMerchantWaterCurve(selected.dock, this.merchantDeparturePoint, outboundPath);
   }
 
   private merchantBerthPoint(dock: ShorelineEdge, side: -1 | 1) {
@@ -743,12 +743,13 @@ export class HarborAmbience {
       .addScaledVector(lateral, 1.38 * side);
   }
 
-  private createMerchantWaterCurve(dock: ShorelineEdge, side: -1 | 1, berth: THREE.Vector3, path: readonly WaterPoint[]) {
-    const outward = new THREE.Vector3(dock.water.x - dock.land.x, 0, dock.water.z - dock.land.z);
-    const lateral = new THREE.Vector3(outward.z, 0, -outward.x);
+  private createMerchantWaterCurve(dock: ShorelineEdge, berth: THREE.Vector3, path: readonly WaterPoint[]) {
+    const lateral = new THREE.Vector3(dock.water.z - dock.land.z, 0, dock.land.x - dock.water.x);
+    const turnCell = new THREE.Vector3(path[0].x * WORLD_CELL_SIZE, -.08, path[0].z * WORLD_CELL_SIZE);
+    const waterfrontRun = berth.clone().addScaledVector(lateral, turnCell.clone().sub(berth).dot(lateral));
     const points = [
       berth.clone(),
-      berth.clone().addScaledVector(lateral, side * .48),
+      waterfrontRun,
       ...path.map((point) => new THREE.Vector3(point.x * WORLD_CELL_SIZE, -.08, point.z * WORLD_CELL_SIZE)),
     ].filter((point, index, all) => index === 0 || point.distanceToSquared(all[index - 1]) > .0001);
     const curve = new THREE.CurvePath<THREE.Vector3>();

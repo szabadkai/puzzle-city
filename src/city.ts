@@ -54,6 +54,12 @@ type FacadeBounds = Readonly<{ sideMin: number; sideMax: number; yMin: number; y
 type FacadeClaim = Readonly<{ direction: Direction; kind: string; layer: FacadeLayer; bounds: FacadeBounds }>;
 type HarborLanternWorldAnchor = Readonly<{ id: HarborLanternId; x: number; y: number; z: number }>;
 
+/** Rotation that lowers a canopy's outer edge without tilting it across the facade. */
+export function facadeCanopyPitch(direction: Direction, radians: number): [number, number, number] {
+  const [dx, dz] = CARDINALS[direction];
+  return [dz * radians, 0, -dx * radians];
+}
+
 class HarborLanternHitTarget extends THREE.Object3D {
   private readonly hitCenter = new THREE.Vector3();
   private readonly hitPoint = new THREE.Vector3();
@@ -1596,7 +1602,7 @@ export class CityRenderer {
       const strip = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .42 : .24, .08, dir % 2 ? .24 : .42), i % 2 ? this.cream : awningMaterial), false);
       const offset = (i - 2) * .21;
       strip.position.set(px + dx * .21 + lateral.x * offset, 1.25, pz + dz * .21 + lateral.z * offset);
-      strip.rotation.set(lateral.z * -.13, 0, lateral.x * .13);
+      strip.rotation.set(...facadeCanopyPitch(dir, .13));
       strip.name = `residential-awning-${i}`;
       group.add(strip);
     }
@@ -1814,7 +1820,7 @@ export class CityRenderer {
     };
     const addFlatCanopy = (material: THREE.Material, width = 1.76, depth = .6, y = 1.42) => {
       const canopy = addBox(width, .13, depth, material, 0, 1.39, y);
-      canopy.rotation.set(lateral.z * -.1, 0, lateral.x * .1);
+      canopy.rotation.set(...facadeCanopyPitch(dir, .1));
       return canopy;
     };
     const addGable = (material: THREE.Material, width = 1.72, depth = .62, y = 1.53) => {
@@ -1844,7 +1850,7 @@ export class CityRenderer {
         // A low striped bread awning with a warm open display.
         for (let index = 0; index < 7; index++) {
           const strip = addBox(.235, .105, .62, index % 2 ? this.cream : accent, (index - 3) * .235, 1.4, 1.42);
-          strip.rotation.set(lateral.z * -.12, 0, lateral.x * .12);
+          strip.rotation.set(...facadeCanopyPitch(dir, .12));
         }
         addBox(1.5, .12, .12, this.wood, 0, 1.27, 1.1);
         break;
@@ -1890,7 +1896,7 @@ export class CityRenderer {
       case 'fishmonger': {
         // A generous blue market tarp and pale wet counter face the quay.
         const canopy = addFlatCanopy(accent, 1.84, .84, 1.48);
-        canopy.rotation.set(lateral.z * -.18, 0, lateral.x * .18);
+        canopy.rotation.set(...facadeCanopyPitch(dir, .18));
         addBox(1.62, .48, .4, this.cream, 0, 1.47, .46);
         addBox(1.68, .09, .46, this.metal, 0, 1.49, .73);
         break;
@@ -2514,7 +2520,7 @@ export class CityRenderer {
 
     const canopy = shadow(this.orientedBox(1.78, .11, .66, dir, marketRed), false);
     this.detailPosition(canopy, dx, dz, lateral, 0, 1.43, 1.44);
-    canopy.rotation.set(lateral.z * -.1, 0, lateral.x * .1);
+    canopy.rotation.set(...facadeCanopyPitch(dir, .1));
     canopy.name = 'canal-market-canopy';
     const hem = shadow(this.orientedBox(1.78, .1, .07, dir, this.cream), false);
     this.detailPosition(hem, dx, dz, lateral, 0, 1.75, 1.36);

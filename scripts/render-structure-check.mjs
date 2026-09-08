@@ -49,7 +49,7 @@ const facadeClaimsConflict = (a, b) => {
 const server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'error' });
 
 try {
-  const { CityRenderer } = await server.ssrLoadModule('/src/city.ts');
+  const { CityRenderer, facadeCanopyPitch } = await server.ssrLoadModule('/src/city.ts');
   const { CitizenSystem, NavGraph } = await server.ssrLoadModule('/src/citizens.ts');
   const { CONFLUENCE_BY_ID } = await server.ssrLoadModule('/src/confluences.ts');
   const { createWorldSnapshot, DISCOVERY_EVENTS, evaluateCondition, resolveFocus } = await server.ssrLoadModule('/src/grow.ts');
@@ -66,6 +66,14 @@ try {
   } = await server.ssrLoadModule('/src/spatial.ts');
 
   const seed = 42;
+  for (let direction = 0; direction < 4; direction++) {
+    const [dx, dz] = [[0, -1], [1, 0], [0, 1], [-1, 0]][direction];
+    const rotation = new THREE.Euler(...facadeCanopyPitch(direction, .15));
+    const outerEdge = new THREE.Vector3(dx, 0, dz).applyEuler(rotation);
+    const lateralEdge = new THREE.Vector3(dz, 0, -dx).applyEuler(rotation);
+    if (outerEdge.y >= 0) throw new Error(`Facade canopy ${direction} does not slope down away from the wall.`);
+    if (Math.abs(lateralEdge.y) > 1e-6) throw new Error(`Facade canopy ${direction} tilts sideways across its stripes.`);
+  }
   const cells = [];
   for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) {
     if (Math.abs(x) + Math.abs(z) >= 4) continue;

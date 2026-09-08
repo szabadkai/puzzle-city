@@ -820,6 +820,27 @@ button:active { transform: translateY(1px); }
 .about-controls dl div { display: grid; grid-template-columns: 88px 1fr; gap: 12px; align-items: baseline; }
 .about-controls dt { color: #963a33; font-size: 13px; font-weight: 600; }
 .about-controls dd { margin: 0; color: rgba(42,56,48,.86); font: 15px/1.45 'DM Sans', sans-serif; }
+.quality-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(69,82,66,.15);
+  color: #963a33;
+  font-size: 13px;
+  font-weight: 600;
+}
+.quality-setting select {
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid rgba(70,91,78,.22);
+  border-radius: 9px;
+  color: #30413b;
+  background: rgba(255,249,229,.7);
+  font: 500 14px 'DM Sans', sans-serif;
+}
 .about-panel .creator-credit {
   margin-top: 16px;
   color: rgba(42,56,48,.82);

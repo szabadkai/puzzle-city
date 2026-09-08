@@ -46,10 +46,13 @@ import {
   type ConfluenceOccurrence,
 } from './confluences';
 import { HARBOR_LANTERNS, harborLanternStates, harborLanternsCompletedByEdit } from './lanterns';
+import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, storedTierOverride, type QualityTier } from './quality';
 import './style.css';
 
 const STORAGE_KEY = 'little-tides-town-v1';
 const MUSIC_MUTED_KEY = 'little-tides-music-muted';
+const DETECTED_TIER_KEY = 'little-tides-quality-detected';
+const HIGH_REFRESH_KEY = 'little-tides-high-refresh';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="hud">
@@ -189,6 +192,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <div><dt>History</dt><dd>Choose Observe, then select a person or place.</dd></div>
           </dl>
         </section>
+        <label class="quality-setting" for="quality-select">Graphics quality
+          <select id="quality-select" aria-label="Graphics quality">
+            <option value="auto">Auto</option>
+            <option value="low">Low</option>
+            <option value="mid">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
         <p class="creator-credit">Made by <a href="https://szabadkai.com" target="_blank" rel="noreferrer">Levente Szabadkai</a> · <a href="https://github.com/szabadkai/puzzle-city" target="_blank" rel="noreferrer">GitHub</a>.</p>
         <a class="feedback-link" href="https://github.com/szabadkai/puzzle-city/issues/new" target="_blank" rel="noreferrer">Send feedback on GitHub</a>
         <details class="music-credit">
@@ -246,8 +257,40 @@ camera.position.set(18, 19, 20);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
-const maximumPixelRatio = Math.min(devicePixelRatio, 1.5);
+const tierOverride = storedTierOverride();
+const detectedTier = readDetectedTier();
+let qualityTier: QualityTier = tierOverride ?? detectedTier ?? guessTier(renderer);
+let tierNeedsRefinement = !tierOverride && !detectedTier;
+let quality = QUALITY_SETTINGS[qualityTier];
+let maximumPixelRatio = Math.min(devicePixelRatio, quality.maxPixelRatio);
 let renderPixelRatio = maximumPixelRatio;
+const gpuTimer = new GpuTimer(renderer);
+const highRefreshAllowed = localStorage.getItem(HIGH_REFRESH_KEY) === 'true';
+
+function readDetectedTier(): QualityTier | null {
+  const stored = localStorage.getItem(DETECTED_TIER_KEY);
+  return stored === 'low' || stored === 'mid' || stored === 'high' ? stored : null;
+}
+
+function applyQualityTier(tier: QualityTier) {
+  qualityTier = tier;
+  quality = QUALITY_SETTINGS[tier];
+  maximumPixelRatio = Math.min(devicePixelRatio, quality.maxPixelRatio);
+  renderPixelRatio = Math.min(renderPixelRatio, maximumPixelRatio);
+  renderer.setPixelRatio(renderPixelRatio);
+}
+
+renderer.domElement.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault();
+  showToast('The graphics context was lost. Restoring the harbor...');
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(renderPixelRatio);
+  renderer.shadowMap.needsUpdate = true;
+  ignoreNextPerformanceSample = true;
+  showToast('The harbor is back.');
+});
 renderer.setPixelRatio(renderPixelRatio);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -2385,6 +2428,14 @@ document.querySelector('#journal-list')!.addEventListener('click', (event) => {
   const followConfluenceCard = target.closest<HTMLButtonElement>('[data-follow-confluence-id]');
   if (followConfluenceCard?.dataset.followConfluenceId) followConfluence(followConfluenceCard.dataset.followConfluenceId as ConfluenceId);
 });
+const qualitySelect = document.querySelector<HTMLSelectElement>('#quality-select')!;
+qualitySelect.value = tierOverride ?? 'auto';
+qualitySelect.addEventListener('change', () => {
+  const value = qualitySelect.value;
+  storeTierOverride(value === 'low' || value === 'mid' || value === 'high' ? value : null);
+  saveTown();
+  location.reload();
+});
 document.querySelector('#about-open')!.addEventListener('click', () => setAboutOpen(true));
 document.querySelector('#about-close')!.addEventListener('click', () => setAboutOpen(false));
 document.querySelector('#about-scrim')!.addEventListener('click', (event) => {
@@ -2540,6 +2591,44 @@ let nightMode = false;
 let shadowsActive = true;
 let lastRaining = weatherAt(seed, day * 24 + timeOfDay).raining;
 const performanceCosts = { city: 0, citizens: 0, business: 0, discovery: 0, background: 0, ambience: 0, render: 0 };
+let sessionSeconds = 0;
+let refinementFrameMs = 0;
+let refinementFrames = 0;
+let lastPresentedAt = 0;
+const frameCapMs = highRefreshAllowed ? 0 : 1000 / 60 - 1.5;
+
+type PerformanceReport = {
+  fps: number;
+  frameMs: number;
+  drawCalls: number;
+  triangles: number;
+  renderScale: number;
+  tier: QualityTier;
+  shadows: boolean;
+  cpuMs: Record<string, number>;
+  gpuMs: Record<string, number>;
+  gpuTimingSupported: boolean;
+};
+
+declare global {
+  interface Window { __perf?: PerformanceReport }
+}
+
+function publishPerformanceReport() {
+  const info = renderer.info.render;
+  window.__perf = {
+    fps: Math.round(1000 / frameTimeEma),
+    frameMs: Math.round(frameTimeEma * 10) / 10,
+    drawCalls: info.calls,
+    triangles: info.triangles,
+    renderScale: Math.round(renderPixelRatio * 100) / 100,
+    tier: qualityTier,
+    shadows: shadowsActive,
+    cpuMs: { ...performanceCosts },
+    gpuMs: { ...gpuTimer.times },
+    gpuTimingSupported: gpuTimer.supported,
+  };
+}
 
 function recordPerformanceCost(name: keyof typeof performanceCosts, startedAt: number) {
   const duration = performance.now() - startedAt;
@@ -2568,15 +2657,33 @@ function updateTimeDisplay() {
 
 function animate() {
   requestAnimationFrame(animate);
+  if (document.hidden) {
+    clock.getDelta();
+    return;
+  }
+  // Battery: hold the loop at 60 fps on 120 Hz displays unless the player opted in.
+  const now = performance.now();
+  if (frameCapMs && now - lastPresentedAt < frameCapMs) return;
+  lastPresentedAt = now;
   const rawDelta = clock.getDelta();
-  if (document.hidden) return;
   const performancePanel = document.querySelector<HTMLElement>('#perf-panel')!;
   const profileFrame = performancePanel.classList.contains('show');
   let profileStartedAt = profileFrame ? performance.now() : 0;
   const delta = Math.min(rawDelta, .1);
   const time = clock.elapsedTime;
+  sessionSeconds += rawDelta;
   if (ignoreNextPerformanceSample) ignoreNextPerformanceSample = false;
   else frameTimeEma += (rawDelta * 1000 - frameTimeEma) * .035;
+  if (tierNeedsRefinement && sessionSeconds > 1.5) {
+    refinementFrameMs += rawDelta * 1000;
+    refinementFrames += 1;
+    if (sessionSeconds > 2.5) {
+      tierNeedsRefinement = false;
+      const refined = refineTier(qualityTier, refinementFrameMs / Math.max(1, refinementFrames));
+      if (refined !== qualityTier) applyQualityTier(refined);
+      localStorage.setItem(DETECTED_TIER_KEY, refined);
+    }
+  }
   const performanceDelta = Math.min(rawDelta, .1);
   overloadSeconds = frameTimeEma > 22 ? overloadSeconds + performanceDelta : Math.max(0, overloadSeconds - performanceDelta * 2);
   severeOverloadSeconds = frameTimeEma > 26 ? severeOverloadSeconds + performanceDelta : Math.max(0, severeOverloadSeconds - performanceDelta * 2);
@@ -2771,12 +2878,19 @@ function animate() {
   // WebGL's drawing buffer is not preserved by default. Keep presenting the
   // scene while a journal view is open so overlay recompositing cannot reveal
   // the page background in place of the town.
+  gpuTimer.begin('scene');
   renderer.render(scene, camera);
+  gpuTimer.end();
+  gpuTimer.collect();
   if (profileFrame) recordPerformanceCost('render', profileStartedAt);
   if (performanceUpdate > .75) {
     const info = renderer.info.render;
     const cpu = Object.values(performanceCosts).reduce((sum, duration) => sum + duration, 0);
-    performancePanel.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'} · ${cpu.toFixed(1)}ms CPU (city ${performanceCosts.city.toFixed(1)} · people ${performanceCosts.citizens.toFixed(1)} · shops ${performanceCosts.business.toFixed(1)} · GROW ${performanceCosts.discovery.toFixed(1)} · ui ${performanceCosts.background.toFixed(1)} · life ${performanceCosts.ambience.toFixed(1)} · render ${performanceCosts.render.toFixed(1)})`;
+    const gpu = gpuTimer.supported
+      ? ` · GPU ${Object.entries(gpuTimer.times).map(([name, duration]) => `${name} ${duration.toFixed(1)}`).join(' · ')}`
+      : '';
+    performancePanel.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${qualityTier} · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'} · ${cpu.toFixed(1)}ms CPU (city ${performanceCosts.city.toFixed(1)} · people ${performanceCosts.citizens.toFixed(1)} · shops ${performanceCosts.business.toFixed(1)} · GROW ${performanceCosts.discovery.toFixed(1)} · ui ${performanceCosts.background.toFixed(1)} · life ${performanceCosts.ambience.toFixed(1)} · render ${performanceCosts.render.toFixed(1)})${gpu}`;
+    publishPerformanceReport();
     performanceUpdate = 0;
   }
 }

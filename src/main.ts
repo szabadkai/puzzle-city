@@ -53,6 +53,7 @@ import { installPresentationShading, presentationUniforms, setShadowCascadeCount
 import { createAtmosphereState, evaluateAtmosphere } from './atmosphere';
 import { SkyDome } from './sky';
 import { PostPipeline } from './postfx';
+import { CameraDirector } from './camera-director';
 import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, storedTierOverride, type QualityTier } from './quality';
 import './style.css';
 
@@ -82,6 +83,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="top-actions-menu" id="top-actions-menu">
           <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
           <button id="music-toggle" aria-label="Turn music off" aria-pressed="true"><span>Music</span><span class="music-state" aria-hidden="true">♫</span></button>
+          <button id="ui-hide" aria-label="Hide the interface for a screenshot"><span class="desktop-hide-label">Hide UI</span><span class="mobile-hide-label" aria-hidden="true">◫</span></button>
           <button id="palette-cycle" aria-label="Change the town palette"><span class="desktop-palette-label">Palette</span><span class="mobile-palette-label" aria-hidden="true">◐</span></button>
           <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
           <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
@@ -90,6 +92,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
     </div>
     <div class="toast" id="toast"></div>
+    <div class="follow-label" id="follow-label" aria-live="polite"></div>
+    <button id="ui-restore" aria-label="Show the interface"></button>
     <div class="perf-panel" id="perf-panel">Performance</div>
     <div class="shadow-tuning" id="shadow-tuning" aria-label="Shadow tuning">
       <label>bias <input id="shadow-bias" type="range" min="-0.002" max="0.002" step="0.00002" value="-0.00018"><span id="shadow-bias-value"></span></label>
@@ -275,6 +279,25 @@ const atmosphere = createAtmosphereState();
 const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, .1, 300);
 camera.position.set(18, 19, 20);
 
+const LANDSCAPE_HORIZONTAL_FOV = 58;
+const PORTRAIT_VERTICAL_FOV = 50;
+
+function viewportSize() {
+  const viewport = window.visualViewport;
+  return viewport ? { width: Math.round(viewport.width), height: Math.round(viewport.height) } : { width: innerWidth, height: innerHeight };
+}
+
+/** Portrait locks the vertical field of view, landscape the horizontal one. */
+function applyCameraFov() {
+  if (camera.aspect < 1) {
+    camera.fov = PORTRAIT_VERTICAL_FOV;
+  } else {
+    const horizontal = THREE.MathUtils.degToRad(LANDSCAPE_HORIZONTAL_FOV);
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(horizontal / 2) / camera.aspect));
+  }
+  camera.updateProjectionMatrix();
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
 const tierOverride = storedTierOverride();
@@ -304,7 +327,8 @@ function applyQualityTier(tier: QualityTier) {
 
 function applyRenderScale() {
   renderer.setPixelRatio(renderPixelRatio);
-  pipeline?.setSize(innerWidth, innerHeight);
+  const { width, height } = viewportSize();
+  pipeline?.setSize(width, height);
 }
 
 renderer.domElement.addEventListener('webglcontextlost', (event) => {
@@ -312,8 +336,7 @@ renderer.domElement.addEventListener('webglcontextlost', (event) => {
   showToast('The graphics context was lost. Restoring the harbor...');
 });
 renderer.domElement.addEventListener('webglcontextrestored', () => {
-  renderer.setSize(innerWidth, innerHeight);
-  applyRenderScale();
+  applyViewport();
   palette.texture.needsUpdate = true;
   renderer.shadowMap.needsUpdate = true;
   ignoreNextPerformanceSample = true;
@@ -334,7 +357,8 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = false;
 controls.enablePan = true;
 controls.screenSpacePanning = false;
-controls.minDistance = 12;
+// Close enough for a cat or a kite to fill a third of a portrait frame.
+controls.minDistance = 2.2;
 controls.maxDistance = 120;
 controls.minPolarAngle = .42;
 // Allow a near-horizontal orbit for looking directly at building facades while
@@ -346,6 +370,7 @@ controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
 controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 controls.touches.ONE = THREE.TOUCH.ROTATE;
 controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+const director = new CameraDirector(camera, controls, renderer.domElement);
 
 const hemi = new THREE.HemisphereLight(0xffe8bd, 0x315f63, 2.25);
 scene.add(hemi);
@@ -677,8 +702,13 @@ function cancelCameraGesture() {
   controls.reset();
 }
 
+function pointerToNdc(clientX: number, clientY: number) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.set((clientX - rect.left) / rect.width * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+}
+
 function updateHover(clientX: number, clientY: number) {
-  pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  pointerToNdc(clientX, clientY);
   raycaster.setFromCamera(pointer, camera);
   const residentHovered = citizens.pick(raycaster) !== null;
   const absoluteHours = day * 24 + timeOfDay;
@@ -719,19 +749,20 @@ function updateHover(clientX: number, clientY: number) {
 }
 
 function inspectCitizen(clientX: number, clientY: number) {
-  pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  pointerToNdc(clientX, clientY);
   raycaster.setFromCamera(pointer, camera);
   const citizenId = citizens.pick(raycaster);
   if (!citizenId) return false;
   hideMemoryCard();
   selectedCitizenId = citizenId;
+  director.follow(() => citizens.positionOf(citizenId));
   updateCitizenCard();
   hover.visible = false;
   return true;
 }
 
 function inspectTownMemory(clientX: number, clientY: number) {
-  pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  pointerToNdc(clientX, clientY);
   raycaster.setFromCamera(pointer, camera);
   const absoluteHours = day * 24 + timeOfDay;
   const ambienceHit = raycaster.intersectObject(ambience.root, true)
@@ -779,6 +810,12 @@ function updateCitizenCard() {
   if (!selectedCitizenId) return;
   const card = citizens.card(selectedCitizenId);
   if (!card) return false;
+  const label = document.querySelector<HTMLElement>('#follow-label')!;
+  label.replaceChildren();
+  const name = document.createElement('strong');
+  name.textContent = card.name;
+  label.append(name, ` · ${card.activity}`);
+  label.classList.add('show');
   document.querySelector('#citizen-name')!.textContent = card.name;
   document.querySelector('#citizen-role')!.textContent = card.occupation;
   document.querySelector('#citizen-home')!.textContent = card.home;
@@ -791,7 +828,9 @@ function updateCitizenCard() {
 
 function hideCitizenCard() {
   selectedCitizenId = null;
+  director.follow(null);
   document.querySelector('#citizen-card')!.classList.remove('show');
+  document.querySelector('#follow-label')!.classList.remove('show');
 }
 
 function hideMemoryCard() {
@@ -2365,6 +2404,14 @@ function centerView() {
 }
 
 document.querySelector('#music-toggle')!.addEventListener('click', toggleBackgroundMusic);
+
+function setUiHidden(hidden: boolean) {
+  document.body.classList.toggle('ui-hidden', hidden);
+  document.querySelector('#ui-restore')!.setAttribute('aria-hidden', String(!hidden));
+  if (hidden) setTopActionsOpen(false);
+}
+document.querySelector('#ui-hide')!.addEventListener('click', () => setUiHidden(true));
+document.querySelector('#ui-restore')!.addEventListener('click', () => setUiHidden(false));
 document.querySelector('#palette-cycle')!.addEventListener('click', () => {
   const next = palette.next();
   showToast(`Palette: ${next.title}.`);
@@ -2616,6 +2663,7 @@ window.addEventListener('keydown', (event) => {
     document.querySelector('#shadow-tuning')!.classList.toggle('show');
   }
   if (event.key.toLowerCase() === 'j') setJournalOpen(!document.querySelector('#journal-scrim')!.classList.contains('show'));
+  if (event.key.toLowerCase() === 'h') setUiHidden(!document.body.classList.contains('ui-hidden'));
   if (event.key.toLowerCase() === 'i') document.querySelector<HTMLButtonElement>('#observe-toggle')!.click();
   if (event.key.toLowerCase() === 'g') {
     document.querySelector('#grow-inspector')!.classList.toggle('show');
@@ -2623,6 +2671,8 @@ window.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape') {
     cancelCameraGesture();
+    hideCitizenCard();
+    setUiHidden(false);
     setTopActionsOpen(false);
     setJournalOpen(false);
     setTouchGuideOpen(false);
@@ -2983,6 +3033,7 @@ function animate() {
     performanceCooldown = 0;
     recoverySeconds = 0;
   }
+  director.update(rawDelta);
   controls.update();
   // Center the finite mesh beneath the camera so its hidden rim can never enter
   // the view when panning or orbiting far away from the town.
@@ -3010,10 +3061,15 @@ function animate() {
 updateTimeDisplay();
 animate();
 
-window.addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
+function applyViewport() {
+  const { width, height } = viewportSize();
+  camera.aspect = width / height;
+  applyCameraFov();
   csm.updateFrustums();
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(width, height);
   applyRenderScale();
-});
+}
+applyViewport();
+window.addEventListener('resize', applyViewport);
+window.addEventListener('orientationchange', applyViewport);
+window.visualViewport?.addEventListener('resize', applyViewport);

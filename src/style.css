@@ -346,6 +346,7 @@ canvas.dragging { cursor: grabbing; }
 .mobile-observe-label { display: none; }
 .mobile-postcard-label { display: none; }
 .mobile-palette-label { display: none; }
+.mobile-hide-label { display: none; }
 .mobile-journal-label,
 .mobile-reset-label,
 .mobile-clock { display: none; }
@@ -1222,3 +1223,40 @@ button:active { transform: translateY(1px); }
   .postcard-preview { display: none; }
   .postcard-save { margin-top: 16px; }
 }
+
+/* Capture: hide every overlay and the cursor. An invisible corner target restores the UI. */
+.ui-hidden .hud > :not(#ui-restore) { visibility: hidden !important; pointer-events: none !important; }
+.ui-hidden canvas { cursor: none !important; }
+#ui-restore {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 64px;
+  height: 64px;
+  display: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: auto;
+}
+.ui-hidden #ui-restore { display: block; }
+.follow-label {
+  position: absolute;
+  left: 50%;
+  bottom: 118px;
+  transform: translateX(-50%);
+  max-width: min(360px, calc(100vw - 48px));
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(20, 34, 32, .78);
+  color: #fff4d6;
+  font: 500 14px/1.35 'DM Sans', sans-serif;
+  text-align: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .2s ease;
+  pointer-events: none;
+}
+.follow-label.show { opacity: 1; visibility: visible; }
+.follow-label strong { font-weight: 600; }

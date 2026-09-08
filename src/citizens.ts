@@ -1652,6 +1652,11 @@ export class CitizenSystem {
     this.debugRoot.visible = wasVisible;
   }
 
+  /** World position of a resident, or null when the resident is gone. */
+  positionOf(id: string) {
+    return this.citizens.find((item) => item.id === id)?.model.position ?? null;
+  }
+
   card(id: string): CitizenCard | null {
     const citizen = this.citizens.find((item) => item.id === id);
     if (!citizen) return null;

@@ -43,6 +43,8 @@ You can save the current town as a PNG postcard. The image also contains the sav
 
 ## Development
 
+The experimental Rust/Metal macOS demo lives in [`native/`](native/README.md). It includes a playable harbor and a fixed 4K benchmark, and builds separately from the web game.
+
 ```bash
 npm install
 npm run dev

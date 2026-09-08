@@ -378,22 +378,30 @@ button {
 button:hover { transform: translateY(-1px); background: rgba(255,238,202,.9); }
 button:active { transform: translateY(1px); }
 
+/* Town captions read like a subtitle on paper, low on the frame and out of the town's way. */
 .toast {
   position: absolute;
-  top: 20%;
-  left: 50%;
-  transform: translate(-50%, 8px);
-  max-width: min(520px, calc(100vw - 32px));
-  padding: 12px 17px;
-  border-radius: 99px;
-  color: #fffdf0;
-  background: rgba(46,58,51,.8);
-  backdrop-filter: blur(10px);
-  font: 500 15px/1.4 'DM Sans', sans-serif;
+  left: 0;
+  right: 0;
+  bottom: 34px;
+  width: fit-content;
+  margin: 0 auto;
+  transform: translateY(6px);
+  max-width: min(460px, calc(100vw - 48px));
+  padding: 8px 18px 9px;
+  border: 1px solid rgba(255,244,216,.72);
+  border-radius: 8px;
+  color: #33423c;
+  background: rgba(239,224,188,.92);
+  box-shadow: 0 8px 24px rgba(21,51,49,.14);
+  font: italic 500 16px/1.4 'Fraunces', Georgia, serif;
+  text-align: center;
   opacity: 0;
-  transition: opacity .35s, transform .35s;
+  visibility: hidden;
+  transition: opacity .3s ease, transform .3s ease, visibility .3s;
 }
-.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.show { opacity: 1; visibility: visible; transform: none; }
+.night .toast { background: rgba(232,214,176,.94); }
 
 .perf-panel {
   position: absolute;
@@ -1030,6 +1038,8 @@ button:active { transform: translateY(1px); }
 }
 
 @media (max-width: 700px), (hover: none) and (pointer: coarse) {
+  body .toast { bottom: 176px; max-width: calc(100vw - 48px); padding: 7px 14px 8px; font-size: 15px; }
+
   body .photo-quick { right: 18px; bottom: 112px; width: 50px; height: 50px; }
 
   .mobile-controls {

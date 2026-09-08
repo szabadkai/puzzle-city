@@ -510,6 +510,9 @@ scene.add(rain.mesh);
 const cameraForward = new THREE.Vector3();
 skyDome.mesh.layers.enable(REFLECTION_LAYER);
 skyDome.mesh.layers.enable(EMISSIVE_REFLECTION_LAYER);
+scene.add(skyDome.bow);
+skyDome.bow.layers.enable(REFLECTION_LAYER);
+skyDome.bow.layers.enable(EMISSIVE_REFLECTION_LAYER);
 
 const city = new CityRenderer(seed);
 city.setParticleScale(quality.particleScale);
@@ -2372,7 +2375,7 @@ function playHarborAmbience(daylight: number, rainIntensity = 0) {
   }
 }
 
-type SoundCue = 'water' | 'gulls' | 'footsteps' | 'door' | 'chatter' | 'bell' | 'horn' | 'insects' | 'rain' | 'celebration' | 'firework';
+type SoundCue = 'water' | 'gulls' | 'footsteps' | 'door' | 'chatter' | 'bell' | 'horn' | 'insects' | 'rain' | 'thunder' | 'celebration' | 'firework';
 
 function playCue(cue: SoundCue, daylight = 1) {
   if (audioContext && audioContext.state !== 'running') return;
@@ -2393,6 +2396,7 @@ function playCue(cue: SoundCue, daylight = 1) {
   if (cue === 'horn') softTone(132, .62, .14, .02, 'sine');
   if (cue === 'insects') { softTone(1320, .08, .2, .004, 'triangle'); softTone(1480, .06, .34, .003, 'triangle'); }
   if (cue === 'rain') { softTone(185, .18, 0, .004, 'triangle'); softTone(240, .12, .22, .003, 'triangle'); }
+  if (cue === 'thunder') { softTone(48, 1.6, 0, .04, 'sine'); softTone(36, 2.2, .18, .035, 'sine'); softTone(92, .45, .04, .01, 'sawtooth'); }
   if (cue === 'firework') {
     const strength = THREE.MathUtils.clamp(daylight, .45, .8);
     softTone(78, .46, 0, .009 * strength, 'sine');
@@ -2720,14 +2724,34 @@ windStrengthInput.addEventListener('input', () => {
   document.querySelector('#wind-strength-value')!.textContent = windStrengthScale.toFixed(2);
 });
 
-/** One coherent wind: a slow heading drift with gusts. Smoke, cloth, and water all read it. */
-function updateWind(time: number) {
+/** One coherent wind: a slow heading drift with gusts. Smoke, cloth, water, and cloud shadows all read it. */
+function updateWind(time: number, deltaSeconds: number) {
   const heading = .7 + Math.sin(time * .021) * .55 + Math.sin(time * .0073) * .3;
   const gust = .55 + .3 * Math.sin(time * .37) + .15 * Math.sin(time * 1.31 + 2);
   const strength = gust * windStrengthScale;
   presentationUniforms.uTime.value = time;
   presentationUniforms.uWind.value.set(Math.cos(heading) * strength, Math.sin(heading) * strength);
   water.wind.copy(presentationUniforms.uWind.value);
+  // Clouds ride the wind a little faster than the surface breeze.
+  presentationUniforms.uCloudOffset.value.addScaledVector(presentationUniforms.uWind.value, deltaSeconds * .05 * 1.6);
+  // Cover rises and falls over minutes, so some stretches are almost clear.
+  const drift = .45 + .3 * Math.sin(time * .011) + .2 * Math.sin(time * .0047 + 1);
+  presentationUniforms.uCloudCover.value = THREE.MathUtils.clamp(Math.max(drift, atmosphere.overcast), 0, 1);
+  presentationUniforms.uCloudShadow.value = .5 * (1 - atmosphere.overcast * .5);
+}
+
+let lightningStartedAt = -100;
+let nextLightningAt = 0;
+
+/** Sheet lightning during a heavy shower: a two-beat flash, then thunder a moment later. */
+function updateLightning(time: number, rain: number) {
+  if (rain > .5 && !photo.active && time >= nextLightningAt) {
+    nextLightningAt = time + 7 + Math.random() * 16;
+    lightningStartedAt = time;
+    window.setTimeout(() => playCue('thunder'), 500 + Math.random() * 1800);
+  }
+  const age = time - lightningStartedAt;
+  return age < 0 || age > 1 ? 0 : Math.max(0, Math.exp(-age * 7) * (.6 + .4 * Math.cos(age * 38)));
 }
 
 window.addEventListener('keydown', (event) => {
@@ -3239,10 +3263,10 @@ declare global {
   interface Window {
     __perf?: PerformanceReport;
     /** Debug handle for the capture test and manual tuning. */
-    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; scene: THREE.Scene; renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; setTimeOfDay(hour: number): void; lastClipStats?: { frames: number; seconds: number } };
+    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; scene: THREE.Scene; renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; uniforms: typeof presentationUniforms; setTimeOfDay(hour: number): void; lastClipStats?: { frames: number; seconds: number } };
   }
 }
-window.__littleTides = { hemi, atmosphere, palette, scene, renderer, camera, setTimeOfDay(hour: number) { timeOfDay = hour; } };
+window.__littleTides = { hemi, atmosphere, palette, scene, renderer, camera, uniforms: presentationUniforms, setTimeOfDay(hour: number) { timeOfDay = hour; } };
 
 function publishPerformanceReport() {
   const info = renderer.info.render;
@@ -3314,7 +3338,7 @@ function updateAtmosphere(time: number, deltaSeconds: number) {
   sceneFog.density = THREE.MathUtils.lerp(atmosphere.fogDensity, atmosphere.fogDensity * .12, distantView);
   hemi.color.copy(atmosphere.ambientSky);
   hemi.groundColor.copy(atmosphere.ambientGround);
-  hemi.intensity = atmosphere.ambientIntensity;
+  hemi.intensity = atmosphere.ambientIntensity * (1 + skyDome.flash * 2.2);
   const sunUp = atmosphere.sunElevation > 0;
   csm.lightDirection.copy(atmosphere.sunDirection).negate();
   for (const light of csm.lights) {
@@ -3338,7 +3362,7 @@ function updateAtmosphere(time: number, deltaSeconds: number) {
   moon.intensity = atmosphere.moonIntensity;
   moon.position.copy(atmosphere.moonDirection).multiplyScalar(40);
   skyDome.update(atmosphere, camera.position, time);
-  pipeline!.setExposure(atmosphere.exposure);
+  pipeline!.setExposure(atmosphere.exposure * (1 + skyDome.flash * .35));
   pipeline!.focusOn(controls.target);
   // Cascades follow the camera, so shadows re-render whenever the view or the
   // sun moves. A static view refreshes every few seconds for growing trees.
@@ -3428,7 +3452,8 @@ function animate() {
   const shownHour = renderHour();
   const shownRain = renderRain(weather.intensity);
   const daylight = daylightAt(shownHour);
-  updateWind(time);
+  updateWind(time, delta);
+  skyDome.flash = updateLightning(time, shownRain);
   updateAtmosphere(time, rawDelta);
   // Windows switch on across forty in-game minutes around dusk and off around dawn.
   const duskOn = THREE.MathUtils.smoothstep(shownHour, 18.3, 19);

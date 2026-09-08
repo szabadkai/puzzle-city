@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { businessLabel, businessOccupation, businessProsperityTier, isBusinessOpen } from './businesses';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenSave, type ConfluenceId, type CraftGood, type FormationId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
@@ -28,6 +29,65 @@ const OCCUPATIONS = ['Baker', 'Fisher', 'Gardener', 'Teacher', 'Bookbinder', 'Ca
 // while retaining distinct warm and cool citizen colors.
 const CLOTHES = [0xc9564d, 0xd99a42, 0x457b78, 0x536c92];
 const MAX_RENDERED_CITIZENS = 512;
+
+/** Skin, hair, and straw-hat colours shared by every human figure in the town. */
+export const FIGURE_SKIN = 0xd9a47c;
+export const FIGURE_DARK = 0x3f3432;
+export const FIGURE_HAT = 0xc79d58;
+/** Standing height of a figure at scale 1, feet to hair. */
+export const FIGURE_HEIGHT = .61;
+const BODY_GEOMETRY = new THREE.CapsuleGeometry(.09, .16, 3, 7);
+const HEAD_GEOMETRY = new THREE.SphereGeometry(.09, 9, 7);
+const HAIR_GEOMETRY = new THREE.SphereGeometry(.094, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
+const LEG_GEOMETRY = new THREE.CylinderGeometry(.022, .027, .17, 6);
+const ARM_GEOMETRY = new THREE.CylinderGeometry(.019, .023, .19, 6);
+const HAT_GEOMETRY = new THREE.ConeGeometry(.145, .065, 12);
+const FIGURE_OFFSETS = { body: .285, head: .5, hair: .515, legY: .085, legX: .047, armY: .31, armX: .115, armLean: .08, hat: .61 } as const;
+
+/** One vertex-coloured material for merged figures, so a whole crew is one draw call. */
+export const FIGURE_MATERIAL = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 });
+
+/** Paints a whole geometry one colour through its vertex colour attribute. */
+export function colorGeometry(geometry: THREE.BufferGeometry, hex: number) {
+  const color = new THREE.Color(hex);
+  const count = geometry.getAttribute('position').count;
+  const colors = new Float32Array(count * 3);
+  for (let index = 0; index < count; index++) colors.set([color.r, color.g, color.b], index * 3);
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
+/** A citizen-sized arm, for figures that pose their own arms. */
+export function figureArmGeometry(hex: number) {
+  return colorGeometry(ARM_GEOMETRY.clone(), hex);
+}
+
+export type FigureOptions = { clothes: number; skin?: number; hat?: boolean; arms?: boolean; scale?: number };
+
+/**
+ * One merged mesh with citizen proportions: legs, torso, arms, head, hair,
+ * and an optional straw hat. Boats and stalls use it so every person in the
+ * town is built to the same scale.
+ */
+export function buildFigureGeometry({ clothes, skin = FIGURE_SKIN, hat = false, arms = true, scale = 1 }: FigureOptions) {
+  const parts: THREE.BufferGeometry[] = [];
+  const place = (geometry: THREE.BufferGeometry, hex: number, x: number, y: number, rotationZ = 0) => {
+    const part = colorGeometry(geometry.clone(), hex);
+    if (rotationZ) part.rotateZ(rotationZ);
+    part.translate(x, y, 0);
+    parts.push(part);
+  };
+  for (const side of [-1, 1]) place(LEG_GEOMETRY, FIGURE_DARK, side * FIGURE_OFFSETS.legX, FIGURE_OFFSETS.legY);
+  place(BODY_GEOMETRY, clothes, 0, FIGURE_OFFSETS.body);
+  if (arms) for (const side of [-1, 1]) place(ARM_GEOMETRY, skin, side * FIGURE_OFFSETS.armX, FIGURE_OFFSETS.armY, -side * FIGURE_OFFSETS.armLean);
+  place(HEAD_GEOMETRY, skin, 0, FIGURE_OFFSETS.head);
+  place(HAIR_GEOMETRY, FIGURE_DARK, 0, FIGURE_OFFSETS.hair);
+  if (hat) place(HAT_GEOMETRY, FIGURE_HAT, 0, FIGURE_OFFSETS.hat);
+  const merged = mergeGeometries(parts, false)!;
+  for (const part of parts) part.dispose();
+  if (scale !== 1) merged.scale(scale, scale, scale);
+  return merged;
+}
 
 type NavNode = {
   key: string;
@@ -627,16 +687,16 @@ export class CitizenSystem {
   private readonly walkDirection = new THREE.Vector3();
   private readonly pickCenter = new THREE.Vector3();
   private readonly pickClosest = new THREE.Vector3();
-  private readonly skinMaterial = new THREE.MeshStandardMaterial({ color: 0xd9a47c, roughness: .9 });
-  private readonly darkMaterial = new THREE.MeshStandardMaterial({ color: 0x3f3432, roughness: 1 });
-  private readonly hatMaterial = new THREE.MeshStandardMaterial({ color: 0xc79d58, roughness: 1 });
+  private readonly skinMaterial = new THREE.MeshStandardMaterial({ color: FIGURE_SKIN, roughness: .9 });
+  private readonly darkMaterial = new THREE.MeshStandardMaterial({ color: FIGURE_DARK, roughness: 1 });
+  private readonly hatMaterial = new THREE.MeshStandardMaterial({ color: FIGURE_HAT, roughness: 1 });
   private readonly clothesMaterials = CLOTHES.map((color) => new THREE.MeshStandardMaterial({ color, roughness: .95 }));
-  private readonly bodyGeometry = new THREE.CapsuleGeometry(.09, .16, 3, 7);
-  private readonly headGeometry = new THREE.SphereGeometry(.09, 9, 7);
-  private readonly hairGeometry = new THREE.SphereGeometry(.094, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
-  private readonly legGeometry = new THREE.CylinderGeometry(.022, .027, .17, 6);
-  private readonly armGeometry = new THREE.CylinderGeometry(.019, .023, .19, 6);
-  private readonly hatGeometry = new THREE.ConeGeometry(.145, .065, 12);
+  private readonly bodyGeometry = BODY_GEOMETRY;
+  private readonly headGeometry = HEAD_GEOMETRY;
+  private readonly hairGeometry = HAIR_GEOMETRY;
+  private readonly legGeometry = LEG_GEOMETRY;
+  private readonly armGeometry = ARM_GEOMETRY;
+  private readonly hatGeometry = HAT_GEOMETRY;
   private readonly cargoGeometry = new THREE.BoxGeometry(.2, .16, .18);
   private readonly cargoMaterial = new THREE.MeshStandardMaterial({ color: 0xc49a58, roughness: 1 });
   private readonly bodyInstances: THREE.InstancedMesh[];

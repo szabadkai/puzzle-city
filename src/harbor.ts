@@ -5,6 +5,7 @@ import { townProsperityLevel } from './businesses';
 import { detectFormations } from './formations';
 import { placeLandmarkSocket, type PlaceIdentityOccurrence } from './place-identities';
 import { hash } from './random';
+import { buildFigureGeometry, figureArmGeometry, FIGURE_MATERIAL } from './citizens';
 
 const CLOUD_COUNT = 11;
 const CLOUD_ALTITUDE = 13;
@@ -201,31 +202,14 @@ function consolidateModel(group: THREE.Group) {
   return group;
 }
 
-/** Single-color, low-poly deck figures read like little board-game settlers. */
+/** Deck figures share the citizens' proportions and colours, so crews and townsfolk read as one people. */
 function createDeckPerson(name: string, color: number, role: 'crew' | 'passenger' | 'worker' = 'crew', scale = 1) {
   const person = new THREE.Group();
   person.name = name;
   person.userData[role === 'crew' ? 'vesselCrew' : role === 'passenger' ? 'vesselPassenger' : 'importWorker'] = true;
-  const material = new THREE.MeshStandardMaterial({ color, roughness: 1 });
-  const body = new THREE.CapsuleGeometry(.045, .105, 2, 6);
-  body.translate(0, .145, 0);
-  const head = new THREE.SphereGeometry(.052, 7, 5);
-  head.translate(0, .29, 0);
-  const hat = new THREE.ConeGeometry(.09, .045, 7);
-  hat.translate(0, .355, 0);
-  const arm = new THREE.CylinderGeometry(.017, .02, .17, 5);
-  arm.rotateZ(Math.PI / 2);
-  arm.translate(0, .18, 0);
-  const geometry = mergeGeometries([body, head, hat, arm], false);
-  body.dispose();
-  head.dispose();
-  hat.dispose();
-  arm.dispose();
-  if (geometry) {
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
-    person.add(mesh);
-  }
+  const mesh = new THREE.Mesh(buildFigureGeometry({ clothes: color, hat: true }), FIGURE_MATERIAL);
+  mesh.castShadow = true;
+  person.add(mesh);
   person.scale.setScalar(scale);
   return person;
 }
@@ -884,10 +868,10 @@ export class HarborAmbience {
     hull.castShadow = true;
     deck.castShadow = true;
     addGunwales(lighter, 1.32, .46, darkWood);
-    const boatman = createDeckPerson('import-lighter-boatman', 0x9b594b, 'crew', .68);
+    const boatman = createDeckPerson('import-lighter-boatman', 0x9b594b, 'crew', .9);
     boatman.position.set(-.31, .14, -.04);
     boatman.rotation.y = Math.PI;
-    const deckhand = createDeckPerson('import-lighter-deckhand', 0xc7774e, 'worker', .66);
+    const deckhand = createDeckPerson('import-lighter-deckhand', 0xc7774e, 'worker', .85);
     deckhand.position.set(.18, .14, -.1);
     deckhand.rotation.y = Math.PI;
     lighter.add(hull, deck, boatman, deckhand);
@@ -901,7 +885,7 @@ export class HarborAmbience {
     gangplank.castShadow = true;
     yard.add(gangplank);
 
-    const porter = createDeckPerson('import-dock-porter', 0x456f73, 'worker', .76);
+    const porter = createDeckPerson('import-dock-porter', 0x456f73, 'worker', 1);
     porter.position.set(.12, .13, .61);
     porter.rotation.y = Math.PI;
     yard.add(porter);
@@ -1503,28 +1487,26 @@ export class HarborAmbience {
     const fisher = new THREE.Group();
     fisher.name = 'fishing-skipper';
     fisher.userData.vesselCrew = true;
-    fisher.position.set(.13, .22, -.04);
-    const fisherBody = new THREE.Mesh(new THREE.CapsuleGeometry(.055, .12, 2, 6), new THREE.MeshStandardMaterial({ color: 0x456f73, roughness: 1 }));
-    fisherBody.position.y = .12;
-    const fisherHead = new THREE.Mesh(new THREE.SphereGeometry(.055, 7, 5), new THREE.MeshStandardMaterial({ color: 0xd7a17a, roughness: 1 }));
-    fisherHead.position.y = .27;
-    const fisherHat = new THREE.Mesh(new THREE.ConeGeometry(.12, .05, 10), new THREE.MeshStandardMaterial({ color: 0xcaa35f, roughness: 1 }));
-    fisherHat.position.y = .34;
+    fisher.position.set(.13, .22, -.17);
+    const fisherClothes = 0x456f73;
+    const fisherFigure = new THREE.Mesh(buildFigureGeometry({ clothes: fisherClothes, hat: true, arms: false }), FIGURE_MATERIAL);
     const castingArm = new THREE.Group();
     castingArm.name = 'casting-arm';
-    castingArm.position.set(0, .22, .055);
+    castingArm.position.set(0, .4, .07);
     castingArm.rotation.x = .42;
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(.018, .022, .19, 5), fisherBody.material);
-    arm.position.y = -.085;
+    const arm = new THREE.Mesh(figureArmGeometry(fisherClothes), FIGURE_MATERIAL);
+    arm.position.y = -.09;
     castingArm.add(arm);
-    const bracingArm = new THREE.Mesh(new THREE.CylinderGeometry(.018, .022, .18, 5), fisherBody.material);
-    bracingArm.position.set(0, .16, -.07);
+    const bracingArm = new THREE.Mesh(figureArmGeometry(fisherClothes), FIGURE_MATERIAL);
+    bracingArm.position.set(0, .33, -.08);
     bracingArm.rotation.x = -.6;
-    fisher.add(fisherBody, fisherHead, fisherHat, castingArm, bracingArm);
+    fisher.add(fisherFigure, castingArm, bracingArm);
+    fisher.scale.setScalar(.9);
     consolidateModel(fisher);
 
-    const fishingDeckhand = createDeckPerson('fishing-deckhand', 0x9d594b, 'crew', .86);
-    fishingDeckhand.position.set(-.33, .17, -.08);
+    // The deckhand stands clear of the stern canopy and the boom now that the crew is full height.
+    const fishingDeckhand = createDeckPerson('fishing-deckhand', 0x9d594b, 'crew', .8);
+    fishingDeckhand.position.set(-.02, .17, .17);
     fishingDeckhand.visible = false;
 
     boat.add(hull, deck, mast, sail, boom, canopy, nets, catchDisplay, castNet, handline, splash, fisher, fishingDeckhand);
@@ -1556,7 +1538,7 @@ export class HarborAmbience {
       blade.rotation.y = side * .52;
       boat.add(oar, blade);
     }
-    const rower = createDeckPerson('rowboat-rower', 0x8f4d43, 'crew', .78);
+    const rower = createDeckPerson('rowboat-rower', 0x8f4d43, 'crew', .85);
     rower.position.set(-.03, .17, 0);
     boat.add(hull, well, rower);
     boat.scale.setScalar(.9);
@@ -1666,9 +1648,9 @@ export class HarborAmbience {
     consolidateModel(harborGoods);
     this.registerCargo('harbor-goods', harborGoods);
 
-    const captain = createDeckPerson('merchant-captain', 0x315d62, 'crew', .84);
+    const captain = createDeckPerson('merchant-captain', 0x315d62, 'crew', .9);
     captain.position.set(-.59, .17, 0);
-    const deckhand = createDeckPerson('merchant-deckhand', 0xc7774e, 'crew', .76);
+    const deckhand = createDeckPerson('merchant-deckhand', 0xc7774e, 'crew', .85);
     deckhand.position.set(.61, .16, -.22);
     deckhand.visible = false;
     boat.add(grain, timber, clay, fiber, harborGoods, captain, deckhand);
@@ -1712,11 +1694,11 @@ export class HarborAmbience {
       boat.add(railTop);
     }
     const skipper = createDeckPerson('ferry-skipper', 0x3b6670, 'crew', .8);
-    skipper.position.set(.34, .16, 0);
+    skipper.position.set(.5, .16, 0);
     const passengerColors = [0xc56550, 0x68834f, 0xd09d4d];
     const passengerPositions = [[.55, .16, .18], [.55, .16, -.18], [.76, .16, 0]] as const;
     passengerPositions.forEach(([x, y, z], index) => {
-      const passenger = createDeckPerson(`ferry-passenger-${index + 1}`, passengerColors[index], 'passenger', .7);
+      const passenger = createDeckPerson(`ferry-passenger-${index + 1}`, passengerColors[index], 'passenger', .8);
       passenger.position.set(x, y, z);
       passenger.visible = false;
       boat.add(passenger);

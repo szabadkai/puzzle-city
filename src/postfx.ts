@@ -10,6 +10,7 @@ import {
   SMAAEffect,
   ToneMappingEffect,
   ToneMappingMode,
+  VignetteEffect,
   type Pass,
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
@@ -125,10 +126,12 @@ export class PostPipeline {
       ? new DepthOfFieldEffect(camera, { focusDistance: 24, focusRange: 14, bokehScale: 2.2, resolutionScale: .5 })
       : null;
     const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-    this.effectPass = new EffectPass(camera, this.exposure, this.bloom, toneMapping, this.lift);
+    // A soft edge darkening, the way a phone lens falls off toward the corners.
+    const vignette = new VignetteEffect({ offset: .28, darkness: .42 });
+    this.effectPass = new EffectPass(camera, this.exposure, this.bloom, toneMapping, this.lift, vignette);
     this.composer.addPass(this.effectPass);
     this.effectPassWithDepthOfField = this.depthOfField
-      ? new EffectPass(camera, this.exposure, this.bloom, this.depthOfField, toneMapping, this.lift)
+      ? new EffectPass(camera, this.exposure, this.bloom, this.depthOfField, toneMapping, this.lift, vignette)
       : null;
     if (this.effectPassWithDepthOfField) {
       this.effectPassWithDepthOfField.enabled = false;

@@ -30,6 +30,8 @@ export type AtmosphereState = {
   overcast: number;
   shadowIntensity: number;
   saturation: number;
+  /** Strength of the bow opposite a low sun while light rain falls, 0 to 1. */
+  rainbow: number;
 };
 
 type Keyframe = Readonly<{ hour: number; kelvin: number; sun: number; exposure: number; ambient: number; fog: number; night: number }>;
@@ -105,6 +107,7 @@ export function createAtmosphereState(): AtmosphereState {
     overcast: 0,
     shadowIntensity: 1,
     saturation: 1,
+    rainbow: 0,
   };
 }
 
@@ -139,6 +142,10 @@ export function evaluateAtmosphere(hour: number, palette: PaletteSystem, rainInt
   target.overcast = THREE.MathUtils.clamp(rain / .3, 0, 1);
   target.shadowIntensity = 1 - target.overcast * .75;
   target.saturation = 1 - target.overcast * .14 - THREE.MathUtils.clamp((rain - .3) / .7, 0, 1) * .1;
+  // A bow needs sun on light rain: the edges of a shower, with the sun below 42 degrees.
+  const elevationDegrees = THREE.MathUtils.radToDeg(elevation);
+  target.rainbow = THREE.MathUtils.smoothstep(rain, .03, .1) * (1 - THREE.MathUtils.smoothstep(rain, .16, .3))
+    * THREE.MathUtils.smoothstep(elevationDegrees, 0, 4) * (1 - THREE.MathUtils.smoothstep(elevationDegrees, 36, 42));
 
   kelvinToColor(keys.kelvin, target.sunColor);
   target.sunColor.lerp(NIGHT_SUN_FLOOR, keys.night * .5);

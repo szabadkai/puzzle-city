@@ -5,6 +5,10 @@ import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type Harbor
 import { hash, pick } from './random';
 import { PALETTE_SLOT, PALETTES, paletteSlotColors } from './palette';
 import { paletteSlotColor, presentationUniforms, useClothSway, useFlicker, useFoliageSway, usePaletteLookup, useWindowStagger } from './shading';
+import { buildFigureGeometry, FIGURE_MATERIAL } from './citizens';
+
+/** Roof silhouettes for free-standing houses. Most stay the steep cap; about a third sit low and wide. */
+const HOUSE_ROOF_STYLES = ['gable', 'gable', 'hip'] as const;
 import { WATER_LEVEL } from './water-surface';
 import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER } from './water-surface';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
@@ -1097,6 +1101,8 @@ export class CityRenderer {
     // Windows in one building light together, at a moment set by the cell.
     const offset = mesh.material === this.window ? .1 + hash(this.seed, group.userData.cellX as number, group.userData.cellZ as number, 4410) * .8 : 0;
     mesh.geometry.setAttribute('aLightOffset', new THREE.Float32BufferAttribute(new Float32Array(count).fill(offset), 1));
+    const founded = group.userData.foundedAt as number | undefined;
+    mesh.geometry.setAttribute('aBuildingAge', new THREE.Float32BufferAttribute(new Float32Array(count).fill(typeof founded === 'number' ? founded + 1 : 0), 1));
   }
 
   /** Washing hangs on the retract attribute: its top edge in world space, or a sentinel for flags and kites. */
@@ -1399,8 +1405,10 @@ export class CityRenderer {
     foundation.position.y = BASE_Y;
     group.add(foundation);
 
+    // A few houses keep a stone ground floor, the way the oldest quay houses do.
+    const stoneGroundFloor = cell.height >= 2 && hash(this.seed, cell.x, cell.z, 2620) > .78;
     for (let level = 0; level < cell.height; level++) {
-      const body = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.005, FLOOR + .04, CELL * 1.005, 1, .09), walls));
+      const body = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.005, FLOOR + .04, CELL * 1.005, 1, .09), level === 0 && stoneGroundFloor ? this.stone : walls));
       body.position.y = .34 + FLOOR * level + FLOOR / 2;
       group.add(body);
 
@@ -1445,11 +1453,14 @@ export class CityRenderer {
       }
       if (clockFaceDirections.size) this.addClockFaces(group, [...clockFaceDirections], topY - .43);
     } else if (!courtAnchor && !terrace && arcade !== 'roof promenade' && count <= 2 && diagonalCount < 3) {
-      const cap = shadow(new THREE.Mesh(new THREE.ConeGeometry(CELL * .82, .88, 4), roof));
-      cap.position.y = topY + .43;
+      const style = pick(HOUSE_ROOF_STYLES, hash(this.seed, cell.x, cell.z, 2610));
+      group.userData.houseStyle = style;
+      const hip = style === 'hip';
+      const cap = shadow(new THREE.Mesh(new THREE.ConeGeometry(CELL * (hip ? .9 : .82), hip ? .56 : .88, 4), roof));
+      cap.position.y = topY + (hip ? .27 : .43);
       cap.rotation.y = Math.PI / 4;
       group.add(cap);
-      this.addRoofEaves(group, topY, roof, cell);
+      this.addRoofEaves(group, topY, roof, cell, hip ? .56 : .88, hip ? 1.15 : .9);
       if (hash(this.seed, cell.x, cell.z, 44) > .48) this.addChimney(group, topY + .2, -.55, .34);
     } else {
       const roofDeck = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .91, .18, CELL * .91, 2, .05), roof));
@@ -2370,18 +2381,19 @@ export class CityRenderer {
     group.userData.balconyDirection = dir;
   }
 
-  private addRoofEaves(group: THREE.Group, y: number, roofMaterial: THREE.Material, cell: Cell) {
+  private addRoofEaves(group: THREE.Group, y: number, roofMaterial: THREE.Material, cell: Cell, ridgeHeight = .88, ridgeLength = .9) {
     const eave = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.13, .11, CELL * 1.13, 1, .04), roofMaterial));
     eave.position.y = y + .04;
     group.add(eave);
-    const ridge = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, CELL * .9, 8), this.dark));
-    ridge.position.y = y + .88;
+    const ridge = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, CELL * ridgeLength, 8), this.dark));
+    ridge.position.y = y + ridgeHeight;
     ridge.rotation.z = Math.PI / 2;
     ridge.rotation.y = hash(this.seed, cell.x, cell.z, 126) > .5 ? Math.PI / 2 : 0;
     group.add(ridge);
+    const half = CELL * ridgeLength / 2 + .04;
     for (const side of [-1, 1]) {
       const cap = shadow(new THREE.Mesh(new THREE.SphereGeometry(.09, 7, 5), this.dark));
-      cap.position.set(side * .49 * (ridge.rotation.y ? 0 : 1), y + .88, side * .49 * (ridge.rotation.y ? 1 : 0));
+      cap.position.set(side * half * (ridge.rotation.y ? 0 : 1), y + ridgeHeight, side * half * (ridge.rotation.y ? 1 : 0));
       group.add(cap);
     }
   }
@@ -2963,7 +2975,7 @@ export class CityRenderer {
     finial.position.y = y + 2.02;
     const vane = shadow(new THREE.Mesh(new THREE.BoxGeometry(.7, .04, .05), this.metal), false);
     vane.position.y = y + 2.17;
-    const pennant = new THREE.Mesh(new THREE.PlaneGeometry(.34, .22), this.flagMaterial);
+    const pennant = new THREE.Mesh(new THREE.PlaneGeometry(.34, .22, 5, 2), this.flagMaterial);
     pennant.name = 'flag';
     pennant.position.set(.22, y + 2.07, .02);
     group.add(finial, vane, pennant);
@@ -3063,7 +3075,7 @@ export class CityRenderer {
     const pole = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.025, .025, 1.05, 6), this.metal));
     pole.position.y = y + .45;
     group.add(pole);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(.56, .3), this.flagMaterial);
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(.56, .3, 6, 2), this.flagMaterial);
     flag.name = 'flag';
     flag.position.set(.28, y + .72, 0);
     group.add(flag);
@@ -3852,26 +3864,15 @@ export class CityRenderer {
     const bowLantern = new THREE.Mesh(new THREE.SphereGeometry(.06, 7, 5), this.warmLight);
     bowLantern.position.set(.7, .32, 0);
     vessel.add(tiller, bowLantern);
-    const addBargePerson = (name: string, px: number, pz: number, material: THREE.Material, scale = 1) => {
-      const body = new THREE.CapsuleGeometry(.045 * scale, .105 * scale, 2, 6);
-      body.translate(0, .15 * scale, 0);
-      const head = new THREE.SphereGeometry(.052 * scale, 7, 5);
-      head.translate(0, .295 * scale, 0);
-      const hat = new THREE.ConeGeometry(.09 * scale, .045 * scale, 7);
-      hat.translate(0, .36 * scale, 0);
-      const personGeometry = mergeGeometries([body, head, hat], false);
-      body.dispose();
-      head.dispose();
-      hat.dispose();
-      if (!personGeometry) return;
-      const person = shadow(new THREE.Mesh(personGeometry, material), false);
+    const addBargePerson = (name: string, px: number, pz: number, clothes: THREE.MeshStandardMaterial, scale = 1) => {
+      const person = shadow(new THREE.Mesh(buildFigureGeometry({ clothes: clothes.color.getHex(), hat: true, scale }), FIGURE_MATERIAL), false);
       person.name = name;
       person.userData.bargePerson = true;
       person.position.set(px, .19, pz);
       vessel.add(person);
     };
-    addBargePerson('market-barge-vendor', -.58, -.16, marketRed, .9);
-    addBargePerson('market-barge-shopper', .56, .16, this.green, .82);
+    addBargePerson('market-barge-vendor', -.58, -.16, marketRed, .95);
+    addBargePerson('market-barge-shopper', .56, .16, this.green, .9);
     group.add(vessel);
     group.userData.placeLandmark = 'market-barge';
   }

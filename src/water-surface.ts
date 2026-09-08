@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { AtmosphereState } from './atmosphere';
 import type { QualitySettings } from './quality';
+import { presentationUniforms } from './shading';
 import { CELL_SIZE } from './spatial';
 import type { Cell } from './types';
 
@@ -203,6 +204,9 @@ const FRAGMENT_SHADER = /* glsl */`
   uniform vec3 uCameraPosition;
   uniform vec2 uHorizonCenter;
   uniform vec2 uWindOffset;
+  uniform vec2 uCloudOffset;
+  uniform float uCloudCover;
+  uniform float uCloudShadow;
   uniform float uTime;
   uniform float uRain;
   uniform float uNight;
@@ -218,6 +222,24 @@ const FRAGMENT_SHADER = /* glsl */`
     p = fract(p * vec2(233.34, 851.73));
     p += dot(p, p + 23.45);
     return fract(p.x * p.y);
+  }
+
+  float valueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+      mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x),
+      f.y);
+  }
+
+  // The same cloud field the buildings read, so shadows cross from quay to water.
+  float cloudLight(vec2 world) {
+    vec2 p = world * 0.05 + uCloudOffset;
+    float n = valueNoise(p) * 0.62 + valueNoise(p * 2.3 + 7.0) * 0.38;
+    float threshold = mix(0.78, 0.42, uCloudCover);
+    return 1.0 - smoothstep(threshold, threshold + 0.24, n) * uCloudShadow;
   }
 
   // Expanding rings from raindrops, one per grid cell.
@@ -254,10 +276,12 @@ const FRAGMENT_SHADER = /* glsl */`
     vec3 base = mix(deep, shallowColor, shallow * 0.75 + waveHeight * 0.2);
 
     float daylight = clamp(uSunIntensity / 3.5, 0.0, 1.0);
+    float cloud = mix(1.0, cloudLight(uv), step(0.0, uSunDirection.y));
+    base *= 1.0 - (1.0 - cloud) * 0.22 * daylight;
     float causticA = texture2D(uNoise, uv * 0.21 + vec2(uTime * 0.03, uTime * 0.017)).r;
     float causticB = texture2D(uNoise, rotated * 0.24 - vec2(uTime * 0.022, uTime * 0.031)).r;
     float caustic = pow(clamp(causticA * causticB * 2.6, 0.0, 1.0), 2.2);
-    base += uSunColor * caustic * shallow * daylight * 0.32;
+    base += uSunColor * caustic * shallow * daylight * 0.32 * cloud;
 
     vec3 viewDir = normalize(uCameraPosition - vWorld);
     float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 4.0);
@@ -272,7 +296,7 @@ const FRAGMENT_SHADER = /* glsl */`
 
     vec3 halfSun = normalize(uSunDirection + viewDir);
     float sunSpec = pow(max(dot(normal, halfSun), 0.0), 260.0);
-    color += uSunColor * sunSpec * uSunIntensity * 0.6 * step(0.0, uSunDirection.y);
+    color += uSunColor * sunSpec * uSunIntensity * 0.6 * step(0.0, uSunDirection.y) * cloud;
     // The moon path: a mask from the smooth swell keeps the sparkle in a lane toward the moon.
     vec3 halfMoon = normalize(uMoonDirection + viewDir);
     vec3 swellNormal = normalize(vec3(-a.x * 0.35, 1.0, -a.y * 0.35));
@@ -332,6 +356,9 @@ export class WaterSurface {
     uCameraPosition: { value: new THREE.Vector3() },
     uHorizonCenter: { value: new THREE.Vector2() },
     uWindOffset: { value: this.windOffset },
+    uCloudOffset: presentationUniforms.uCloudOffset,
+    uCloudCover: presentationUniforms.uCloudCover,
+    uCloudShadow: presentationUniforms.uCloudShadow,
     uTime: { value: 0 },
     uRain: { value: 0 },
     uNight: { value: 0 },

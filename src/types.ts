@@ -44,7 +44,11 @@ export type SavedTown = {
   onboardingDismissed?: boolean;
   /** Active colour palette id. Missing means the default palette. */
   palette?: string;
+  /** Build actions in order: simulated hour, cell x, cell z, and the height after the action (0 = removed). */
+  history?: BuildAction[];
 };
+
+export type BuildAction = [hours: number, x: number, z: number, height: number];
 
 export type FormationId =
   | 'narrow-canal' | 'sea-arch' | 'high-bridge' | 'covered-skybridge' | 'lantern-gate'

@@ -1225,7 +1225,7 @@ button:active { transform: translateY(1px); }
 }
 
 /* Capture: hide every overlay and the cursor. An invisible corner target restores the UI. */
-.ui-hidden .hud > :not(#ui-restore) { visibility: hidden !important; pointer-events: none !important; }
+.ui-hidden .hud > :not(.keep-visible) { visibility: hidden !important; pointer-events: none !important; }
 .ui-hidden canvas { cursor: none !important; }
 #ui-restore {
   position: absolute;
@@ -1260,3 +1260,96 @@ button:active { transform: translateY(1px); }
 }
 .follow-label.show { opacity: 1; visibility: visible; }
 .follow-label strong { font-weight: 600; }
+
+/* Photo mode */
+.photo-quick {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  z-index: 19;
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  border-radius: 50%;
+  border-color: rgba(255,231,190,.5);
+  background: rgba(238,224,190,.86);
+  box-shadow: 0 7px 25px rgba(29,67,66,.16);
+  font-size: 24px;
+  line-height: 1;
+  pointer-events: auto;
+}
+.photo-mode { background: #0b1416; }
+.photo-mode canvas {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.06);
+}
+.photo-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: min(520px, 100vw);
+  max-height: 62vh;
+  padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
+  border: 1px solid rgba(255,244,216,.5);
+  border-bottom: 0;
+  border-radius: 18px 18px 0 0;
+  background: rgba(239,224,188,.96);
+  box-shadow: 0 -18px 60px rgba(8,20,24,.45);
+  color: #38463e;
+  transform: translate(-50%, 110%);
+  transition: transform .26s cubic-bezier(.2,.75,.25,1);
+  overflow: auto;
+  pointer-events: auto;
+  font: 14px/1.4 'DM Sans', sans-serif;
+}
+.photo-panel.show { transform: translate(-50%, 0); }
+.photo-panel header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.photo-panel header strong { font: 600 22px/1.1 'Fraunces', serif; color: #30413b; }
+.photo-panel header button { width: 44px; height: 44px; padding: 0; border: 0; background: transparent; box-shadow: none; font-size: 24px; }
+.photo-controls { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 12px; }
+.photo-controls label { display: flex; flex-direction: column; gap: 4px; color: #963a33; font-size: 12px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; }
+.photo-controls label.wide { grid-column: span 2; }
+.photo-controls select, .photo-controls input[type="range"] {
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid rgba(70,91,78,.22);
+  border-radius: 9px;
+  color: #30413b;
+  background: rgba(255,249,229,.7);
+  font: 500 14px 'DM Sans', sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.photo-controls input[type="range"] { padding: 0 4px; accent-color: #a84b42; }
+.photo-controls .photo-check { flex-direction: row; align-items: center; gap: 8px; min-height: 40px; }
+.photo-controls .photo-check input { width: 20px; height: 20px; accent-color: #526f69; }
+.photo-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+.photo-actions button { min-height: 46px; padding: 8px 10px; border-color: rgba(70,91,78,.2); background: rgba(255,248,224,.35); box-shadow: none; font-size: 14px; }
+.photo-actions button.primary { color: #fff5da; background: #526f69; }
+.photo-actions button.primary:hover { background: #5e7b75; }
+.photo-actions button:disabled { cursor: wait; opacity: .6; transform: none; }
+.photo-actions .with-select { display: flex; gap: 6px; }
+.photo-actions .with-select button { flex: 1; }
+.photo-actions .with-select select { width: 64px; border: 1px solid rgba(70,91,78,.22); border-radius: 9px; background: rgba(255,249,229,.7); color: #30413b; font: 500 13px 'DM Sans', sans-serif; }
+.photo-status { min-height: 20px; margin: 10px 0 0; color: rgba(42,56,48,.8); font-size: 13px; text-align: center; }
+.photo-progress { display: none; height: 4px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: rgba(70,91,78,.14); }
+.photo-progress.show { display: block; }
+.photo-progress i { display: block; width: 0; height: 100%; border-radius: inherit; background: #a84b42; transition: width .12s linear; }
+.photo-countdown {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(168,75,66,.86);
+  color: #fff4d6;
+  font: 600 18px/1.2 'DM Sans', sans-serif;
+  letter-spacing: .5px;
+  display: none;
+  pointer-events: none;
+}
+.photo-countdown.show { display: block; }

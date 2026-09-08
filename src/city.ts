@@ -391,7 +391,7 @@ export class CityRenderer {
   private nightLightAnchors: THREE.Vector3[] = [];
   private readonly lightPoolMaterial = new THREE.MeshBasicMaterial({
     map: createGlowTexture(),
-    color: 0xffb45f,
+    color: 0xff8f3a,
     transparent: true,
     opacity: 0,
     depthWrite: false,
@@ -803,7 +803,7 @@ export class CityRenderer {
     this.warmLight.emissiveIntensity = .4 + night * 3.8;
     this.nightGlowMaterial.opacity = Math.max(0, night * .72 - .08);
     this.nightGlows.visible = this.nightGlowCount > 0 && this.nightGlowMaterial.opacity > .01;
-    this.lightPoolMaterial.opacity = Math.max(0, night * .55 - .06);
+    this.lightPoolMaterial.opacity = Math.max(0, night * .5 - .22);
     this.lightPools.visible = this.lightPools.count > 0 && this.lightPoolMaterial.opacity > .01;
     this.harborLanternLight.emissiveIntensity = 1.2 + night * 3.6;
     for (const group of this.pieces.values()) {

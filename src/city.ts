@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type HarborLanternId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
 import { PALETTE_SLOT, PALETTES, paletteSlotColors } from './palette';
-import { paletteSlotColor, presentationUniforms, useClothSway, useFlicker, usePaletteLookup } from './shading';
+import { paletteSlotColor, presentationUniforms, useClothSway, useFlicker, useFoliageSway, usePaletteLookup } from './shading';
 import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER } from './water-surface';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { facadeDirectionAt, plazaAnchorAt, type CardinalDirection as Direction } from './topology';
@@ -380,15 +380,15 @@ export class CityRenderer {
   private readonly stoneDark = new THREE.MeshStandardMaterial({ color: this.stoneDarkBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
   private readonly window = useFlicker(new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 }), .035);
   private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
-  private readonly green = new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 });
-  private readonly leaf = new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 });
+  private readonly green = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 }));
+  private readonly leaf = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 }));
   private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
   private readonly warmLight = useFlicker(new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 }), .08);
   private readonly flagMaterial = new THREE.MeshStandardMaterial({ color: DEFAULT_SLOT_COLORS[PALETTE_SLOT.trim], side: THREE.DoubleSide, roughness: .9 });
   private readonly featureWaterMaterial = new THREE.MeshStandardMaterial({ color: 0x69a7a3, roughness: .35 });
-  private readonly blossom = new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 });
-  private readonly silverLeaf = new THREE.MeshStandardMaterial({ color: 0x9ab7a1, roughness: .82, emissive: 0x315b51, emissiveIntensity: .12 });
+  private readonly blossom = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 }));
+  private readonly silverLeaf = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x9ab7a1, roughness: .82, emissive: 0x315b51, emissiveIntensity: .12 }));
   private readonly glass = new THREE.MeshStandardMaterial({ color: 0x9bc7bd, transparent: true, opacity: .46, roughness: .24, metalness: .04, side: THREE.DoubleSide });
 
   constructor(seed: number) {
@@ -699,6 +699,10 @@ export class CityRenderer {
   update(time: number, absoluteHours = 0) {
     const deltaSeconds = Math.max(0, Math.min(.1, time - this.lastUpdateTime));
     this.lastUpdateTime = time;
+    // Rain draws the washing in. The cloth shader eases every piece at once.
+    const retractTarget = this.rainIntensity < .08 ? 0 : .96;
+    presentationUniforms.uClothRetract.value += (retractTarget - presentationUniforms.uClothRetract.value) * Math.min(1, deltaSeconds * 1.6);
+    presentationUniforms.uSimHours.value = absoluteHours;
     let staticBatchChanged = false;
     if (this.discoveryGlow) {
       const age = (performance.now() - this.discoveryGlow.startedAt) / 1000;
@@ -729,16 +733,7 @@ export class CityRenderer {
       } else {
         group.scale.y = 1;
       }
-      const tree = group.userData.tree as THREE.Object3D | undefined;
-      if (tree) tree.rotation.z = Math.sin(time * 1.35 + group.position.x) * .025;
-      const growingTree = group.userData.growingTree as THREE.Object3D | undefined;
-      if (growingTree) {
-        const progress = treeGrowthAt(group.userData.treeBornAt as number | undefined, absoluteHours);
-        const scale = .24 + progress * .76;
-        growingTree.scale.set(scale, .32 + progress * .68, scale);
-        const shadeSeats = group.userData.shadeSeats as THREE.Object3D | undefined;
-        if (shadeSeats) shadeSeats.visible = progress > .82;
-      }
+
       const plotBornAt = group.userData.vegetationPlotBornAt as number | undefined;
       if (plotBornAt !== undefined) {
         const plotAge = absoluteHours - plotBornAt;
@@ -753,14 +748,14 @@ export class CityRenderer {
         }
       }
       const timeNest = group.userData.timeNest as THREE.Object3D | undefined;
-      if (timeNest) timeNest.visible = ageInHours(group.userData.foundedAt as number | undefined, absoluteHours) >= 72 && this.rainIntensity < .35;
-      const laundry = group.userData.laundry as THREE.Object3D[] | undefined;
-      if (laundry) for (const cloth of laundry) {
-        // Rain draws the washing in. Ease the scale so nothing pops.
-        const target = this.rainIntensity < .08 ? 1 : .04;
-        cloth.scale.y += (target - cloth.scale.y) * Math.min(1, deltaSeconds * 1.6);
-        cloth.visible = cloth.scale.y > .06;
+      if (timeNest) {
+        const nesting = ageInHours(group.userData.foundedAt as number | undefined, absoluteHours) >= 72 && this.rainIntensity < .35;
+        if (timeNest.visible !== nesting) {
+          timeNest.visible = nesting;
+          staticBatchChanged = true;
+        }
       }
+
     }
     for (const [index, lantern] of this.harborLanternRoot.children.entries()) {
       const body = lantern.userData.lanternBody as THREE.Object3D | undefined;
@@ -1035,28 +1030,85 @@ export class CityRenderer {
     this.pieces.set(keyOf(x, z), group);
   }
 
+  private static isCloth(object: THREE.Object3D) {
+    return object.name === 'flag' || object.name.startsWith('laundry-');
+  }
+
+  /** Static meshes anywhere under the piece, with cloth listed separately. */
+  private collectMeshes(group: THREE.Group) {
+    const statics: THREE.Mesh[] = [];
+    const cloth: THREE.Mesh[] = [];
+    group.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+      if (CityRenderer.isCloth(object)) cloth.push(object);
+      else statics.push(object);
+    });
+    return { statics, cloth };
+  }
+
+  /**
+   * Every static mesh carries a growth attribute so merged geometry stays
+   * uniform. Trees store their pivot and birth hour; shade seats store a
+   * negative birth hour so they appear late in the growth; the rest store zero.
+   */
+  private prepareGrowth(group: THREE.Group, mesh: THREE.Mesh) {
+    if (mesh.geometry.getAttribute('aTreeGrowth')) return;
+    const growingTree = group.userData.growingTree as THREE.Object3D | undefined;
+    const shadeSeats = group.userData.shadeSeats as THREE.Object3D | undefined;
+    const bornAt = (group.userData.treeBornAt as number | undefined) ?? 0;
+    let inside: THREE.Object3D | null = null;
+    for (let ancestor: THREE.Object3D | null = mesh; ancestor && ancestor !== group; ancestor = ancestor.parent) {
+      if (ancestor === growingTree || ancestor === shadeSeats) inside = ancestor;
+    }
+    const count = mesh.geometry.getAttribute('position').count;
+    const data = new Float32Array(count * 4);
+    if (inside && growingTree) {
+      const pivot = growingTree.getWorldPosition(new THREE.Vector3());
+      const w = inside === shadeSeats ? -(bornAt + 1) : bornAt + 1;
+      for (let index = 0; index < count; index++) data.set([pivot.x, pivot.y, pivot.z, w], index * 4);
+    }
+    mesh.geometry.setAttribute('aTreeGrowth', new THREE.Float32BufferAttribute(data, 4));
+  }
+
+  /** Washing hangs on the retract attribute: its top edge in world space, or a sentinel for flags and kites. */
+  private prepareCloth(mesh: THREE.Mesh) {
+    mesh.material = this.clothVariant(mesh.material as THREE.Material);
+    if (mesh.geometry.getAttribute('aRetractTop')) return;
+    mesh.updateWorldMatrix(true, false);
+    const box = new THREE.Box3().setFromBufferAttribute(mesh.geometry.getAttribute('position') as THREE.BufferAttribute).applyMatrix4(mesh.matrixWorld);
+    const retracts = mesh.name.startsWith('laundry-') && !mesh.name.includes('kite');
+    const top = retracts ? box.max.y : -1000;
+    const count = mesh.geometry.getAttribute('position').count;
+    mesh.geometry.setAttribute('aRetractTop', new THREE.Float32BufferAttribute(new Float32Array(count).fill(top), 1));
+  }
+
+  /**
+   * Merges a new piece's direct static children so a building under
+   * construction costs few draw calls. Nested groups keep their own children;
+   * the town-wide batch takes those once the piece settles.
+   */
   private consolidateStaticMeshes(group: THREE.Group) {
+    group.updateMatrixWorld(true);
+    const { statics, cloth } = this.collectMeshes(group);
+    for (const mesh of cloth) this.prepareCloth(mesh);
+    for (const mesh of statics) this.prepareGrowth(group, mesh);
     const buckets = new Map<string, THREE.Mesh[]>();
-    for (const child of [...group.children]) {
-      if (!(child instanceof THREE.Mesh) || Array.isArray(child.material)) continue;
-      if (child.name === 'flag' || child.name.startsWith('laundry-')) {
-        child.material = this.clothVariant(child.material);
-        continue;
-      }
+    for (const child of statics) {
+      if (child.parent !== group) continue;
       this.applyVertexBatchMaterial(child);
       const vegetationStage = child.userData.vegetationStage as number | undefined;
-      const key = `${child.material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}:${vegetationStage ?? '-'}`;
+      const key = `${(child.material as THREE.Material).uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}:${vegetationStage ?? '-'}`;
       const bucket = buckets.get(key) ?? [];
       bucket.push(child);
       buckets.set(key, bucket);
     }
+    const groupInverse = group.matrixWorld.clone().invert();
     for (const meshes of buckets.values()) {
       if (meshes.length < 2) continue;
       const keepIndexed = meshes.every((mesh) => mesh.geometry.index !== null);
       const geometries = meshes.map((mesh) => {
-        mesh.updateMatrix();
         const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
-        geometry.applyMatrix4(mesh.matrix);
+        geometry.applyMatrix4(new THREE.Matrix4().multiplyMatrices(groupInverse, mesh.matrixWorld));
         return geometry;
       });
       const mergedGeometry = mergeGeometries(geometries, false);
@@ -1068,7 +1120,7 @@ export class CityRenderer {
       merged.visible = meshes[0].visible;
       if (meshes[0].userData.vegetationStage !== undefined) merged.userData.vegetationStage = meshes[0].userData.vegetationStage;
       for (const mesh of meshes) {
-        group.remove(mesh);
+        mesh.removeFromParent();
         mesh.geometry.dispose();
       }
       group.add(merged);
@@ -1111,21 +1163,14 @@ export class CityRenderer {
     mesh.material = target;
   }
 
-  private isStaticMesh(object: THREE.Object3D): object is THREE.Mesh {
-    return object instanceof THREE.Mesh
-      && object.name !== 'flag'
-      && !object.name.startsWith('laundry-')
-      && !Array.isArray(object.material);
-  }
-
   private clearGlobalStaticBatch() {
     for (const piece of this.pieces.values()) {
-      for (const child of piece.children) {
+      piece.traverse((child) => {
         if (child.userData.hiddenByStaticBatch) {
           child.visible = true;
           delete child.userData.hiddenByStaticBatch;
         }
-      }
+      });
     }
     for (const child of this.staticBatchRoot.children) {
       if (child instanceof THREE.Mesh) child.geometry.dispose();
@@ -1133,43 +1178,47 @@ export class CityRenderer {
     this.staticBatchRoot.clear();
   }
 
+  /**
+   * Merges every settled piece's static meshes by material into one mesh per
+   * material for the whole town, cloth included, so draw calls stay flat as
+   * the town grows. Pieces still animating their construction stay separate.
+   */
   private rebuildGlobalStaticBatch() {
     this.clearGlobalStaticBatch();
-    const buckets = new Map<string, Array<{ mesh: THREE.Mesh; matrix: THREE.Matrix4 }>>();
-    const combined = new THREE.Matrix4();
+    const buckets = new Map<string, THREE.Mesh[]>();
     for (const group of this.pieces.values()) {
       const cell = this.cells.get(keyOf(group.userData.cellX as number, group.userData.cellZ as number));
       if (group.userData.morphStartedAt !== undefined || (cell?.placedAt ?? 0) > 0) continue;
-      group.updateMatrix();
-      for (const child of group.children) {
-        if (!this.isStaticMesh(child) || !child.visible) continue;
-        child.updateMatrix();
+      group.updateMatrixWorld(true);
+      const { statics, cloth } = this.collectMeshes(group);
+      for (const child of [...statics, ...cloth]) {
+        if (!child.visible) continue;
         const material = child.material as THREE.Material;
         const key = `${material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
         const bucket = buckets.get(key) ?? [];
-        bucket.push({ mesh: child, matrix: combined.multiplyMatrices(group.matrix, child.matrix).clone() });
+        bucket.push(child);
         buckets.set(key, bucket);
       }
     }
-    for (const entries of buckets.values()) {
-      if (entries.length < 2) continue;
-      const keepIndexed = entries.every(({ mesh }) => mesh.geometry.index !== null);
-      const geometries = entries.map(({ mesh, matrix }) => {
+    for (const meshes of buckets.values()) {
+      if (meshes.length < 2) continue;
+      const keepIndexed = meshes.every((mesh) => mesh.geometry.index !== null);
+      const geometries = meshes.map((mesh) => {
         const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
-        geometry.applyMatrix4(matrix);
+        geometry.applyMatrix4(mesh.matrixWorld);
         return geometry;
       });
       const geometry = mergeGeometries(geometries, false);
       for (const part of geometries) part.dispose();
       if (!geometry) continue;
-      const first = entries[0].mesh;
+      const first = meshes[0];
       const batch = new THREE.Mesh(geometry, first.material as THREE.Material);
       batch.castShadow = first.castShadow;
       batch.receiveShadow = first.receiveShadow;
       batch.matrixAutoUpdate = false;
       this.markReflective(batch);
       this.staticBatchRoot.add(batch);
-      for (const { mesh } of entries) {
+      for (const mesh of meshes) {
         mesh.userData.hiddenByStaticBatch = true;
         mesh.visible = false;
       }
@@ -3977,7 +4026,7 @@ export class CityRenderer {
       stool.position.set(.28, .3, zOffset);
       shadeSeats.add(stool);
     }
-    shadeSeats.visible = false;
+    shadeSeats.visible = true;
     group.add(shadeSeats);
     group.userData.shadeSeats = shadeSeats;
     if (feature !== 'courtyard garden') {

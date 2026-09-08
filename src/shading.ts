@@ -17,7 +17,14 @@ export const presentationUniforms = {
   uTime: { value: 0 },
   /** Wind direction and speed in world units per second, shared by smoke, cloth, and water. */
   uWind: { value: new THREE.Vector2(.6, .25) },
+  /** 0 hangs the washing out, 1 draws it fully in. Eased by the town during rain. */
+  uClothRetract: { value: 0 },
+  /** Simulation clock in absolute hours. Trees grow against it in the vertex shader. */
+  uSimHours: { value: 0 },
 };
+
+/** Hours a planted tree takes to reach full size. Mirrors `TREE_MATURE_HOURS`. */
+const TREE_MATURE_HOURS = 72;
 
 let cascadeCount = 0;
 
@@ -29,6 +36,12 @@ export function setShadowCascadeCount(count: number) {
 /** Marks a hanging or flying cloth material: its vertices sway with the wind in the shader. */
 export function useClothSway<T extends THREE.Material>(material: T) {
   material.userData.cloth = true;
+  return material;
+}
+
+/** Marks foliage: the whole canopy leans gently with the wind in the vertex shader. */
+export function useFoliageSway<T extends THREE.Material>(material: T) {
+  material.userData.foliage = true;
   return material;
 }
 
@@ -58,6 +71,13 @@ const FOG_PARS_VERTEX = /* glsl */`
 varying vec3 vLtWorld;
 uniform float uTime;
 uniform vec2 uWind;
+uniform float uSimHours;
+// xyz: world pivot of a growing tree; w: birth hour + 1, negative for seats that appear late, 0 for no growth.
+attribute vec4 aTreeGrowth;
+#ifdef LT_CLOTH
+uniform float uClothRetract;
+attribute float aRetractTop;
+#endif
 `;
 
 const FOG_VERTEX = /* glsl */`
@@ -72,19 +92,51 @@ const FOG_VERTEX = /* glsl */`
 }
 `;
 
-// Cloth hangs from its top edge or flies from its left edge; the free corners move most.
+// Cloth hangs from its top edge or flies from its left edge; the free corners move
+// most. Cloth is merged town-wide, so the phase comes from the world position and
+// rain retraction pulls every vertex toward its own top edge.
 const CLOTH_SWAY = /* glsl */`
 #include <begin_vertex>
 {
+  vec3 ltClothWorld = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
   float ltFree = clamp( ( 1.0 - uv.y ) * 0.7 + uv.x * 0.5, 0.0, 1.0 );
-  float ltPhase = dot( modelMatrix[ 3 ].xz, vec2( 1.7, 2.3 ) );
+  float ltPhase = dot( floor( ltClothWorld.xz * 1.6 ), vec2( 1.7, 2.3 ) );
   float ltSpeed = length( uWind );
-  float ltWave = sin( uTime * ( 2.2 + ltSpeed * 1.5 ) + ltPhase + position.y * 4.0 ) * 0.5
-    + sin( uTime * 3.7 + ltPhase * 1.3 + position.x * 5.0 ) * 0.3;
+  float ltWave = sin( uTime * ( 2.2 + ltSpeed * 1.5 ) + ltPhase + ltClothWorld.y * 4.0 ) * 0.5
+    + sin( uTime * 3.7 + ltPhase * 1.3 + ltClothWorld.x * 5.0 ) * 0.3;
   vec3 ltWindDir = vec3( uWind.x, 0.0, uWind.y );
   vec3 ltLocalWind = ( inverse( mat3( modelMatrix ) ) * ltWindDir );
   transformed += ltLocalWind * ltFree * ( 0.05 + ltWave * 0.06 );
   transformed.y -= ltFree * ltFree * abs( ltWave ) * 0.025 * ltSpeed;
+  if ( aRetractTop > -100.0 ) transformed.y += ( aRetractTop - ltClothWorld.y ) * uClothRetract;
+}
+`;
+
+// Trees scale up from their pivot as the simulation clock passes their birth hour.
+const TREE_GROWTH = /* glsl */`
+#include <begin_vertex>
+if ( aTreeGrowth.w != 0.0 ) {
+  float ltBorn = abs( aTreeGrowth.w ) - 1.0;
+  float ltLinear = clamp( ( uSimHours - ltBorn ) / ${TREE_MATURE_HOURS.toFixed(1)}, 0.0, 1.0 );
+  float ltProgress = ltLinear * ltLinear * ( 3.0 - 2.0 * ltLinear );
+  vec3 ltScale = aTreeGrowth.w > 0.0
+    ? vec3( 0.24 + ltProgress * 0.76, 0.32 + ltProgress * 0.68, 0.24 + ltProgress * 0.76 )
+    : vec3( step( 0.82, ltProgress ) );
+  vec3 ltWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+  ltWorldPos = aTreeGrowth.xyz + ( ltWorldPos - aTreeGrowth.xyz ) * ltScale;
+  transformed = ( inverse( modelMatrix ) * vec4( ltWorldPos, 1.0 ) ).xyz;
+}
+`;
+
+const FOLIAGE_SWAY = /* glsl */`
+#include <begin_vertex>
+{
+  vec3 ltLeafWorld = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+  float ltPhase = dot( floor( ltLeafWorld.xz * 0.9 ), vec2( 2.1, 1.3 ) );
+  float ltSpeed = length( uWind );
+  float ltLean = sin( uTime * 1.25 + ltPhase ) * 0.6 + sin( uTime * 2.9 + ltPhase * 1.7 ) * 0.4;
+  vec3 ltLocalWind = inverse( mat3( modelMatrix ) ) * vec3( uWind.x, 0.0, uWind.y );
+  transformed += ltLocalWind * ( 0.02 + ltLean * 0.028 ) * clamp( ltLeafWorld.y * 0.35, 0.0, 1.0 );
 }
 `;
 
@@ -129,7 +181,9 @@ function injectPresentation(this: THREE.Material, shader: Shader) {
   shader.vertexShader = shader.vertexShader
     .replace('#include <fog_pars_vertex>', FOG_PARS_VERTEX)
     .replace('#include <fog_vertex>', FOG_VERTEX);
-  if (this.userData.cloth) shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', CLOTH_SWAY);
+  if (this.userData.cloth) shader.vertexShader = `#define LT_CLOTH\n${shader.vertexShader}`.replace('#include <begin_vertex>', CLOTH_SWAY);
+  else if (this.userData.foliage) shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', FOLIAGE_SWAY);
+  shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', TREE_GROWTH);
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <fog_pars_fragment>', FOG_PARS_FRAGMENT)
     .replace('#include <fog_fragment>', FOG_FRAGMENT);
@@ -145,7 +199,7 @@ function injectPresentation(this: THREE.Material, shader: Shader) {
 }
 
 function presentationCacheKey(this: THREE.Material) {
-  return `little-tides:${this.userData.paletteLookup ? 'palette' : 'plain'}:csm${cascadeCount}:cloth${this.userData.cloth ? 1 : 0}:flicker${this.userData.flicker ?? 0}`;
+  return `little-tides:${this.userData.paletteLookup ? 'palette' : 'plain'}:csm${cascadeCount}:cloth${this.userData.cloth ? 1 : 0}:foliage${this.userData.foliage ? 1 : 0}:flicker${this.userData.flicker ?? 0}`;
 }
 
 /**

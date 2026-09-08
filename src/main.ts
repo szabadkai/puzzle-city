@@ -3180,10 +3180,10 @@ declare global {
   interface Window {
     __perf?: PerformanceReport;
     /** Debug handle for the capture test and manual tuning. */
-    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; setTimeOfDay(hour: number): void };
+    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; scene: THREE.Scene; renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; setTimeOfDay(hour: number): void };
   }
 }
-window.__littleTides = { hemi, atmosphere, palette, setTimeOfDay(hour: number) { timeOfDay = hour; } };
+window.__littleTides = { hemi, atmosphere, palette, scene, renderer, camera, setTimeOfDay(hour: number) { timeOfDay = hour; } };
 
 function publishPerformanceReport() {
   const info = renderer.info.render;

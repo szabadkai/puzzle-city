@@ -118,10 +118,15 @@ export class ClipRecorder {
   private encoder: VideoEncoder | null = null;
   private choice: EncoderChoice | null = null;
   private readonly chunks: StoredChunk[] = [];
+  /** The encoder describes itself only on its first chunk. The ring buffer drops that chunk, so keep the description. */
+  private decoderConfig: VideoDecoderConfig | null = null;
   private readonly compositor = document.createElement('canvas');
   private frameIndex = 0;
   private elapsed = 0;
+  private lastSlot = -1;
   private failed: Error | null = null;
+  /** Frames actually encoded. Useful when judging clip smoothness. */
+  frames = 0;
 
   constructor(
     readonly width: number,
@@ -148,6 +153,7 @@ export class ClipRecorder {
     if (!this.choice) throw new Error('No video encoder is available.');
     this.encoder = new VideoEncoder({
       output: (chunk, meta) => {
+        if (meta?.decoderConfig) this.decoderConfig = meta.decoderConfig;
         this.chunks.push({ chunk, meta, timestamp: chunk.timestamp });
         this.prune();
       },
@@ -165,22 +171,35 @@ export class ClipRecorder {
   }
 
   /**
-   * Adds a frame when at least 1/30 s of real time has passed since the last
-   * one. Pass `force` to add exactly one frame regardless, for offline renders.
+   * Adds one frame per 1/30 s slot of real time. Timestamps follow the slots,
+   * so a frame the game could not deliver becomes a short hold rather than a
+   * speed-up. Pass `force` to add exactly one frame regardless, for offline renders.
    */
   captureFrame(source: HTMLCanvasElement, deltaSeconds: number, wordmarkAlpha: number, force = false) {
     if (!this.encoder || this.failed) return false;
-    this.elapsed += deltaSeconds;
-    if (!force && this.elapsed < 1 / CLIP_FPS) return false;
-    this.elapsed = force ? 0 : this.elapsed - 1 / CLIP_FPS;
-    if (this.encoder.encodeQueueSize > 4) return false;
-    const context = this.compositor.getContext('2d')!;
-    context.drawImage(source, 0, 0, this.width, this.height);
-    drawWordmark(context, this.width, this.height, wordmarkAlpha, this.url);
-    const frame = new VideoFrame(this.compositor, { timestamp: Math.round(this.frameIndex * 1e6 / CLIP_FPS), duration: Math.round(1e6 / CLIP_FPS) });
+    let slot: number;
+    if (force) {
+      slot = this.lastSlot + 1;
+    } else {
+      this.elapsed += deltaSeconds;
+      slot = Math.round(this.elapsed * CLIP_FPS);
+      if (slot <= this.lastSlot) return false;
+    }
+    if (this.encoder.encodeQueueSize > 6) return false;
+    this.lastSlot = slot;
+    // The plain frame copies straight from the WebGL canvas; the compositor only serves the wordmark.
+    let image: CanvasImageSource = source;
+    if (wordmarkAlpha > 0 || source.width !== this.width || source.height !== this.height) {
+      const context = this.compositor.getContext('2d')!;
+      context.drawImage(source, 0, 0, this.width, this.height);
+      drawWordmark(context, this.width, this.height, wordmarkAlpha, this.url);
+      image = this.compositor;
+    }
+    const frame = new VideoFrame(image, { timestamp: Math.round(slot * 1e6 / CLIP_FPS), duration: Math.round(1e6 / CLIP_FPS) });
     this.encoder.encode(frame, { keyFrame: this.frameIndex % CLIP_FPS === 0 });
     frame.close();
     this.frameIndex += 1;
+    this.frames += 1;
     return true;
   }
 
@@ -212,6 +231,8 @@ export class ClipRecorder {
       retained = retained.slice(start);
     }
     if (!retained.length) throw new Error('Nothing was recorded.');
+    const first = retained[0];
+    if (!first.meta?.decoderConfig && this.decoderConfig) retained[0] = { ...first, meta: { ...first.meta, decoderConfig: this.decoderConfig } };
     const container = this.choice.container;
     if (container === 'mp4') {
       const { Muxer, ArrayBufferTarget } = await import('mp4-muxer');

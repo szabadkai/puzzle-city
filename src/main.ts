@@ -2731,6 +2731,8 @@ function updateWind(time: number) {
 }
 
 window.addEventListener('keydown', (event) => {
+  // Browser shortcuts such as Cmd+F or Ctrl+P must never trigger game hotkeys.
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key.toLowerCase() === 'p') {
     document.querySelector('#perf-panel')!.classList.toggle('show');
     document.querySelector('#shadow-tuning')!.classList.toggle('show');
@@ -3029,7 +3031,9 @@ async function recordPhotoClip() {
       await waitForTail(1);
       countdown.classList.remove('show');
       photoStatus('Finishing the clip...');
+      const encodedFrames = photo.recorder.frames;
       result = await photo.recorder.finish(seconds + 1);
+      if (window.__littleTides) window.__littleTides.lastClipStats = { frames: encodedFrames, seconds: seconds + 1 };
       void startClipRecorder();
     } else if (ForwardRecorder.supported()) {
       const size = exportSize(photo.aspect);
@@ -3211,6 +3215,9 @@ let sessionSeconds = 0;
 const refinementSamples: number[] = [];
 let lastPresentedAt = 0;
 const frameCapMs = highRefreshAllowed ? 0 : 1000 / 60 - 1.5;
+// Clips are 30 fps. Rendering at exactly that rate in photo mode gives the
+// recorder one fresh frame per slot and halves the GPU load while recording.
+const photoFrameCapMs = 1000 / CLIP_FPS - 1;
 
 type PerformanceReport = {
   fps: number;
@@ -3232,7 +3239,7 @@ declare global {
   interface Window {
     __perf?: PerformanceReport;
     /** Debug handle for the capture test and manual tuning. */
-    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; scene: THREE.Scene; renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; setTimeOfDay(hour: number): void };
+    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; scene: THREE.Scene; renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; setTimeOfDay(hour: number): void; lastClipStats?: { frames: number; seconds: number } };
   }
 }
 window.__littleTides = { hemi, atmosphere, palette, scene, renderer, camera, setTimeOfDay(hour: number) { timeOfDay = hour; } };
@@ -3356,7 +3363,8 @@ function animate() {
   }
   // Battery: hold the loop at 60 fps on 120 Hz displays unless the player opted in.
   const now = performance.now();
-  if (frameCapMs && now - lastPresentedAt < frameCapMs) return;
+  const cap = photo.active ? photoFrameCapMs : frameCapMs;
+  if (cap && now - lastPresentedAt < cap) return;
   lastPresentedAt = now;
   const rawDelta = clock.getDelta();
   const performancePanel = document.querySelector<HTMLElement>('#perf-panel')!;

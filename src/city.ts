@@ -49,14 +49,16 @@ import {
 
 const CELL = CELL_SIZE;
 const FLOOR = FLOOR_HEIGHT;
-const BASE_Y = 0.05;
+/** The ground-floor wall body and its door both start here. */
+const FOUNDATION_TOP_Y = .34;
 const DEFAULT_SLOT_COLORS = paletteSlotColors(PALETTES[0]);
 const WALL_SLOT_COUNT = PALETTE_SLOT.wallCount;
 
 type FacadeLayer = 'opening' | 'composition' | 'equipment';
 type FacadeBounds = Readonly<{ sideMin: number; sideMax: number; yMin: number; yMax: number }>;
 type FacadeClaim = Readonly<{ direction: Direction; kind: string; layer: FacadeLayer; bounds: FacadeBounds }>;
-type HarborLanternWorldAnchor = Readonly<{ id: HarborLanternId; x: number; y: number; z: number }>;
+/** `facing` is the yaw that points the lantern arm away from its building; the courtyard lantern has none. */
+type HarborLanternWorldAnchor = Readonly<{ id: HarborLanternId; x: number; y: number; z: number; facing?: number }>;
 
 /** Rotation that lowers a canopy's outer edge without tilting it across the facade. */
 export function facadeCanopyPitch(direction: Direction, radians: number): [number, number, number] {
@@ -1401,8 +1403,8 @@ export class CityRenderer {
         sideMin: -.76, sideMax: .76, yMin: topY - .62, yMax: topY - .27,
       });
 
-    const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .97, .34, CELL * .97, 1, .12), this.stone));
-    foundation.position.y = BASE_Y;
+    const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.005, FOUNDATION_TOP_Y + .12, CELL * 1.005, 1, .04), this.stone));
+    foundation.position.y = (FOUNDATION_TOP_Y - .12) / 2;
     group.add(foundation);
 
     // A few houses keep a stone ground floor, the way the oldest quay houses do.
@@ -1421,7 +1423,8 @@ export class CityRenderer {
         // The clock replaces the top-storey opening. Previously the round dial
         // covered the window but left its sill poking out beneath it.
         if (level === cell.height - 1 && clockFaceDirections.has(dir as Direction)) continue;
-        this.addFacade(group, cell, dir as Direction, level, count, canalMarketFrontDirection);
+        const underArcade = level === 0 && plannedArcadeDirections.has(dir as Direction);
+        this.addFacade(group, cell, dir as Direction, level, count, canalMarketFrontDirection, underArcade);
       }
     }
 
@@ -1436,15 +1439,19 @@ export class CityRenderer {
         towerRoof.position.y = topY + .7;
         towerRoof.rotation.y = Math.PI / 8;
         group.add(towerRoof);
-        this.addRoofEaves(group, topY, roof, cell);
-        this.addChimney(group, topY + .25, -.58, .38);
+        this.addRoofEaves(group, topY, roof, cell, 0);
+        // The chimney stands at the eave corner, where the cone is low enough for it to clear the tiles.
+        this.addChimney(group, topY + .3, -.92, .92);
         group.userData.hasPitchedTowerRoof = true;
         if (!this.landmarkAt(cell.x, cell.z, 'signal-beacon')
           && !this.confluenceAt(cell.x, cell.z, 'observatory-beacon')) this.addFlag(group, topY + 1.55);
-        if (this.discoveries.has('tower-bell')) this.addTowerBell(group, topY + .18);
-        if (this.discoveries.has('birds-nest')) this.addBirdNest(group, topY + 1.18);
+        if (this.discoveries.has('tower-bell')) {
+          const bellDirection = ([0, 1, 2, 3] as Direction[]).find((dir) => !clockFaceDirections.has(dir)) ?? 2;
+          this.addTowerBell(group, topY, bellDirection);
+        }
+        if (this.discoveries.has('birds-nest')) this.addBirdNest(group, topY + 1.42);
         else if (this.discoveries.has('gulls-return') && CARDINALS.some(([dx, dz]) => this.businesses.get(keyOf(cell.x + dx, cell.z + dz))?.type === 'bakery')) {
-          const nest = this.addBirdNest(group, topY + 1.18);
+          const nest = this.addBirdNest(group, topY + 1.42);
           nest.visible = false;
           group.userData.timeNest = nest;
         }
@@ -1553,6 +1560,7 @@ export class CityRenderer {
     level: number,
     neighborCount: number,
     canalMarketFrontDirection?: Direction,
+    underArcade = false,
   ) {
     const y = .48 + level * FLOOR + FLOOR * .47;
     const windowCount = neighborCount === 0 ? 1 : 2;
@@ -1577,13 +1585,17 @@ export class CityRenderer {
       group.add(lamp);
       // Business and neighborhood frontages each own the whole entrance band.
       // Ordinary homes retain a modest awning but no shop-like hanging sign.
-      if (!entranceBusiness && dir !== canalMarketFrontDirection) {
+      if (!entranceBusiness && dir !== canalMarketFrontDirection && !underArcade) {
         this.addAwning(group, cell, dir, lateral, px, pz);
       }
     }
+    // An arcade is an open colonnade. Only the door belongs inside the arch;
+    // a lit window beside it made two façades read through one another.
+    if (underArcade) return;
     for (let i = 0; i < windowCount; i++) {
       if (isDoor && i === 0) continue;
-      const offset = windowCount === 1 ? 0 : (i - .5) * .72;
+      // The door wall keeps one window, clear of the door, the lamp, and the awning.
+      const offset = isDoor ? -.78 : windowCount === 1 ? 0 : (i - .5) * .72;
       this.reserveFacadeDecoration(group, dir, `window-${level}-${i}`, 'opening', {
         sideMin: offset - .25, sideMax: offset + .25, yMin: y - .32, yMax: y + .25,
       });
@@ -2381,10 +2393,12 @@ export class CityRenderer {
     group.userData.balconyDirection = dir;
   }
 
+  /** The eave slab under a pitched roof, with a ridge beam unless `ridgeHeight` is 0 (a cone has no ridge). */
   private addRoofEaves(group: THREE.Group, y: number, roofMaterial: THREE.Material, cell: Cell, ridgeHeight = .88, ridgeLength = .9) {
     const eave = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.13, .11, CELL * 1.13, 1, .04), roofMaterial));
     eave.position.y = y + .04;
     group.add(eave);
+    if (ridgeHeight === 0) return;
     const ridge = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, CELL * ridgeLength, 8), this.dark));
     ridge.position.y = y + ridgeHeight;
     ridge.rotation.z = Math.PI / 2;
@@ -3082,28 +3096,45 @@ export class CityRenderer {
     group.userData.flag = flag;
   }
 
-  private addTowerBell(group: THREE.Group, y: number) {
-    const frame = shadow(new THREE.Mesh(new THREE.BoxGeometry(.72, .06, .08), this.wood));
-    frame.position.set(0, y + .82, .76);
+  /** The bell hangs from a beam under the eave overhang, on a side without a clock face. `y` is the roof top. */
+  private addTowerBell(group: THREE.Group, y: number, direction: Direction) {
+    const [px, pz] = this.edgePosition(direction, 1.46);
+    const frame = shadow(new THREE.Mesh(new THREE.BoxGeometry(direction % 2 ? .08 : .72, .06, direction % 2 ? .72 : .08), this.wood));
+    frame.position.set(px, y - .06, pz);
     const bell = shadow(new THREE.Mesh(new THREE.ConeGeometry(.18, .3, 10, 1, true), this.warmLight), false);
-    bell.position.set(0, y + .62, .76);
+    bell.position.set(px, y - .26, pz);
     bell.rotation.x = Math.PI;
     const clapper = shadow(new THREE.Mesh(new THREE.SphereGeometry(.055, 7, 5), this.dark), false);
-    clapper.position.set(0, y + .45, .76);
+    clapper.position.set(px, y - .43, pz);
     group.add(frame, bell, clapper);
   }
 
+  /** A twig nest wedged around the spire tip, the way gulls build on a finial. `y` is the roof apex. */
   private addBirdNest(group: THREE.Group, y: number) {
     const nestGroup = new THREE.Group();
     nestGroup.name = 'time-bird-nest';
-    const nest = shadow(new THREE.Mesh(new THREE.TorusGeometry(.22, .055, 5, 12), this.wood), false);
+    nestGroup.position.y = y - .05;
+    const straw = this.cachedMaterial(this.colorMaterials, 0x9c7a48, 1);
+    const nest = shadow(new THREE.Mesh(new THREE.TorusGeometry(.2, .07, 6, 14), this.wood), false);
     nest.name = 'bird-nest';
-    nest.position.set(.42, y, .2);
     nest.rotation.x = Math.PI / 2;
-    const egg = shadow(new THREE.Mesh(new THREE.SphereGeometry(.055, 7, 5), this.cream), false);
-    egg.scale.y = 1.35;
-    egg.position.set(.42, y + .05, .2);
-    nestGroup.add(nest, egg);
+    const rim = shadow(new THREE.Mesh(new THREE.TorusGeometry(.21, .04, 5, 12), straw), false);
+    rim.rotation.set(Math.PI / 2 + .12, 0, .3);
+    rim.position.y = .05;
+    nestGroup.add(nest, rim);
+    for (let index = 0; index < 5; index++) {
+      const angle = index * 1.257 + .4;
+      const twig = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.012, .018, .3, 4), straw), false);
+      twig.position.set(Math.cos(angle) * .22, .02 + index % 2 * .04, Math.sin(angle) * .22);
+      twig.rotation.set(index % 2 ? .35 : -.25, -angle, Math.PI / 2 + .2);
+      nestGroup.add(twig);
+    }
+    for (const [ex, ez] of [[.07, .03], [-.05, .06], [.01, -.07]]) {
+      const egg = shadow(new THREE.Mesh(new THREE.SphereGeometry(.045, 7, 5), this.cream), false);
+      egg.scale.y = 1.3;
+      egg.position.set(ex, .06, ez);
+      nestGroup.add(egg);
+    }
     group.add(nestGroup);
     return nestGroup;
   }
@@ -3242,15 +3273,20 @@ export class CityRenderer {
     const cells = [...this.cells.values()];
     if (!cells.length) return null;
     const ordered = cells.sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z) || b.height - a.height || a.z - b.z || a.x - b.x);
-    const outward = (cell: Cell, y: number, side = 0, preferredDirection?: Direction): HarborLanternWorldAnchor => {
+    // The post stands `distance` out from the cell centre; the wall face is at
+    // CELL * .5, the quay strip just beyond it, and the dock further out.
+    const outward = (cell: Cell, y: number, side = 0, preferredDirection?: Direction, distance = QUAY_PATH_OFFSET): HarborLanternWorldAnchor => {
       const direction = preferredDirection ?? this.doorDirection(cell);
       const [dx, dz] = CARDINALS[direction];
       const lateral = new THREE.Vector3(dz, 0, -dx);
+      const offsetX = dx * distance + lateral.x * side;
+      const offsetZ = dz * distance + lateral.z * side;
       return {
         id: lantern.id,
-        x: cell.x * CELL + dx * .9 + lateral.x * side,
+        x: cell.x * CELL + offsetX,
         y,
-        z: cell.z * CELL + dz * .9 + lateral.z * side,
+        z: cell.z * CELL + offsetZ,
+        facing: Math.atan2(-offsetZ, offsetX),
       };
     };
     const businessCell = (...types: BusinessType[]) => {
@@ -3273,20 +3309,29 @@ export class CityRenderer {
       const cell = businessCell('cafe', 'inn') ?? ordered[0];
       return outward(cell, .12, -.36);
     }
-    if (lantern.anchor === 'lookout') return outward(tower, .42 + tower.height * FLOOR, -.42);
-    if (lantern.anchor === 'clock-tower') return outward(tower, .42 + tower.height * FLOOR, .42);
+    // The tower roof is a cone over a square eave slab, so the only standing
+    // room up there is the two slab corners beside the door side. The archive
+    // crown replaces both with a round deck; there the posts ring the room.
+    const towerTopY = .38 + tower.height * FLOOR;
+    const towerHasArchiveCrown = Boolean(this.confluenceAt(tower.x, tower.z, 'harbor-archive'));
+    const towerPerch = (sign: number) => towerHasArchiveCrown
+      ? outward(tower, towerTopY + .18, sign * .42, undefined, .73)
+      : outward(tower, towerTopY + .09, sign * 1.31, undefined, 1.31);
+    if (lantern.anchor === 'lookout') return towerPerch(-1);
+    if (lantern.anchor === 'clock-tower') return towerPerch(1);
     if (lantern.anchor === 'ferry-dock') {
       const inn = businessCell('inn');
       if (inn) {
         const dockDirection = CARDINALS.findIndex((_offset, direction) => hasDock(inn, direction as Direction, this.seed));
-        return outward(inn, .04, .38, dockDirection >= 0 ? dockDirection as Direction : undefined);
+        if (dockDirection >= 0) return outward(inn, .04, .34, dockDirection as Direction, CELL * .7);
+        return outward(inn, .12, .36);
       }
       for (const cell of ordered) {
         const dockDirection = CARDINALS.findIndex((_offset, direction) => hasDock(cell, direction as Direction, this.seed));
-        if (dockDirection >= 0) return outward(cell, .04, .38, dockDirection as Direction);
+        if (dockDirection >= 0) return outward(cell, .04, .34, dockDirection as Direction, CELL * .7);
       }
     }
-    return outward(ordered[0], .12);
+    return outward(ordered[0], .12, .36);
   }
 
   private createHarborLantern(id: HarborLanternId) {
@@ -3350,7 +3395,7 @@ export class CityRenderer {
       if (!anchor) continue;
       const model = this.createHarborLantern(lantern.id);
       model.position.set(anchor.x, anchor.y, anchor.z);
-      model.rotation.y = hash(this.seed, Math.round(anchor.x * 10), Math.round(anchor.z * 10), 7310) * Math.PI * 2;
+      model.rotation.y = anchor.facing ?? hash(this.seed, Math.round(anchor.x * 10), Math.round(anchor.z * 10), 7310) * Math.PI * 2;
       model.updateMatrixWorld(true);
       model.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;

@@ -1572,9 +1572,13 @@ export class HarborAmbience {
     const sailMaterial = new THREE.MeshStandardMaterial({ color: 0x477b8b, side: THREE.DoubleSide, roughness: .9 });
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(.015, .02, .72, 6), mastMaterial);
     mast.position.set(.04, .48, 0);
-    const sail = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([
+    const sailGeometry = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(.05, .8, 0), new THREE.Vector3(.05, .22, 0), new THREE.Vector3(.42, .28, 0),
-    ]), sailMaterial);
+    ]);
+    // Without normals the standard material lights a zero vector, and the resulting
+    // NaN fragments spread through the bloom mip chain as a black block on screen.
+    sailGeometry.computeVertexNormals();
+    const sail = new THREE.Mesh(sailGeometry, sailMaterial);
     const pennant = new THREE.Mesh(new THREE.PlaneGeometry(.22, .09), sailMaterial);
     pennant.position.set(.15, .82, 0);
     const signal = new THREE.Mesh(new THREE.SphereGeometry(.05, 7, 5), new THREE.MeshStandardMaterial({ color: 0xffc86b, emissive: 0xff8c3c, emissiveIntensity: 1.2 }));

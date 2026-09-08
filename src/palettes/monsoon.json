@@ -8,7 +8,7 @@
   "stone": "#7f8580",
   "water": "#8c9c98",
   "sky": { "zenith": "#7d8b91", "horizon": "#b9c1c0" },
-  "shadow": "#4f5f6e",
+  "shadow": "#4b6078",
   "haze": "#aab5b4",
   "rain": true
 }

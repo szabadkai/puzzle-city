@@ -21,7 +21,7 @@ const TIER_KEY = 'little-tides-quality-tier';
 export const QUALITY_SETTINGS: Record<QualityTier, QualitySettings> = {
   low: {
     tier: 'low',
-    maxPixelRatio: 1.25,
+    maxPixelRatio: 1,
     shadowCascades: 1,
     shadowMapSize: 1024,
     aoScale: .25,
@@ -33,7 +33,7 @@ export const QUALITY_SETTINGS: Record<QualityTier, QualitySettings> = {
   },
   mid: {
     tier: 'mid',
-    maxPixelRatio: 1.75,
+    maxPixelRatio: 1.5,
     shadowCascades: 2,
     shadowMapSize: 2048,
     aoScale: .5,

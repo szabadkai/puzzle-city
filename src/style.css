@@ -409,6 +409,22 @@ button:active { transform: translateY(1px); }
   transition: opacity .15s;
 }
 .perf-panel.show { opacity: 1; visibility: visible; }
+.shadow-tuning {
+  position: absolute;
+  top: 158px;
+  left: 24px;
+  display: none;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(20, 34, 32, .8);
+  color: #e6efe8;
+  font: 12px/1.4 ui-monospace, monospace;
+  pointer-events: auto;
+}
+.shadow-tuning.show { display: flex; }
+.shadow-tuning label { display: flex; align-items: center; gap: 6px; }
+.shadow-tuning input { width: 90px; }
 
 .grow-inspector {
   position: absolute;

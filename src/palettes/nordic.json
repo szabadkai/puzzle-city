@@ -8,6 +8,6 @@
   "stone": "#8d8a80",
   "water": "#1f4a55",
   "sky": { "zenith": "#4c7fa8", "horizon": "#d7dde3" },
-  "shadow": "#4a4a7a",
+  "shadow": "#4a4c8c",
   "haze": "#b9c6cf"
 }

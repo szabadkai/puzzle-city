@@ -371,6 +371,11 @@ export class HarborAmbience {
     this.setTown(cells);
   }
 
+  /** The sky dome draws the sun now. */
+  hideSunDisc() {
+    this.sunDisc.visible = false;
+  }
+
   setTown(cells: Iterable<Cell>, businesses: readonly BusinessSave[] = this.businesses, citizens: readonly CitizenSave[] = this.citizens, matureTreeAnchors: readonly THREE.Vector3[] = []) {
     this.cells = [...cells].map((cell) => ({ ...cell }));
     this.businesses = businesses.map((business) => ({ ...business }));

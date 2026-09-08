@@ -18,6 +18,8 @@
     "test:palettes": "node scripts/palette-check.mjs"
   },
   "dependencies": {
+    "n8ao": "^2.0.1",
+    "postprocessing": "^6.39.4",
     "three": "^0.180.0"
   },
   "devDependencies": {

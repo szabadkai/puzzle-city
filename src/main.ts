@@ -47,8 +47,12 @@ import {
 } from './confluences';
 import { HARBOR_LANTERNS, harborLanternStates, harborLanternsCompletedByEdit } from './lanterns';
 import { decodeShareCode, shareCodeFromLocation, shareCodeSupported } from './share-code';
+import { CSM } from 'three/addons/csm/CSM.js';
 import { PALETTE_SLOT, PaletteSystem } from './palette';
-import { installPresentationShading, presentationUniforms } from './shading';
+import { installPresentationShading, presentationUniforms, setShadowCascadeCount } from './shading';
+import { createAtmosphereState, evaluateAtmosphere } from './atmosphere';
+import { SkyDome } from './sky';
+import { PostPipeline } from './postfx';
 import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, storedTierOverride, type QualityTier } from './quality';
 import './style.css';
 
@@ -87,6 +91,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     <div class="toast" id="toast"></div>
     <div class="perf-panel" id="perf-panel">Performance</div>
+    <div class="shadow-tuning" id="shadow-tuning" aria-label="Shadow tuning">
+      <label>bias <input id="shadow-bias" type="range" min="-0.002" max="0.002" step="0.00002" value="-0.00018"><span id="shadow-bias-value"></span></label>
+      <label>normal <input id="shadow-normal-bias" type="range" min="0" max="0.2" step="0.002" value="0.028"><span id="shadow-normal-bias-value"></span></label>
+    </div>
     <aside class="grow-inspector" id="grow-inspector" aria-label="GROW developer inspector"></aside>
     <aside class="citizen-card" id="citizen-card" aria-live="polite">
       <button class="card-close" id="card-close" aria-label="Close citizen card">×</button>
@@ -234,7 +242,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
 const saved = (await loadSharedTown()) ?? loadTown();
 const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
-let timeOfDay = saved?.timeOfDay ?? 7.5;
+// New towns open at golden hour. The most saturated light makes the first frame.
+let timeOfDay = saved?.timeOfDay ?? 17.5;
 let day = saved?.day ?? 1;
 const restoredCatEntry = saved?.journal?.find((entry) => entry.eventId === 'harbor-cats');
 let catColonyFoundedAt = saved?.catColonyFoundedAt
@@ -257,9 +266,11 @@ const palette = new PaletteSystem(saved?.palette);
 presentationUniforms.uPalette.value = palette.texture;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x91c7c1);
 const sceneFog = new THREE.FogExp2(0x91c7c1, .0135);
 scene.fog = sceneFog;
+const skyDome = new SkyDome();
+scene.add(skyDome.mesh);
+const atmosphere = createAtmosphereState();
 
 const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, .1, 300);
 camera.position.set(18, 19, 20);
@@ -274,6 +285,8 @@ let quality = QUALITY_SETTINGS[qualityTier];
 let maximumPixelRatio = Math.min(devicePixelRatio, quality.maxPixelRatio);
 let renderPixelRatio = maximumPixelRatio;
 const gpuTimer = new GpuTimer(renderer);
+// The post pipeline renders several passes per frame. Count them all.
+renderer.info.autoReset = false;
 const highRefreshAllowed = localStorage.getItem(HIGH_REFRESH_KEY) === 'true';
 
 function readDetectedTier(): QualityTier | null {
@@ -286,7 +299,12 @@ function applyQualityTier(tier: QualityTier) {
   quality = QUALITY_SETTINGS[tier];
   maximumPixelRatio = Math.min(devicePixelRatio, quality.maxPixelRatio);
   renderPixelRatio = Math.min(renderPixelRatio, maximumPixelRatio);
+  applyRenderScale();
+}
+
+function applyRenderScale() {
   renderer.setPixelRatio(renderPixelRatio);
+  pipeline?.setSize(innerWidth, innerHeight);
 }
 
 renderer.domElement.addEventListener('webglcontextlost', (event) => {
@@ -295,19 +313,20 @@ renderer.domElement.addEventListener('webglcontextlost', (event) => {
 });
 renderer.domElement.addEventListener('webglcontextrestored', () => {
   renderer.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(renderPixelRatio);
+  applyRenderScale();
+  palette.texture.needsUpdate = true;
   renderer.shadowMap.needsUpdate = true;
   ignoreNextPerformanceSample = true;
   showToast('The harbor is back.');
 });
 renderer.setPixelRatio(renderPixelRatio);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.shadowMap.autoUpdate = false;
 renderer.shadowMap.needsUpdate = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+// Tone mapping runs in the post pipeline so bloom sees scene-referred light.
+renderer.toneMapping = THREE.NoToneMapping;
 document.querySelector('#app')!.prepend(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -330,21 +349,32 @@ controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
 
 const hemi = new THREE.HemisphereLight(0xffe8bd, 0x315f63, 2.25);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffc984, 4.7);
-sun.position.set(-14, 23, 12);
-sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.left = -25;
-sun.shadow.camera.right = 25;
-sun.shadow.camera.top = 25;
-sun.shadow.camera.bottom = -25;
-sun.shadow.camera.near = 3;
-sun.shadow.camera.far = 60;
-sun.shadow.bias = -.0005;
-scene.add(sun);
+// One sun, split into cascades fitted to the camera frustum every frame.
+setShadowCascadeCount(quality.shadowCascades);
+const csm = new CSM({
+  camera,
+  parent: scene,
+  cascades: quality.shadowCascades,
+  shadowMapSize: quality.shadowMapSize,
+  maxFar: 110,
+  mode: 'practical',
+  lightDirection: new THREE.Vector3(.5, -.7, -.45).normalize(),
+  lightIntensity: 4,
+  lightNear: 1,
+  lightFar: 240,
+  lightMargin: 40,
+  shadowBias: -.00018,
+});
+csm.fade = true;
+for (const light of csm.lights) {
+  light.shadow.normalBias = .028;
+  light.shadow.radius = 2.5;
+}
+const shadowSettings = { bias: -.00018, normalBias: .028 };
 const moon = new THREE.DirectionalLight(0xa9ccf2, 0);
 moon.position.set(14, 18, -12);
 scene.add(moon);
+let pipeline: PostPipeline | null = null;
 
 function createWaterNoiseTexture(size = 128) {
   const data = new Uint8Array(size * size * 4);
@@ -445,10 +475,16 @@ scene.add(water);
 const city = new CityRenderer(seed);
 scene.add(city.root);
 
+const shadowLiftTint = new THREE.Color();
+const ambientOcclusionColor = new THREE.Color();
+
 function applyPaletteColors() {
   city.setPaletteColors(palette.color(PALETTE_SLOT.stone), palette.color(PALETTE_SLOT.stoneDark), palette.color(PALETTE_SLOT.trim));
-  waterUniforms.uWaterTint.value.copy(palette.color(PALETTE_SLOT.water)).convertLinearToSRGB();
-  daySky.copy(palette.color(PALETTE_SLOT.skyHorizon)).lerp(palette.color(PALETTE_SLOT.skyZenith), .45);
+  waterUniforms.uWaterTint.value.copy(palette.color(PALETTE_SLOT.water));
+  shadowLiftTint.copy(palette.color(PALETTE_SLOT.shadow));
+  ambientOcclusionColor.copy(palette.color(PALETTE_SLOT.shadow)).multiplyScalar(.28);
+  pipeline?.setLift(.03, shadowLiftTint);
+  pipeline?.setAmbientOcclusionColor(ambientOcclusionColor);
 }
 if (saved) city.load(saved.cells, day * 24 + timeOfDay);
 let formationOccurrences: readonly FormationOccurrence[] = detectFormations(city.cells);
@@ -2106,7 +2142,7 @@ function canvasPng(inscription: string) {
     const markersWereVisible = onboardingMarkers.visible;
     hover.visible = false;
     onboardingMarkers.visible = false;
-    renderer.render(scene, camera);
+    pipeline?.render(0);
     void composePostcard(renderer.domElement, { inscription, date: postcardDate(), day }).then((blob) => {
       hover.visible = hoverWasVisible;
       onboardingMarkers.visible = markersWereVisible;
@@ -2562,8 +2598,23 @@ document.querySelector('#grow-inspector')!.addEventListener('click', (event) => 
   updateGrowInspector();
 });
 
+const shadowBiasInput = document.querySelector<HTMLInputElement>('#shadow-bias')!;
+const shadowNormalBiasInput = document.querySelector<HTMLInputElement>('#shadow-normal-bias')!;
+function readShadowTuning() {
+  shadowSettings.bias = Number(shadowBiasInput.value);
+  shadowSettings.normalBias = Number(shadowNormalBiasInput.value);
+  document.querySelector('#shadow-bias-value')!.textContent = shadowSettings.bias.toFixed(5);
+  document.querySelector('#shadow-normal-bias-value')!.textContent = shadowSettings.normalBias.toFixed(3);
+}
+shadowBiasInput.addEventListener('input', readShadowTuning);
+shadowNormalBiasInput.addEventListener('input', readShadowTuning);
+readShadowTuning();
+
 window.addEventListener('keydown', (event) => {
-  if (event.key.toLowerCase() === 'p') document.querySelector('#perf-panel')!.classList.toggle('show');
+  if (event.key.toLowerCase() === 'p') {
+    document.querySelector('#perf-panel')!.classList.toggle('show');
+    document.querySelector('#shadow-tuning')!.classList.toggle('show');
+  }
   if (event.key.toLowerCase() === 'j') setJournalOpen(!document.querySelector('#journal-scrim')!.classList.contains('show'));
   if (event.key.toLowerCase() === 'i') document.querySelector<HTMLButtonElement>('#observe-toggle')!.click();
   if (event.key.toLowerCase() === 'g') {
@@ -2581,6 +2632,7 @@ window.addEventListener('keydown', (event) => {
 });
 
 const ambience = new HarborAmbience(seed, camera, city.cells.values());
+ambience.hideSunDisc();
 ambience.setDiscoveryState(grow.discoveredIds());
 ambience.setPlaceIdentities(placeIdentityOccurrences);
 ambience.setTown(city.cells.values(), businesses.all(), citizens.residents(), city.matureTreeAnchors(day * 24 + timeOfDay));
@@ -2605,20 +2657,16 @@ function refreshAmbience() {
 }
 
 const clock = new THREE.Clock();
-const daySky = new THREE.Color(0x91c7c1);
+pipeline = new PostPipeline(renderer, scene, camera, quality, gpuTimer);
+applyRenderScale();
 applyPaletteColors();
-const nightSky = new THREE.Color(0x192b43);
-const dawnSky = new THREE.Color(0xc47f72);
-const dayHemiSky = new THREE.Color(0xffe8bd);
-const nightHemiSky = new THREE.Color(0x9bc5e8);
-const dayHemiGround = new THREE.Color(0x315f63);
-const nightHemiGround = new THREE.Color(0x23475e);
-const currentSky = new THREE.Color();
+const previousCameraMatrix = new THREE.Matrix4();
+const previousSunDirection = new THREE.Vector3();
+let shadowIdleSeconds = 0;
 const daylightStartHour = 4;
 const daylightEndHour = 20;
 let clockUpdate = 0;
 let autosaveElapsed = 0;
-let shadowElapsed = 0;
 let frameTimeEma = 16.7;
 let performanceWarmup = 0;
 let performanceCooldown = 0;
@@ -2636,15 +2684,17 @@ let shadowsActive = true;
 let lastRaining = weatherAt(seed, day * 24 + timeOfDay).raining;
 const performanceCosts = { city: 0, citizens: 0, business: 0, discovery: 0, background: 0, ambience: 0, render: 0 };
 let sessionSeconds = 0;
-let refinementFrameMs = 0;
-let refinementFrames = 0;
+const refinementSamples: number[] = [];
 let lastPresentedAt = 0;
 const frameCapMs = highRefreshAllowed ? 0 : 1000 / 60 - 1.5;
 
 type PerformanceReport = {
   fps: number;
   frameMs: number;
+  /** Shadow maps plus the main scene. */
   drawCalls: number;
+  /** Every pass of the frame, post-processing included. */
+  drawCallsTotal: number;
   triangles: number;
   renderScale: number;
   tier: QualityTier;
@@ -2655,15 +2705,21 @@ type PerformanceReport = {
 };
 
 declare global {
-  interface Window { __perf?: PerformanceReport }
+  interface Window {
+    __perf?: PerformanceReport;
+    /** Debug handle for the capture test and manual tuning. */
+    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; setTimeOfDay(hour: number): void };
+  }
 }
+window.__littleTides = { hemi, atmosphere, palette, setTimeOfDay(hour: number) { timeOfDay = hour; } };
 
 function publishPerformanceReport() {
   const info = renderer.info.render;
   window.__perf = {
     fps: Math.round(1000 / frameTimeEma),
     frameMs: Math.round(frameTimeEma * 10) / 10,
-    drawCalls: info.calls,
+    drawCalls: pipeline?.sceneDrawCalls ?? info.calls,
+    drawCallsTotal: info.calls,
     triangles: info.triangles,
     renderScale: Math.round(renderPixelRatio * 100) / 100,
     tier: qualityTier,
@@ -2718,12 +2774,13 @@ function animate() {
   sessionSeconds += rawDelta;
   if (ignoreNextPerformanceSample) ignoreNextPerformanceSample = false;
   else frameTimeEma += (rawDelta * 1000 - frameTimeEma) * .035;
-  if (tierNeedsRefinement && sessionSeconds > 1.5) {
-    refinementFrameMs += rawDelta * 1000;
-    refinementFrames += 1;
-    if (sessionSeconds > 2.5) {
+  if (tierNeedsRefinement && sessionSeconds > 2) {
+    refinementSamples.push(rawDelta * 1000);
+    if (sessionSeconds > 4) {
       tierNeedsRefinement = false;
-      const refined = refineTier(qualityTier, refinementFrameMs / Math.max(1, refinementFrames));
+      // Shader compiles spike single frames. Judge the steady frames only.
+      const steady = refinementSamples.sort((a, b) => a - b).slice(0, Math.ceil(refinementSamples.length * .7));
+      const refined = refineTier(qualityTier, steady.reduce((sum, value) => sum + value, 0) / Math.max(1, steady.length));
       if (refined !== qualityTier) applyQualityTier(refined);
       localStorage.setItem(DETECTED_TIER_KEY, refined);
     }
@@ -2766,35 +2823,47 @@ function animate() {
     nightMode = nextNightMode;
     document.body.classList.toggle('night', nightMode);
   }
-  const twilight = Math.max(0, 1 - Math.abs(timeOfDay - 19.2) / 2.4, 1 - Math.abs(timeOfDay - 4.8) / 2.1);
-  currentSky.copy(nightSky).lerp(daySky, daylight).lerp(dawnSky, twilight * .28);
-  scene.background = currentSky;
-  sceneFog.color.copy(currentSky);
-  waterUniforms.uSky.value.copy(currentSky);
+  evaluateAtmosphere(timeOfDay, palette, weather.intensity, atmosphere);
+  sceneFog.color.copy(atmosphere.fogColor);
   const cameraDistance = camera.position.distanceTo(controls.target);
   const distantView = THREE.MathUtils.smoothstep(cameraDistance, 34, 64);
-  sceneFog.density = THREE.MathUtils.lerp(.0135, .0012, distantView);
-  const moonlight = Math.pow(1 - daylight, 1.5);
-  hemi.color.copy(nightHemiSky).lerp(dayHemiSky, daylight);
-  hemi.groundColor.copy(nightHemiGround).lerp(dayHemiGround, daylight);
-  hemi.intensity = .72 + daylight * 1.53;
-  sun.intensity = .12 + daylight * 4.58;
-  const sunAngle = (timeOfDay - 6) / 24 * Math.PI * 2;
-  sun.position.set(Math.cos(sunAngle) * 18, 5 + daylight * 20, Math.sin(sunAngle) * 16);
-  const moonAngle = sunAngle + Math.PI;
-  moon.intensity = moonlight * 1.3;
-  moon.position.set(Math.cos(moonAngle) * 20, 14 + moonlight * 8, Math.sin(moonAngle) * 18);
-  shadowElapsed += rawDelta;
-  // The town is mostly static. Coarse solar steps keep the shadows alive
-  // without periodically rerendering every caster during ordinary motion.
-  if (shadowsActive && shadowElapsed > 12) {
-    renderer.shadowMap.needsUpdate = true;
-    // The next delta includes the deliberately scheduled shadow render. Do not
-    // mistake that isolated maintenance frame for sustained GPU pressure.
-    ignoreNextPerformanceSample = true;
-    shadowElapsed = 0;
+  sceneFog.density = THREE.MathUtils.lerp(atmosphere.fogDensity, atmosphere.fogDensity * .12, distantView);
+  waterUniforms.uSky.value.copy(atmosphere.skyHorizon);
+  hemi.color.copy(atmosphere.ambientSky);
+  hemi.groundColor.copy(atmosphere.ambientGround);
+  hemi.intensity = atmosphere.ambientIntensity;
+  const sunUp = atmosphere.sunElevation > 0;
+  csm.lightDirection.copy(atmosphere.sunDirection).negate();
+  for (const light of csm.lights) {
+    light.color.copy(atmosphere.sunColor);
+    light.intensity = sunUp ? atmosphere.sunIntensity : 0;
+    light.shadow.bias = shadowSettings.bias;
+    light.shadow.normalBias = shadowSettings.normalBias;
   }
-  renderer.toneMappingExposure = .88 + daylight * .2;
+  csm.update();
+  presentationUniforms.cameraNear.value = camera.near;
+  presentationUniforms.shadowFar.value = Math.min(camera.far, csm.maxFar);
+  for (const [index, cascade] of presentationUniforms.CSM_cascades.value.entries()) {
+    cascade.set(csm.breaks[index - 1] ?? 0, csm.breaks[index] ?? 1);
+  }
+  moon.color.set(0xa9ccf2);
+  moon.intensity = atmosphere.moonIntensity;
+  moon.position.copy(atmosphere.moonDirection).multiplyScalar(40);
+  skyDome.update(atmosphere, camera.position, time);
+  pipeline!.setExposure(atmosphere.exposure);
+  pipeline!.focusOn(controls.target);
+  // Cascades follow the camera, so shadows re-render whenever the view or the
+  // sun moves. A static view refreshes every few seconds for growing trees.
+  shadowIdleSeconds += rawDelta;
+  camera.updateMatrixWorld();
+  const viewMoved = !previousCameraMatrix.equals(camera.matrixWorld);
+  const sunMoved = previousSunDirection.distanceToSquared(atmosphere.sunDirection) > 1e-7;
+  if (shadowsActive && (viewMoved || sunMoved || shadowIdleSeconds > 3)) {
+    renderer.shadowMap.needsUpdate = true;
+    previousCameraMatrix.copy(camera.matrixWorld);
+    previousSunDirection.copy(atmosphere.sunDirection);
+    shadowIdleSeconds = 0;
+  }
   waterUniforms.uTime.value = time;
   waterUniforms.uDay.value = daylight;
   waterUniforms.uRain.value = weather.intensity;
@@ -2894,7 +2963,7 @@ function animate() {
   }
   if (performanceWarmup > 3 && performanceCooldown > 3 && overloadSeconds > 1.5 && renderPixelRatio > 1) {
     renderPixelRatio = Math.max(1, renderPixelRatio - (frameTimeEma > 30 ? .3 : .2));
-    renderer.setPixelRatio(renderPixelRatio);
+    applyRenderScale();
     performanceCooldown = 0;
     overloadSeconds = 0;
   } else if (performanceWarmup > 8 && performanceCooldown > 4 && severeOverloadSeconds > 2 && renderPixelRatio <= 1 && shadowsActive) {
@@ -2905,12 +2974,12 @@ function animate() {
     severeOverloadSeconds = 0;
   } else if (performanceWarmup > 12 && performanceCooldown > 4 && severeOverloadSeconds > 2 && renderPixelRatio > .75) {
     renderPixelRatio = Math.max(.75, renderPixelRatio - .1);
-    renderer.setPixelRatio(renderPixelRatio);
+    applyRenderScale();
     performanceCooldown = 0;
     severeOverloadSeconds = 0;
   } else if (performanceWarmup > 20 && performanceCooldown > 15 && recoverySeconds > 8 && renderPixelRatio < maximumPixelRatio) {
     renderPixelRatio = Math.min(maximumPixelRatio, renderPixelRatio + .1);
-    renderer.setPixelRatio(renderPixelRatio);
+    applyRenderScale();
     performanceCooldown = 0;
     recoverySeconds = 0;
   }
@@ -2923,9 +2992,8 @@ function animate() {
   // WebGL's drawing buffer is not preserved by default. Keep presenting the
   // scene while a journal view is open so overlay recompositing cannot reveal
   // the page background in place of the town.
-  gpuTimer.begin('scene');
-  renderer.render(scene, camera);
-  gpuTimer.end();
+  renderer.info.reset();
+  pipeline!.render(delta);
   gpuTimer.collect();
   if (profileFrame) recordPerformanceCost('render', profileStartedAt);
   if (performanceUpdate > .75) {
@@ -2934,7 +3002,7 @@ function animate() {
     const gpu = gpuTimer.supported
       ? ` · GPU ${Object.entries(gpuTimer.times).map(([name, duration]) => `${name} ${duration.toFixed(1)}`).join(' · ')}`
       : '';
-    performancePanel.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${qualityTier} · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'} · ${cpu.toFixed(1)}ms CPU (city ${performanceCosts.city.toFixed(1)} · people ${performanceCosts.citizens.toFixed(1)} · shops ${performanceCosts.business.toFixed(1)} · GROW ${performanceCosts.discovery.toFixed(1)} · ui ${performanceCosts.background.toFixed(1)} · life ${performanceCosts.ambience.toFixed(1)} · render ${performanceCosts.render.toFixed(1)})${gpu}`;
+    performancePanel.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${pipeline!.sceneDrawCalls}+${info.calls - pipeline!.sceneDrawCalls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${qualityTier} · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'} · ${cpu.toFixed(1)}ms CPU (city ${performanceCosts.city.toFixed(1)} · people ${performanceCosts.citizens.toFixed(1)} · shops ${performanceCosts.business.toFixed(1)} · GROW ${performanceCosts.discovery.toFixed(1)} · ui ${performanceCosts.background.toFixed(1)} · life ${performanceCosts.ambience.toFixed(1)} · render ${performanceCosts.render.toFixed(1)})${gpu}`;
     publishPerformanceReport();
     performanceUpdate = 0;
   }
@@ -2945,6 +3013,7 @@ animate();
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  csm.updateFrustums();
   renderer.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(renderPixelRatio);
+  applyRenderScale();
 });

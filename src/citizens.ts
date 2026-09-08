@@ -8,7 +8,7 @@ import {
   arcadeFeature, isRoofAccessCell, isWalkableRoof, roofAccessDirection, roofCourtFeature, walkableSteppedTerrace,
 } from './architecture';
 import {
-  CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_WALK_Y, QUAY_PATH_OFFSET,
+  CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_WALK_Y, QUAY_PATH_OFFSET, doorLateralOffset,
   TERRACE_STEP_COUNT, terraceStepOutward, terraceStepWalkY, roofWalkY,
 } from './spatial';
 import { hasDock } from './water';
@@ -554,7 +554,12 @@ export class NavGraph {
       const doorDir = this.doorDirection(cell, open);
       if (doorDir >= 0) {
         const [dx, dz] = CARDINALS[doorDir];
-        const entranceKey = this.addNode(cell.x * CELL + dx * WALK_OUT, cell.z * CELL + dz * WALK_OUT);
+        const centerX = cell.x * CELL + dx * WALK_OUT;
+        const centerZ = cell.z * CELL + dz * WALK_OUT;
+        const doorOffset = doorLateralOffset(open.filter((isOpen) => !isOpen).length);
+        const entranceKey = this.addNode(centerX + dz * doorOffset, centerZ - dx * doorOffset);
+        this.connect(this.addNode(centerX, centerZ), entranceKey);
+        this.connect(entranceKey, sides[doorDir]!.b);
         this.entrances.set(keyOf(cell.x, cell.z), entranceKey);
         this.entranceCells.set(entranceKey, keyOf(cell.x, cell.z));
       }

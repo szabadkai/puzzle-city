@@ -17,7 +17,7 @@ import { hasDock, hasWaterStairs } from './water';
 import {
   CELL_SIZE, FLOOR_HEIGHT, GROUND_WALK_Y, HIGH_CROSSING_SPAN_Y, HIGH_CROSSING_WALK_Y,
   QUAY_PATH_OFFSET, TERRACE_STEP_COUNT,
-  STOREFRONT_APRON_CENTER, STOREFRONT_APRON_DEPTH, STOREFRONT_APRON_TOP_Y,
+  STOREFRONT_APRON_CENTER, STOREFRONT_APRON_DEPTH, STOREFRONT_APRON_TOP_Y, doorLateralOffset,
   TERRACE_STEP_HEIGHT, terraceStepOutward, terraceTreadTopY,
 } from './spatial';
 import {
@@ -1569,24 +1569,27 @@ export class CityRenderer {
     const lateral = new THREE.Vector3(CARDINALS[dir][1], 0, -CARDINALS[dir][0]);
     const [px, pz] = this.edgePosition(dir, CELL * .507);
     if (level === 0) (group.userData.domesticGroundFacadeDirections ??= []).push(dir);
+    const doorOffset = isDoor ? doorLateralOffset(neighborCount) : 0;
     if (isDoor) {
+      const doorX = px + lateral.x * doorOffset;
+      const doorZ = pz + lateral.z * doorOffset;
       this.reserveFacadeDecoration(group, dir, 'door', 'opening', {
-        sideMin: -.25, sideMax: .25, yMin: .32, yMax: 1.2,
+        sideMin: doorOffset - .25, sideMax: doorOffset + .25, yMin: .32, yMax: 1.2,
       });
       this.reserveFacadeDecoration(group, dir, 'door-lamp', 'opening', {
-        sideMin: .27, sideMax: .45, yMin: 1.07, yMax: 1.25,
+        sideMin: doorOffset + .27, sideMax: doorOffset + .45, yMin: 1.07, yMax: 1.25,
       });
       const door = shadow(new THREE.Mesh(new THREE.BoxGeometry(.46, .82, .08), this.dark), false);
-      door.position.set(px, .34 + .43, pz);
+      door.position.set(doorX, .34 + .43, doorZ);
       door.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       group.add(door);
       const lamp = new THREE.Mesh(new THREE.SphereGeometry(.075, 8, 6), this.warmLight);
-      lamp.position.set(px + lateral.x * .36, 1.16, pz + lateral.z * .36);
+      lamp.position.set(doorX + lateral.x * .36, 1.16, doorZ + lateral.z * .36);
       group.add(lamp);
       // Business and neighborhood frontages each own the whole entrance band.
       // Ordinary homes retain a modest awning but no shop-like hanging sign.
       if (!entranceBusiness && dir !== canalMarketFrontDirection && !underArcade) {
-        this.addAwning(group, cell, dir, lateral, px, pz);
+        this.addAwning(group, cell, dir, lateral, doorX, doorZ, doorOffset);
       }
     }
     // An arcade is an open colonnade. Only the door belongs inside the arch;
@@ -1594,8 +1597,8 @@ export class CityRenderer {
     if (underArcade) return;
     for (let i = 0; i < windowCount; i++) {
       if (isDoor && i === 0) continue;
-      // The door wall keeps one window, clear of the door, the lamp, and the awning.
-      const offset = isDoor ? -.78 : windowCount === 1 ? 0 : (i - .5) * .72;
+      // The door wall mirrors its one window across the center from the door.
+      const offset = isDoor ? -doorOffset : windowCount === 1 ? 0 : (i - .5) * .72;
       this.reserveFacadeDecoration(group, dir, `window-${level}-${i}`, 'opening', {
         sideMin: offset - .25, sideMax: offset + .25, yMin: y - .32, yMax: y + .25,
       });
@@ -1613,9 +1616,9 @@ export class CityRenderer {
     if (level === 0 && hash(this.seed, cell.x, cell.z, 850 + dir) > .8) this.addPipe(group, cell, dir, lateral, px, pz);
   }
 
-  private addAwning(group: THREE.Group, cell: Cell, dir: Direction, lateral: THREE.Vector3, px: number, pz: number) {
+  private addAwning(group: THREE.Group, cell: Cell, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, side: number) {
     if (!this.reserveFacadeDecoration(group, dir, 'residential-awning', 'composition', {
-      sideMin: -.58, sideMax: .58, yMin: 1.16, yMax: 1.36,
+      sideMin: side - .58, sideMax: side + .58, yMin: 1.16, yMax: 1.36,
     })) return;
     const [dx, dz] = CARDINALS[dir];
     const colors = [0xb5463e, 0x3f7770, 0xd08b3e];
@@ -2323,6 +2326,7 @@ export class CityRenderer {
   private addWaterEdges(group: THREE.Group, cell: Cell, heights: number[]) {
     const entranceDirection = this.doorDirection(cell);
     const hasBusinessEntrance = this.businesses.has(keyOf(cell.x, cell.z));
+    const doorOffset = doorLateralOffset(heights.filter((height) => height > 0).length);
     heights.forEach((height, index) => {
       if (height > 0) return;
       const dir = index as Direction;
@@ -2352,7 +2356,8 @@ export class CityRenderer {
             new THREE.BoxGeometry(dir % 2 ? .4 : .68, .1, dir % 2 ? .68 : .4),
             this.stone,
           ));
-          stair.position.set(dx * (CELL * .59 + step * .29), .02 - step * .1, dz * (CELL * .59 + step * .29));
+          const outward = CELL * .59 + step * .29;
+          stair.position.set(dx * outward + dz * doorOffset, .02 - step * .1, dz * outward - dx * doorOffset);
           group.add(stair);
         }
         group.userData.waterStairDirection = dir;

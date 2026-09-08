@@ -6,6 +6,8 @@ export const FLOOR_HEIGHT = 1.42;
 // safely on the stone instead of outside its water-facing edge.
 export const QUAY_PATH_OFFSET = CELL_SIZE * .53;
 export const GROUND_WALK_Y = .18;
+/** A domestic door shares its wall with a window, so it sits left of the wall center. */
+export const doorLateralOffset = (neighborCount: number) => neighborCount ? -.42 : 0;
 
 // Shop displays project beyond the narrow quay edge. The apron gives visitors
 // and storefront wildlife a real surface, while the cat lane stays beyond the

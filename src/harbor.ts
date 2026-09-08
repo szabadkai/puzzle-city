@@ -285,6 +285,7 @@ export class HarborAmbience {
   private readonly festivalCombinedMatrix = new THREE.Matrix4();
   private readonly rain: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly importYard: THREE.Group;
+  private wakes: { trail(id: string, position: THREE.Vector3, deltaSeconds: number): void; release(id: string): void } | null = null;
   private readonly cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
   private readonly starMaterial = new THREE.PointsMaterial({ color: 0xffe4a3, size: .13, transparent: true, opacity: 0, depthWrite: false });
   private readonly sunDisc: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
@@ -374,6 +375,11 @@ export class HarborAmbience {
   /** The sky dome draws the sun now. */
   hideSunDisc() {
     this.sunDisc.visible = false;
+  }
+
+  /** Moving boats report their positions to the wake system every frame. */
+  attachWakes(wakes: { trail(id: string, position: THREE.Vector3, deltaSeconds: number): void; release(id: string): void }) {
+    this.wakes = wakes;
   }
 
   setTown(cells: Iterable<Cell>, businesses: readonly BusinessSave[] = this.businesses, citizens: readonly CitizenSave[] = this.citizens, matureTreeAnchors: readonly THREE.Vector3[] = []) {
@@ -614,6 +620,7 @@ export class HarborAmbience {
   scatterWildlife(x: number, z: number) { this.fauna.scatterAt(x, z); }
 
   update(time: number, daylight: number, timeOfDay: number, absoluteHours: number, catColonyFoundedAt?: number, rainIntensity = 0): HarborUpdate {
+    const deltaSeconds = Math.max(0, Math.min(.1, time - this.lastUpdateTime));
     this.lastUpdateTime = time;
     this.lastTimeOfDay = timeOfDay;
     this.lastRainIntensity = rainIntensity;
@@ -651,6 +658,10 @@ export class HarborAmbience {
       boat.model.rotation.x = Math.sin(time * boat.bobSpeed * .63 + boat.phase * 4) * .016;
       boat.model.rotation.z = Math.sin(time * boat.bobSpeed * .78 + boat.phase * 5) * .028;
       if (boat.kind === 'fishing boat') this.updateFishingWork(boat, time, timeOfDay);
+    }
+    for (const boat of this.fleet) {
+      if (boat.model.visible) this.wakes?.trail(boat.kind, boat.model.position, deltaSeconds);
+      else this.wakes?.release(boat.kind);
     }
     this.updateImportYard(time, timeOfDay);
     this.fauna.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, rainIntensity);

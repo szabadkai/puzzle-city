@@ -54,6 +54,8 @@ import { createAtmosphereState, evaluateAtmosphere } from './atmosphere';
 import { SkyDome } from './sky';
 import { PostPipeline } from './postfx';
 import { CameraDirector } from './camera-director';
+import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER, WaterSurface } from './water-surface';
+import { WakeSystem } from './wakes';
 import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, storedTierOverride, type QualityTier } from './quality';
 import './style.css';
 
@@ -329,6 +331,8 @@ function applyRenderScale() {
   renderer.setPixelRatio(renderPixelRatio);
   const { width, height } = viewportSize();
   pipeline?.setSize(width, height);
+  const drawingBuffer = renderer.getDrawingBufferSize(new THREE.Vector2());
+  water.setSize(drawingBuffer.x, drawingBuffer.y);
 }
 
 renderer.domElement.addEventListener('webglcontextlost', (event) => {
@@ -401,101 +405,12 @@ moon.position.set(14, 18, -12);
 scene.add(moon);
 let pipeline: PostPipeline | null = null;
 
-function createWaterNoiseTexture(size = 128) {
-  const data = new Uint8Array(size * size * 4);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const u = x / size * Math.PI * 2;
-    const v = y / size * Math.PI * 2;
-    const first = Math.sin(u * 3 + Math.sin(v * 2)) * .5 + .5;
-    const second = Math.sin(v * 5 - Math.cos(u * 2)) * .5 + .5;
-    const fine = Math.sin((u + v) * 7) * .5 + .5;
-    const index = (y * size + x) * 4;
-    data[index] = Math.round(first * 255);
-    data[index + 1] = Math.round(second * 255);
-    data[index + 2] = Math.round(fine * 255);
-    data[index + 3] = 255;
-  }
-  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  texture.needsUpdate = true;
-  return texture;
-}
-
-const WATER_FLAT_RADIUS = 165;
-const WATER_CURVE_RADIUS = 320;
-const WATER_MESH_RADIUS = 520;
-
-function createCurvedWaterGeometry() {
-  // Keep the playable harbor level, then roll the distant sea below the sightline.
-  // The outer rim sits beyond the camera's far plane, so only the smooth tangent
-  // of the curved surface can form the horizon.
-  const geometry = new THREE.RingGeometry(0, WATER_MESH_RADIUS, 160, 72);
-  const positions = geometry.getAttribute('position');
-  for (let index = 0; index < positions.count; index++) {
-    const radius = Math.hypot(positions.getX(index), positions.getY(index));
-    const curvedDistance = Math.max(0, radius - WATER_FLAT_RADIUS);
-    positions.setZ(index, -(curvedDistance * curvedDistance) / (2 * WATER_CURVE_RADIUS));
-  }
-  positions.needsUpdate = true;
-  geometry.computeVertexNormals();
-  geometry.rotateX(-Math.PI / 2);
-  geometry.computeBoundingSphere();
-  return geometry;
-}
-
-const waterUniforms = {
-  uTime: { value: 0 },
-  uDay: { value: 1 },
-  uRain: { value: 0 },
-  uNoise: { value: createWaterNoiseTexture() },
-  uSky: { value: new THREE.Color(0x91c7c1) },
-  uWaterTint: { value: new THREE.Color(0x2f8a86) },
-  uHorizonCenter: { value: new THREE.Vector2() },
-};
-const waterMaterial = new THREE.ShaderMaterial({
-  uniforms: waterUniforms,
-  transparent: false,
-  vertexShader: `
-    varying vec3 vWorld;
-    void main() {
-      vec4 world = modelMatrix * vec4(position, 1.0);
-      vWorld = world.xyz;
-      gl_Position = projectionMatrix * viewMatrix * world;
-    }
-  `,
-  fragmentShader: `
-    uniform float uTime;
-    uniform float uDay;
-    uniform float uRain;
-    uniform sampler2D uNoise;
-    uniform vec3 uSky;
-    uniform vec3 uWaterTint;
-    uniform vec2 uHorizonCenter;
-    varying vec3 vWorld;
-    void main() {
-      vec2 baseUv = vWorld.xz * .018;
-      vec3 first = texture2D(uNoise, baseUv + vec2(uTime * .007, -uTime * .004)).rgb;
-      vec3 second = texture2D(uNoise, baseUv * 1.73 + vec2(-uTime * .004, uTime * .006)).rgb;
-      float wave = (first.r + second.g - 1.0) * (.12 + uRain * .08);
-      float ribbons = first.b * .55 + second.r * .45;
-      vec3 deep = uWaterTint * .62;
-      vec3 pale = min(vec3(1.0), uWaterTint * 1.55 + .04);
-      vec3 color = mix(deep, pale, .50 + wave * 1.75 + ribbons * .055);
-      color += vec3(.055, .035, .008) * ribbons;
-      color *= mix(.34, 1.0, uDay);
-      color += vec3(.018, .026, .055) * (1.0 - uDay);
-      color = mix(color, color * .72 + vec3(.025, .055, .065), uRain * .58);
-      float horizonHaze = smoothstep(95.0, 170.0, distance(vWorld.xz, uHorizonCenter));
-      color = mix(color, uSky, horizonHaze);
-      gl_FragColor = vec4(color, 1.0);
-    }
-  `,
-});
-const water = new THREE.Mesh(createCurvedWaterGeometry(), waterMaterial);
-water.position.y = -.31;
-scene.add(water);
+const water = new WaterSurface(quality);
+scene.add(water.mesh);
+const wakes = new WakeSystem(6, quality.particleScale);
+scene.add(wakes.mesh);
+skyDome.mesh.layers.enable(REFLECTION_LAYER);
+skyDome.mesh.layers.enable(EMISSIVE_REFLECTION_LAYER);
 
 const city = new CityRenderer(seed);
 scene.add(city.root);
@@ -505,13 +420,13 @@ const ambientOcclusionColor = new THREE.Color();
 
 function applyPaletteColors() {
   city.setPaletteColors(palette.color(PALETTE_SLOT.stone), palette.color(PALETTE_SLOT.stoneDark), palette.color(PALETTE_SLOT.trim));
-  waterUniforms.uWaterTint.value.copy(palette.color(PALETTE_SLOT.water));
   shadowLiftTint.copy(palette.color(PALETTE_SLOT.shadow));
   ambientOcclusionColor.copy(palette.color(PALETTE_SLOT.shadow)).multiplyScalar(.28);
   pipeline?.setLift(.03, shadowLiftTint);
   pipeline?.setAmbientOcclusionColor(ambientOcclusionColor);
 }
 if (saved) city.load(saved.cells, day * 24 + timeOfDay);
+water.setCells(city.cells.values());
 let formationOccurrences: readonly FormationOccurrence[] = detectFormations(city.cells);
 const knownFormations = new Set<FormationId>(saved?.formations ?? []);
 for (const id of formationLineage(formationOccurrences.map((formation) => formation.id))) knownFormations.add(id);
@@ -845,6 +760,7 @@ function build(x: number, z: number) {
     return;
   }
   citizens.rebuild(city.cells);
+  water.setCells(city.cells.values());
   refreshFormations(true);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
@@ -864,6 +780,7 @@ function demolish(x: number, z: number) {
   if (!city.remove(x, z, day * 24 + timeOfDay)) return;
   hideMemoryCard();
   citizens.rebuild(city.cells);
+  water.setCells(city.cells.values());
   refreshFormations(true);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
@@ -2683,6 +2600,7 @@ window.addEventListener('keydown', (event) => {
 
 const ambience = new HarborAmbience(seed, camera, city.cells.values());
 ambience.hideSunDisc();
+ambience.attachWakes(wakes);
 ambience.setDiscoveryState(grow.discoveredIds());
 ambience.setPlaceIdentities(placeIdentityOccurrences);
 ambience.setTown(city.cells.values(), businesses.all(), citizens.residents(), city.matureTreeAnchors(day * 24 + timeOfDay));
@@ -2878,7 +2796,6 @@ function animate() {
   const cameraDistance = camera.position.distanceTo(controls.target);
   const distantView = THREE.MathUtils.smoothstep(cameraDistance, 34, 64);
   sceneFog.density = THREE.MathUtils.lerp(atmosphere.fogDensity, atmosphere.fogDensity * .12, distantView);
-  waterUniforms.uSky.value.copy(atmosphere.skyHorizon);
   hemi.color.copy(atmosphere.ambientSky);
   hemi.groundColor.copy(atmosphere.ambientGround);
   hemi.intensity = atmosphere.ambientIntensity;
@@ -2914,9 +2831,8 @@ function animate() {
     previousSunDirection.copy(atmosphere.sunDirection);
     shadowIdleSeconds = 0;
   }
-  waterUniforms.uTime.value = time;
-  waterUniforms.uDay.value = daylight;
-  waterUniforms.uRain.value = weather.intensity;
+  water.update(time, atmosphere, camera, palette.color(PALETTE_SLOT.water), atmosphere.fogColor, sceneFog.density);
+  wakes.update();
   city.setWeather(weather.intensity);
   city.update(time, absoluteHours);
   city.setDaylight(daylight);
@@ -3035,15 +2951,14 @@ function animate() {
   }
   director.update(rawDelta);
   controls.update();
-  // Center the finite mesh beneath the camera so its hidden rim can never enter
-  // the view when panning or orbiting far away from the town.
-  water.position.x = camera.position.x;
-  water.position.z = camera.position.z;
-  waterUniforms.uHorizonCenter.value.set(camera.position.x, camera.position.z);
+  camera.updateMatrixWorld();
+  renderer.info.reset();
+  gpuTimer.begin('reflection');
+  water.renderReflection(renderer, scene, camera);
+  gpuTimer.end();
   // WebGL's drawing buffer is not preserved by default. Keep presenting the
   // scene while a journal view is open so overlay recompositing cannot reveal
   // the page background in place of the town.
-  renderer.info.reset();
   pipeline!.render(delta);
   gpuTimer.collect();
   if (profileFrame) recordPerformanceCost('render', profileStartedAt);

@@ -5,6 +5,7 @@ import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type Harbor
 import { hash, pick } from './random';
 import { PALETTE_SLOT, PALETTES, paletteSlotColors } from './palette';
 import { paletteSlotColor, usePaletteLookup } from './shading';
+import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER } from './water-surface';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { facadeDirectionAt, plazaAnchorAt, type CardinalDirection as Direction } from './topology';
 import { hasDock, hasWaterStairs } from './water';
@@ -987,6 +988,7 @@ export class CityRenderer {
     if (cell) this.buildCell(group, cell);
     else this.buildFeature(group, x, z);
     this.consolidateStaticMeshes(group);
+    group.traverse((object) => this.markReflective(object));
     this.root.add(group);
     this.pieces.set(keyOf(x, z), group);
   }
@@ -1026,6 +1028,13 @@ export class CityRenderer {
       }
       group.add(merged);
     }
+  }
+
+  /** Buildings reflect in the water; lit windows and lanterns reflect even on low tier. */
+  private markReflective(object: THREE.Object3D) {
+    object.layers.enable(REFLECTION_LAYER);
+    const material = object instanceof THREE.Mesh ? object.material as THREE.Material : null;
+    if (material === this.window || material === this.warmLight) object.layers.enable(EMISSIVE_REFLECTION_LAYER);
   }
 
   private applyVertexBatchMaterial(mesh: THREE.Mesh) {
@@ -1102,6 +1111,7 @@ export class CityRenderer {
       batch.castShadow = first.castShadow;
       batch.receiveShadow = first.receiveShadow;
       batch.matrixAutoUpdate = false;
+      this.markReflective(batch);
       this.staticBatchRoot.add(batch);
       for (const { mesh } of entries) {
         mesh.userData.hiddenByStaticBatch = true;
@@ -3200,6 +3210,10 @@ export class CityRenderer {
     if (merged) {
       const batch = shadow(new THREE.Mesh(merged, this.warmLight), false);
       batch.name = 'earned-harbor-lantern-batch';
+      batch.traverse((object) => {
+        object.layers.enable(REFLECTION_LAYER);
+        object.layers.enable(EMISSIVE_REFLECTION_LAYER);
+      });
       this.harborLanternRoot.add(batch);
     }
   }

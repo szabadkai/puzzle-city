@@ -5,3 +5,4 @@ dist/
 test-output/
 scripts/capture-reference/*
 !scripts/capture-reference/README.md
+.claude/launch.json

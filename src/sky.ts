@@ -25,8 +25,10 @@ export class SkyDome {
     const material = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
       side: THREE.BackSide,
-      depthWrite: false,
-      depthTest: false,
+      // The dome writes depth so no pixel is left at the far plane, which keeps
+      // the depth-based occlusion pass out of undefined territory.
+      depthWrite: true,
+      depthTest: true,
       fog: false,
       vertexShader: /* glsl */`
         varying vec3 vDirection;

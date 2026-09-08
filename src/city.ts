@@ -340,7 +340,7 @@ export class CityRenderer {
         vec3 wobble = vec3(sin(uTime * 0.7 + aSeed * 31.0) * 0.16, 0.0, cos(uTime * 0.55 + aSeed * 17.0) * 0.13) * t;
         vec4 mvPosition = modelViewMatrix * vec4(position + vec3(0.0, rise, 0.0) + drift + wobble, 1.0);
         gl_Position = projectionMatrix * mvPosition;
-        gl_PointSize = (0.55 + t * 2.1) * uPointScale / max(1.0, -mvPosition.z);
+        gl_PointSize = min(420.0, (0.55 + t * 2.1) * uPointScale / max(1.0, -mvPosition.z));
         vAlpha = (1.0 - t * t) * smoothstep(0.0, 0.1, t) * aActive * 0.72;
       }
     `,
@@ -1084,7 +1084,7 @@ export class CityRenderer {
     const data = new Float32Array(count * 4);
     if (inside && growingTree) {
       const pivot = growingTree.getWorldPosition(new THREE.Vector3());
-      const w = inside === shadeSeats ? -(bornAt + 1) : bornAt + 1;
+      const w = inside === shadeSeats ? -(bornAt + 2) : bornAt + 2;
       for (let index = 0; index < count; index++) data.set([pivot.x, pivot.y, pivot.z, w], index * 4);
     }
     mesh.geometry.setAttribute('aTreeGrowth', new THREE.Float32BufferAttribute(data, 4));

@@ -82,7 +82,8 @@ varying vec3 vLtWorld;
 uniform float uTime;
 uniform vec2 uWind;
 uniform float uSimHours;
-// xyz: world pivot of a growing tree; w: birth hour + 1, negative for seats that appear late, 0 for no growth.
+// xyz: world pivot of a growing tree; w: birth hour + 2, negative for seats that appear late.
+// Geometry without the attribute reads the WebGL default (0, 0, 0, 1), so |w| below 1.5 means no growth.
 attribute vec4 aTreeGrowth;
 // Per-building moment in the dusk ramp at which its windows light, 0 to 1.
 attribute float aLightOffset;
@@ -129,8 +130,8 @@ const CLOTH_SWAY = /* glsl */`
 // Trees scale up from their pivot as the simulation clock passes their birth hour.
 const TREE_GROWTH = /* glsl */`
 #include <begin_vertex>
-if ( aTreeGrowth.w != 0.0 ) {
-  float ltBorn = abs( aTreeGrowth.w ) - 1.0;
+if ( abs( aTreeGrowth.w ) > 1.5 ) {
+  float ltBorn = abs( aTreeGrowth.w ) - 2.0;
   float ltLinear = clamp( ( uSimHours - ltBorn ) / ${TREE_MATURE_HOURS.toFixed(1)}, 0.0, 1.0 );
   float ltProgress = ltLinear * ltLinear * ( 3.0 - 2.0 * ltLinear );
   vec3 ltScale = aTreeGrowth.w > 0.0

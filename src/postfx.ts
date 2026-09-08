@@ -104,6 +104,9 @@ export class PostPipeline {
       this.ao.configuration.intensity = 3.2;
       this.ao.configuration.halfRes = quality.aoScale < 1;
       this.ao.configuration.screenSpaceRadius = false;
+      // Transparency-aware occlusion re-renders the scene twice per frame with
+      // visibility overrides. Smoke, rain, glass, and glow sprites do not need it.
+      this.ao.configuration.transparencyAware = false;
       this.ao.setQualityMode(quality.tier === 'high' ? 'Medium' : quality.tier === 'mid' ? 'Low' : 'Performance');
       this.composer.addPass(this.ao);
     } else {

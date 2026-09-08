@@ -638,7 +638,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'first-rain', repeatable: false, title: 'Rain on Warm Stone', illustration: 'rain',
-    note: 'The shower polished every roof and step, tucked the laundry away, and left the harbor reflecting itself.',
+    note: 'The shower polished black stone, tucked the laundry away, and left every bamboo scaffold shining above its reflection.',
     condition: all(discovered('first-foundation'), { kind: 'memory', metric: 'rainIntensity', atLeast: .18 }), focus: { kind: 'town' },
     effects: standardEffects('A passing shower darkens the harbor stones.', 'water', 'sheltering together from the rain'),
   },
@@ -760,14 +760,14 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: standardEffects('A friendship has found its footing.', 'people', 'sharing news with a friend'),
   },
   {
-    id: 'morning-bread', repeatable: false, title: 'Bread Before Sunrise', illustration: 'bread',
-    note: 'Warm buns appeared beneath an awning while the harbor was still blue with morning.',
+    id: 'morning-bread', repeatable: false, title: 'Egg Tarts Before Sunrise', illustration: 'bread',
+    note: 'Egg tarts and pineapple buns appeared in paper bags while the harbor was still blue with morning.',
     condition: all(discovered('first-neighbors'), { kind: 'business', businessType: 'bakery', atLeast: 1 }, { kind: 'time', after: 5, before: 10 }), focus: { kind: 'business', businessType: 'bakery' },
     effects: standardEffects('Warm bread reaches the quay before sunrise.', 'warm', 'following the smell of warm bread'),
   },
   {
-    id: 'tea-table', repeatable: false, title: 'The Table by the Window', illustration: 'tea',
-    note: 'A few cups turned an ordinary doorway into a place where nobody hurried away.',
+    id: 'tea-table', repeatable: false, title: 'Milk Tea at the Window', illustration: 'tea',
+    note: 'Tall glasses of milk tea reached the tiled window booths, and nobody hurried away.',
     condition: all(discovered('village-street'), { kind: 'business', businessType: 'cafe', atLeast: 1 }, { kind: 'time', after: 10, before: 21 }), focus: { kind: 'business', businessType: 'cafe' },
     effects: standardEffects('Tea is being poured by the window.', 'warm', 'lingering over a cup of tea'),
   },
@@ -879,8 +879,8 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: standardEffects('The evening restaurant has found its regulars.', 'people', 'settling into the usual supper table'),
   },
   {
-    id: 'ferry-route', repeatable: false, title: 'The Last Ferry', illustration: 'inn',
-    note: 'The inn kept one lamp burning by the dock. Soon a small ferry learned to look for it in the dark.',
+    id: 'ferry-route', repeatable: false, title: 'The Last Ferry Bell', illustration: 'inn',
+    note: 'Two notes crossed the water. The cream-and-green ferry turned toward the guesthouse lamp for its last landing.',
     condition: all(discovered('last-lantern'), { kind: 'water', feature: 'dock', atLeast: 1 }, { kind: 'business', businessType: 'inn', atLeast: 1 }), focus: { kind: 'business', businessType: 'inn' },
     effects: [
       { kind: 'ambience', action: 'refresh' },
@@ -896,7 +896,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'merchant-arrival', repeatable: false, title: 'Cargo on the Tide', illustration: 'market',
-    note: 'A broad cargo boat entered the sheltered water and unloaded bright crates beside the market.',
+    note: 'A cargo boat entered the sheltered water beneath a red-white-blue tarp and unloaded bright crates beside the market.',
     condition: all(discovered('harbor-market'), { kind: 'water', feature: 'dock', atLeast: 1 }, { kind: 'water', feature: 'sheltered', atLeast: 1 }), focus: { kind: 'town' },
     effects: [
       { kind: 'ambience', action: 'refresh' },
@@ -1204,7 +1204,7 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
   },
   {
     id: 'town-remembers', repeatable: false, title: 'The Town Remembers', illustration: 'town',
-    note: 'People now give directions by the old garden, meet on the bridge, and remember who opened the first shops. The town has a past.',
+    note: 'People give directions by the old garden, meet beneath projecting signs, and remember the morning three pink dolphins crossed the harbor. The town has a past.',
     condition: all(discovered('sheltered-courtyard'), discovered('high-bridge'), discovered('lookout-tower'), discovered('familiar-faces'), discovered('harbor-market'), { kind: 'population', atLeast: 7 }), focus: { kind: 'town' },
     effects: standardEffects('Residents stop at the places where the town began.', 'warm', 'remembering how the town began'),
   },
@@ -1215,12 +1215,12 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: natureEffects('Little gardens are climbing onto the roofs.', 'green', 'carrying seedlings up the stairs'),
   },
   {
-    id: 'gulls-return', repeatable: false, title: 'The Gulls Return', illustration: 'gulls',
-    note: 'The lookout gave the circling gulls a landmark. Their pale wings came home to the harbor.',
+    id: 'gulls-return', repeatable: false, title: 'Kites Above the Waterfront', illustration: 'gulls',
+    note: 'Black kites found the warm air above the lookout and began circling the waterfront roofs.',
     condition: all(discovered('lookout-tower'), { kind: 'population', atLeast: 5 }), focus: { kind: 'topology', feature: 'tower' },
     effects: [
       { kind: 'wildlife', action: 'reveal', animal: 'gulls' },
-      ...natureEffects('Gulls circle the lookout tower.', 'water', 'watching the gulls return'),
+      ...natureEffects('Black kites circle the lookout tower.', 'water', 'watching the black kites turn above the harbor'),
     ],
   },
   {
@@ -1236,8 +1236,8 @@ export const DISCOVERY_EVENTS: readonly DiscoveryEvent[] = [
     effects: natureEffects('The harbor gathers its evening chorus.', 'water', 'listening to the evening chorus'),
   },
   {
-    id: 'shared-supper', repeatable: false, title: 'A Shared Supper', illustration: 'supper',
-    note: 'Friends pulled their chairs together. For once, no doorway marked where one household ended.',
+    id: 'shared-supper', repeatable: false, title: 'Supper Above the Roofs', illustration: 'supper',
+    note: 'Friends pulled folding chairs around the mahjong table, then made room for supper above the warm roofs.',
     condition: all(discovered('familiar-faces'), { kind: 'relationships', atLeast: 3 }, { kind: 'any', conditions: [{ kind: 'business', businessType: 'cafe', atLeast: 1 }, { kind: 'business', businessType: 'inn', atLeast: 1 }] }, { kind: 'time', after: 18, before: 22.5 }), focus: { kind: 'town' },
     effects: natureEffects('Friends have drawn their tables together.', 'people', 'sharing supper with old friends'),
   },

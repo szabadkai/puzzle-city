@@ -54,6 +54,7 @@ try {
   const { CONFLUENCE_BY_ID } = await server.ssrLoadModule('/src/confluences.ts');
   const { createWorldSnapshot, DISCOVERY_EVENTS, evaluateCondition, resolveFocus } = await server.ssrLoadModule('/src/grow.ts');
   const { HarborAmbience } = await server.ssrLoadModule('/src/harbor.ts');
+  const { HarborBackdrop } = await server.ssrLoadModule('/src/harbor-backdrop.ts');
   const { hash } = await server.ssrLoadModule('/src/random.ts');
   const { hasWaterStairs } = await server.ssrLoadModule('/src/water.ts');
   const { facadeDirectionAt } = await server.ssrLoadModule('/src/topology.ts');
@@ -66,6 +67,24 @@ try {
   } = await server.ssrLoadModule('/src/spatial.ts');
 
   const seed = 42;
+  const backdrop = new HarborBackdrop(seed);
+  if (backdrop.root.name !== 'hong-kong-harbor-hills'
+    || !backdrop.root.userData.shippingChannel
+    || !backdrop.root.getObjectByName('near-green-hills')
+    || !backdrop.root.getObjectByName('misty-far-hills')
+    || !backdrop.root.getObjectByName('distant-hillside-blocks')
+    || !backdrop.root.getObjectByName('distant-city-window-glints')
+    || !backdrop.root.getObjectByName('harbor-background-rocks')) {
+    throw new Error('The opposite-shore backdrop lost its mountain ranges, dim city lights, water rocks, or open shipping channel.');
+  }
+  const distantGlints = backdrop.root.getObjectByName('distant-city-window-glints');
+  backdrop.update({ fogColor: new THREE.Color(0x182240), night: 1, overcast: 0 });
+  if (!(distantGlints?.material instanceof THREE.MeshBasicMaterial)
+    || distantGlints.material.opacity < .25
+    || distantGlints.material.opacity > .5
+    || !distantGlints.material.visible) {
+    throw new Error('The opposite-shore windows no longer appear as dim night-only glints.');
+  }
   for (let direction = 0; direction < 4; direction++) {
     const [dx, dz] = [[0, -1], [1, 0], [0, 1], [-1, 0]][direction];
     const rotation = new THREE.Euler(...facadeCanopyPitch(direction, .15));
@@ -151,6 +170,21 @@ try {
   city.setDiscoveryState(discoveries);
   city.setHarborLanterns(['blossom', 'table', 'chorus', 'clock', 'welcome']);
   city.update(1, 240);
+  const buildingCity = new CityRenderer(seed);
+  buildingCity.place(0, 0, 0);
+  const buildingGroup = buildingCity.root.children.find((group) => group.userData.cellX === 0 && group.userData.cellZ === 0);
+  const scaffold = buildingGroup?.getObjectByName('bamboo-construction-scaffold');
+  const scaffoldWrap = scaffold?.getObjectByName('brown-bamboo-scaffold-wrap');
+  if (!scaffold || !(scaffoldWrap instanceof THREE.Mesh)) {
+    throw new Error('A construction action no longer raises bamboo scaffolding.');
+  }
+  const scaffoldSize = new THREE.Box3().setFromObject(scaffold).getSize(new THREE.Vector3());
+  if (scaffoldSize.x < CELL_SIZE * 1.15 || scaffoldSize.z < CELL_SIZE * 1.15) {
+    throw new Error('Construction scaffolding no longer wraps all four sides of the building.');
+  }
+  if (scaffoldWrap.material.color.getHex() !== 0x9b7441) {
+    throw new Error('Construction scaffolding no longer reads as brown structural bamboo.');
+  }
   const earnedLanterns = city.root.getObjectByName('earned-harbor-lanterns');
   const lanternTargets = earnedLanterns?.children.filter((child) => child.userData.harborLanternId) ?? [];
   if (lanternTargets.length !== 5) throw new Error(`The town rendered ${lanternTargets.length} of five earned harbor lanterns.`);
@@ -174,6 +208,13 @@ try {
   const renderedShopfronts = new Set(city.root.children.map((group) => group.userData.businessFacade).filter(Boolean));
   const missingShopfronts = businessTypes.filter((type) => !renderedShopfronts.has(type));
   if (missingShopfronts.length) throw new Error(`Businesses are missing distinct shopfronts: ${missingShopfronts.join(', ')}.`);
+  if (city.root.children.filter((group) => group.userData.businessFacade && group.userData.projectingBusinessSign).length !== businessTypes.length) {
+    throw new Error('Every business no longer receives a projecting street sign.');
+  }
+  const ordinaryRoofs = city.root.children.filter((group) => group.userData.flatTongLauRoof);
+  if (!ordinaryRoofs.length || !ordinaryRoofs.some((group) => group.userData.rooftopAerial) || !ordinaryRoofs.some((group) => group.userData.rooftopAerial || group.getObjectByName('rooftop-mahjong-table'))) {
+    throw new Error('Ordinary flat roofs no longer carry the default tong-lau rooftop layer.');
+  }
   const prosperousShopfronts = city.root.children.filter((group) => (group.userData.businessProsperityTier ?? 0) > 0);
   if (prosperousShopfronts.length !== 6) throw new Error(`Recent trade produced ${prosperousShopfronts.length} prosperous shop displays instead of 6.`);
   for (const shop of city.root.children.filter((group) => group.userData.businessFacade)) {
@@ -238,6 +279,13 @@ try {
   const ambience = new HarborAmbience(seed, new THREE.PerspectiveCamera(), cells);
   ambience.setTown(cells, businesses, citizens, city.matureTreeAnchors(240));
   ambience.setDiscoveryState(discoveries);
+  const ferry = ambience.root.getObjectByName('ferry');
+  if (!ferry?.userData.doubleDeckFerry || !ferry.getObjectByName('painted-ferry-route-board')) {
+    throw new Error('The harbor ferry is no longer the cream-and-green double-deck route boat.');
+  }
+  if (!ambience.root.getObjectByName('seasonal-dragon-boat') || !ambience.root.getObjectByName('seasonal-bun-tower')) {
+    throw new Error('The two separate seeded festival models are missing.');
+  }
   const floatingLanterns = ambience.root.getObjectByName('floating-finale-lanterns');
   const fireworks = ambience.root.getObjectByName('finale-fireworks');
   if (!floatingLanterns?.visible || fireworks?.visible) throw new Error('A completed finale did not keep only its quiet water-lantern aftermath.');
@@ -562,7 +610,7 @@ try {
     ambience.root.traverse((object) => {
       if (object instanceof THREE.InstancedMesh && object.userData.wildlifeObservation === 'dolphins' && object.count > 0) dolphinBatch = object;
     });
-    if (dolphinBatch) dolphinRayHit = raycastFirstInstance(dolphinBatch, 'Dolphin pod');
+    if (dolphinBatch) dolphinRayHit = raycastFirstInstance(dolphinBatch, 'Chinese white dolphins');
   }
   if (!dolphinRayHit) throw new Error('The Observe raycaster cannot select visible dolphins.');
 

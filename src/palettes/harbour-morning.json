@@ -2,12 +2,12 @@
   "id": "harbour-morning",
   "title": "Harbour Morning",
   "order": 0,
-  "walls": ["#f1e4cf", "#dfd0b3", "#d98a67", "#d9b967", "#c26b5c", "#7fb0a5", "#7d94a6", "#c99c9e"],
-  "roofs": ["#8a4a3f", "#365f5c"],
-  "trim": "#f0c962",
-  "stone": "#c4b596",
-  "water": "#2f8a86",
-  "sky": { "zenith": "#66aac4", "horizon": "#ead9b8" },
-  "shadow": "#7f5a8f",
-  "haze": "#c6d8d3"
+  "walls": ["#f2dfba", "#b7d19c", "#d98876", "#e4bd5f", "#c9645e", "#5fa8a1", "#7698b2", "#d6a0b2"],
+  "roofs": ["#7f493b", "#315f50"],
+  "trim": "#cf9f43",
+  "stone": "#a9a08c",
+  "water": "#2a8580",
+  "sky": { "zenith": "#6eaec5", "horizon": "#d7d8c5" },
+  "shadow": "#66586f",
+  "haze": "#b9ccc5"
 }

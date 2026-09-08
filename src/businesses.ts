@@ -63,31 +63,31 @@ const RECIPES: readonly BusinessRecipe[] = [
   {
     type: 'bakery',
     population: 2,
-    names: ['Morning Crumb', 'Red Awning Bakery', 'Moon Bun', 'Harbor Loaf'],
+    names: ['Kam Kee / Golden Oven', 'Hoi Wan / Harbor Bakes', 'Wing Lee / Morning Buns', 'Sun Tak / Egg Tart House'],
     score: (citizen) => traitScore(citizen, ['industrious', 'patient']) + occupationScore(citizen, ['Baker', 'Cook']),
   },
   {
     type: 'cafe',
     population: 3,
-    names: ['Blue Cup', 'Three Sparrows', 'Tide & Tea', 'Window Seat'],
+    names: ['Hoi On / Harbor Cha Chaan Teng', 'Lucky Heron / Milk Tea', 'Man Fook / Corner Café', 'Yat Sing / Window Booth'],
     score: (citizen) => traitScore(citizen, ['sociable', 'dreamy']) + occupationScore(citizen, ['Cook', 'Caretaker']),
   },
   {
     type: 'workshop',
     population: 4,
-    names: ['Lantern & Plane', 'Little Brass Works', 'Green Door Workshop', 'Juniper Repairs'],
+    names: ['Wo Cheong / Metal Works', 'Tak Hing / Harbor Repairs', 'Man Lee / Tool House', 'East Pier / Workshop'],
     score: (citizen) => traitScore(citizen, ['artistic', 'curious', 'industrious']) + occupationScore(citizen, ['Bookbinder', 'Cartographer']),
   },
   {
     type: 'fishmonger',
     population: 5,
-    names: ['Silver Mackerel', 'Morning Catch', 'Two Nets', 'Salt & Scale'],
+    names: ['Hoi Sang / Fresh Fish', 'Kam Yu / Morning Catch', 'Three Nets / Wet Market', 'Tai On / Seafood Stall'],
     score: (citizen, cell, cells) => traitScore(citizen, ['patient', 'adventurous']) + occupationScore(citizen, ['Fisher', 'Cook']) + waterEdges(cell, cells) * 1.4,
   },
   {
     type: 'inn',
     population: 7,
-    names: ['Paper Moon Inn', 'Last Ferry House', 'The Quiet Lantern', 'Harbor Pillow'],
+    names: ['Hoi King / Harbor Guesthouse', 'Man Lok / Ferry Rooms', 'Tin Hau / Upstairs Rooms', 'East Pier / Guesthouse'],
     score: (citizen, cell) => traitScore(citizen, ['sociable', 'patient', 'adventurous']) + occupationScore(citizen, ['Caretaker', 'Teacher']) + (cell.height >= 2 ? 3 : -5),
   },
   {
@@ -105,7 +105,7 @@ const RECIPES: readonly BusinessRecipe[] = [
   {
     type: 'restaurant',
     population: 10,
-    names: ['Lantern Supper', 'Red Bowl', 'The Long Table', 'Salt & Steam'],
+    names: ['Wo Kee / Dai Pai Dong', 'Hoi Sum / Night Kitchen', 'Kam Fook / Street Tables', 'Man Lee / Wok & Steam'],
     score: (citizen, cell, cells) => traitScore(citizen, ['sociable', 'ambitious', 'industrious']) + occupationScore(citizen, ['Cook']) + waterEdges(cell, cells),
     available: (citizens, businesses) => citizens.some((citizen) => citizen.occupation === 'Fisher') && businesses.some((business) => business.type === 'fishmonger'),
     automatic: false,
@@ -113,7 +113,7 @@ const RECIPES: readonly BusinessRecipe[] = [
   {
     type: 'tea-house',
     population: 11,
-    names: ['Quiet Kettle', 'Three Leaves', 'Cloud Tea House', 'The Last Cup'],
+    names: ['Yat Wo / Tea House', 'Three Leaves / Old Tea Room', 'Cloud Pavilion / Tea', 'Man Heung / Quiet Kettle'],
     score: (citizen, cell) => traitScore(citizen, ['patient', 'quiet', 'artistic']) + occupationScore(citizen, ['Tea keeper', 'Caretaker']) + (cell.height >= 2 ? 2 : 0),
   },
   {
@@ -144,7 +144,7 @@ const RECIPES: readonly BusinessRecipe[] = [
   {
     type: 'shipyard',
     population: 16,
-    names: ['Red Keel Yard', 'Little Tides Shipwright', 'Spar & Peg', 'Harbor Bones'],
+    names: ['Tai Shing / Marine Yard', 'Little Tides / Shipwright', 'East Pier / Boat Works', 'Hoi Cheong / Slipway'],
     score: (citizen, cell, cells) => traitScore(citizen, ['industrious', 'adventurous', 'patient']) + occupationScore(citizen, ['Artisan', 'Cartographer']) + waterEdges(cell, cells) * 1.8,
     available: (_citizens, businesses) => businesses.some((business) => business.type === 'workshop'),
   },

@@ -128,7 +128,10 @@ export class PostPipeline {
     const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
     // A soft edge darkening, the way a phone lens falls off toward the corners.
     const vignette = new VignetteEffect({ offset: .28, darkness: .42 });
-    this.effectPass = new EffectPass(camera, this.exposure, this.bloom, toneMapping, this.lift, vignette);
+    const baseEffects: Effect[] = quality.tier === 'low'
+      ? [this.exposure, toneMapping, this.lift, vignette]
+      : [this.exposure, this.bloom, toneMapping, this.lift, vignette];
+    this.effectPass = new EffectPass(camera, ...baseEffects);
     this.composer.addPass(this.effectPass);
     this.effectPassWithDepthOfField = this.depthOfField
       ? new EffectPass(camera, this.exposure, this.bloom, this.depthOfField, toneMapping, this.lift, vignette)

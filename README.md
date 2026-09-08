@@ -1,6 +1,6 @@
 # Little Tides
 
-Little Tides is a harbor-building sandbox about architecture and the lives that collect around it. Click the water to raise a home. Add floors or build next door, and the town redraws roofs, walls, paths, and waterfront details around your changes.
+Little Tides is a harbor-building sandbox set in a tiny fictional city unmistakably shaped by Hong Kong. Steep green hills hold a crowded harbor of pale tong-lau-inspired blocks, tiled shopfronts, rooftop life, ferries, working boats, and rain-dark stone. Click the water to raise a home. Add floors or build next door, and the town redraws balconies, roofs, paths, and waterfront details around your changes.
 
 **[Play Little Tides](https://szabadkai.github.io/puzzle-city/)**
 
@@ -18,19 +18,19 @@ After you discover four living places, the Atlas opens a third layer with seven 
 
 Every reachable home gets a named resident. Taller homes can hold small households with children or elders. Residents walk the actual quays, bridges, courtyards, and rooftops. They keep schedules, make friends, choose favorite shops, and stop for conversations or meals. Click one to see where they live, what they like, and where they are going. One full day takes about eight minutes.
 
-As the population rises, residents open bakeries, cafes, workshops, inns, and other businesses on accessible ground floors. Seventeen production steps connect the working harbor. Fish and herbs come from town. Merchant boats bring grain, timber, clay, and fiber to a dock. Workers carry those supplies to shops, and finished export crates leave the real inventory when the merchant sails away.
+As the population rises, residents open egg-tart bakeries, cha chaan teng-inspired cafés, wet-market fish stalls, dai pai dong-inspired restaurants, tea houses, upstairs guesthouses, workshops, and other businesses on accessible ground floors. Projecting signs, corrugated shutters, tiled bases, window grilles, milk-tea booths, and evening tables make the trades readable in the street. Seventeen production steps connect the working harbor. Fish and herbs come from town. Merchant boats bring grain, timber, clay, and fiber beneath striped tarps, and finished export crates leave the real inventory when the merchant sails away.
 
 Recent customers and successful production make prosperity visible. Comfortable shops set extra goods outside, flourishing shops raise a pennant, and customers carry parcels home. When several trades flourish together, a fair-weather market opens every few days at a harbor plaza or along an arcade. Its stalls pack away again that afternoon, and quiet shops gradually lose their extra displays.
 
 The journal records 72 one-time observations and six daily habits. Its stories cover architecture, work, weather, friendships, wildlife, and a traveler who arrives late in the game. The Harbor Lanterns are a separate architectural mastery goal. Each lantern lights as the player completes its Confluence requirements through construction; already-complete layouts can be claimed from the journal. Build Festival Crown as the seventh and final Confluence, then choose when to begin the gathering. Days, weather, visitors, observation chores, and unattended simulation do not advance this goal. The sandbox stays open afterward.
 
-The harbor keeps changing between discoveries. Trees mature over several simulated days. Foot traffic wears paths smooth. Rain brings in laundry and sends animals under cover. Boats follow the shoreline, cats gather near fishmongers and inns, and fish prefer sheltered water. The game saves the simulation clock when you close it, so nothing advances while you are away.
+The harbor keeps changing between discoveries. Trees mature over several simulated days. Foot traffic wears paths smooth. Frequent short showers bring in laundry, close evening tables, raise the storm signal in hard weather, and call ferries home early without damaging the town. Cream-and-green double-deck ferries and sampan-like boats follow the shoreline, black kites turn above the waterfront, pink Chinese white dolphins occasionally cross the outer water, and cats gather near fishmongers and guesthouses. Dragon boats and a bun-tower gathering keep their own rare seeded calendars rather than appearing as everyday decoration. The game saves the simulation clock when you close it, so nothing advances while you are away.
 
 You can save the current town as a PNG postcard. The image also contains the save data, so Little Tides can load the town from the picture later. The same panel can export the visible buildings as a printable STL model.
 
 Photo mode (the camera button, or `F`) pauses the town, hides the interface, and frames the view at 9:16, 4:5, or 16:9. It can change the hour, the weather, the depth of field, and the palette for the picture only. From there you can save a postcard with a wordmark, record the last 5, 10, or 15 seconds as an MP4 clip, render a timelapse of how the town grew, copy a share link, or send the file to the system share sheet. A share link carries the whole town in the URL, so anyone who opens it gets the same harbor.
 
-Five colour palettes (Harbour Morning, Nordic, Dusk Pastel, Lantern Night, Monsoon) recolour walls, roofs, stone, water, and sky. The Palette button in the top menu cycles through them, and the choice is saved with the town.
+Every new town uses the same Hong Kong-inspired building language and grounded harbor palette: cream, pale green, faded pink, turquoise, weathered concrete, dark green paint, amber interiors, and black rain-darkened stone. Photo mode keeps alternate color treatments as camera filters; they do not change the town's identity.
 
 ## Controls
 

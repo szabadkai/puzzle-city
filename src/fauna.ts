@@ -30,8 +30,8 @@ type ObservableWildlife = 'fish' | 'crab' | 'cat' | 'turtle' | 'whale' | 'dolphi
 
 type GullActor = {
   model: THREE.Group;
-  leftWing: THREE.Object3D;
-  rightWing: THREE.Object3D;
+  leftWing: THREE.Group;
+  rightWing: THREE.Group;
   phase: number;
   mode: 'flying' | 'feeding' | 'perching' | 'scattering';
 };
@@ -106,6 +106,15 @@ const TURTLE_SCALE = .72;
 function parseCellKey(cellKey: string) {
   const [x, z] = cellKey.split(',').map(Number);
   return { x, z };
+}
+
+function flatBirdGeometry(points: readonly (readonly [number, number, number])[], indices: readonly number[]) {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(points.flat(), 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(points.flatMap(([x, , z]) => [x, z]), 2));
+  geometry.setIndex([...indices]);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 /** Collapse the rigid pieces of one small actor without disturbing animated parts. */
@@ -462,9 +471,9 @@ export class FaunaSystem {
         note: 'Its long pectoral fins and wide flukes carry it through the deep water beyond the harbor walls.',
       },
       dolphins: {
-        title: 'Dolphin pod', ageLabel: 'Playful visitors',
-        detail: 'Three dolphins arc through the swell in a loose traveling pod.',
-        note: 'The leader rises first and the others follow around the town\'s shoreline.',
+        title: 'Chinese white dolphins', ageLabel: 'Rare pink visitors',
+        detail: 'Three pale pink dolphins arc through the green harbor water in a loose traveling pod.',
+        note: 'Their warm coloring becomes clearest when they surface in the late light.',
       },
       squids: {
         title: 'Drifting jellyfish', ageLabel: 'Below the surface',
@@ -606,7 +615,8 @@ export class FaunaSystem {
 
   private createAmbientBirds() {
     const material = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-    const colors = [0xb8c6c1, 0xd8d9ce, 0x9fafaD].map((color) => new THREE.Color(color));
+    const colors = [0x1f2928, 0x2e3530, 0x151c1b].map((color) => new THREE.Color(color));
+    this.ambientBirds.userData.species = 'black kites';
     const wingGeometry = new THREE.BufferGeometry();
     wingGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
       0, 0, .065,
@@ -672,30 +682,54 @@ export class FaunaSystem {
   }
 
   private createGulls() {
-    const white = new THREE.MeshStandardMaterial({ color: 0xe9e5d8, roughness: .88 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x3f5154, roughness: .92 });
+    const white = new THREE.MeshStandardMaterial({ color: 0xeeeade, roughness: .9, side: THREE.DoubleSide });
+    const wingtip = new THREE.MeshStandardMaterial({ color: 0x566064, roughness: .94, side: THREE.DoubleSide });
+    const beakMaterial = new THREE.MeshStandardMaterial({ color: 0xd99b48, roughness: .86 });
+    const mainWingGeometry = flatBirdGeometry([
+      [0, 0, .1], [.13, .012, .105], [.37, .006, .035],
+      [.36, -.002, -.115], [.17, .004, -.09], [.025, 0, -.055],
+    ], [0, 1, 2, 0, 2, 4, 0, 4, 5, 2, 3, 4]);
+    const wingtipGeometry = flatBirdGeometry([
+      [.36, .006, .035], [.5, -.004, -.065], [.43, -.008, -.16], [.36, -.002, -.115],
+    ], [0, 1, 2, 0, 2, 3]);
+    const tailGeometry = flatBirdGeometry([
+      [-.07, .002, -.11], [-.018, .002, -.29], [0, .002, -.225],
+      [.07, .002, -.11], [0, .002, -.225], [.018, .002, -.29],
+    ], [0, 1, 2, 3, 4, 5]);
+    const bodies: THREE.Group[] = [];
+    const wings: THREE.Group[] = [];
     for (let index = 0; index < 6; index++) {
       const model = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.SphereGeometry(.11, 7, 5), white);
-      body.scale.set(.75, .7, 1.55);
-      const head = new THREE.Mesh(new THREE.SphereGeometry(.075, 7, 5), white);
-      head.position.set(0, .055, .16);
-      const beak = new THREE.Mesh(new THREE.ConeGeometry(.025, .1, 5), dark);
+      const body = new THREE.Mesh(new THREE.SphereGeometry(.105, 9, 6), white);
+      body.scale.set(.68, .61, 1.6);
+      body.rotation.x = -.06;
+      const head = new THREE.Mesh(new THREE.SphereGeometry(.068, 8, 6), white);
+      head.position.set(0, .058, .155);
+      const beak = new THREE.Mesh(new THREE.ConeGeometry(.019, .09, 5), beakMaterial);
       beak.rotation.x = Math.PI / 2;
-      beak.position.set(0, .045, .25);
-      const wingGeometry = new THREE.BoxGeometry(.28, .018, .09);
-      const leftWing = new THREE.Mesh(wingGeometry, white);
-      const rightWing = new THREE.Mesh(wingGeometry, white);
-      leftWing.position.x = -.17;
-      rightWing.position.x = .17;
-      model.add(body, head, beak, leftWing, rightWing);
-      consolidateActor(model, new Set([leftWing, rightWing]));
+      beak.position.set(0, .052, .242);
+      const tail = new THREE.Mesh(tailGeometry, white);
+      const leftWing = new THREE.Group();
+      const rightWing = new THREE.Group();
+      leftWing.name = 'gull-left-wing';
+      rightWing.name = 'gull-right-wing';
+      leftWing.scale.x = -1;
+      for (const wing of [leftWing, rightWing]) {
+        wing.position.set(0, .035, .005);
+        wing.add(new THREE.Mesh(mainWingGeometry, white), new THREE.Mesh(wingtipGeometry, wingtip));
+        model.add(wing);
+        wings.push(wing);
+      }
+      model.add(body, head, beak, tail);
+      consolidateActor(model);
       model.scale.setScalar(.78);
       model.position.copy(this.townCenter).setY(4 + index * .12);
       this.gullRoot.add(model);
+      bodies.push(model);
       this.gulls.push({ model, leftWing, rightWing, phase: hash(this.seed, index, 0, 2301) * Math.PI * 2, mode: 'flying' });
     }
-    this.createActorInstances(this.gullRoot, this.gulls.map((gull) => gull.model));
+    this.createActorInstances(this.gullRoot, bodies);
+    this.createActorInstances(this.gullRoot, wings);
   }
 
   private createFishSchools() {
@@ -1138,9 +1172,9 @@ export class FaunaSystem {
     const pod = new THREE.Group();
     pod.name = 'dolphin-pod';
     pod.userData.wildlifeObservation = 'dolphins' satisfies ObservableWildlife;
-    const blue = new THREE.MeshStandardMaterial({ color: 0x56828a, roughness: .76, side: THREE.DoubleSide });
-    const pale = new THREE.MeshStandardMaterial({ color: 0xa8bbb2, roughness: .86 });
-    const detail = new THREE.MeshStandardMaterial({ color: 0x173d43, roughness: .82 });
+    const blue = new THREE.MeshStandardMaterial({ color: 0xc9858f, roughness: .76, side: THREE.DoubleSide });
+    const pale = new THREE.MeshStandardMaterial({ color: 0xe6b1b2, roughness: .86 });
+    const detail = new THREE.MeshStandardMaterial({ color: 0x563e43, roughness: .82 });
     const dolphinActors: THREE.Group[] = [];
     const dorsalShape = new THREE.Shape();
     dorsalShape.moveTo(-.12, 0);
@@ -1488,10 +1522,18 @@ export class FaunaSystem {
       const dz = desired.z - gull.model.position.z;
       if (Math.abs(dx) + Math.abs(dz) > .01) gull.model.rotation.y = Math.atan2(dx, dz);
       gull.model.position.lerp(desired, gull.mode === 'scattering' ? .085 : .045);
-      const flap = gull.mode === 'flying' || gull.mode === 'scattering' ? Math.sin(time * 7.5 + gull.phase) * .7 : .08;
-      gull.leftWing.rotation.z = flap;
-      gull.rightWing.rotation.z = -flap;
-      gull.model.rotation.x = gull.mode === 'feeding' ? -.32 + Math.sin(time * 4 + index) * .18 : 0;
+      const airborne = gull.mode === 'flying' || gull.mode === 'scattering';
+      const effort = gull.mode === 'scattering'
+        ? 1
+        : THREE.MathUtils.smoothstep(Math.sin(time * .48 + gull.phase), -.15, .55);
+      const flap = airborne ? .06 + Math.sin(time * 5.1 + gull.phase) * (.1 + effort * .48) : .025;
+      const fold = airborne ? 0 : gull.mode === 'feeding' ? 1.04 : 1.18;
+      gull.leftWing.rotation.z = THREE.MathUtils.lerp(gull.leftWing.rotation.z, -flap, .18);
+      gull.rightWing.rotation.z = THREE.MathUtils.lerp(gull.rightWing.rotation.z, flap, .18);
+      gull.leftWing.rotation.y = THREE.MathUtils.lerp(gull.leftWing.rotation.y, -fold, .12);
+      gull.rightWing.rotation.y = THREE.MathUtils.lerp(gull.rightWing.rotation.y, fold, .12);
+      gull.model.rotation.x = gull.mode === 'feeding' ? -.28 + Math.sin(time * 4 + index) * .14 : -.025;
+      gull.model.rotation.z = airborne ? Math.sin(time * .31 + gull.phase) * .11 : 0;
       if (timeOfDay >= 22 || timeOfDay < 5) gull.model.scale.setScalar(.72);
       else gull.model.scale.setScalar(.78);
     }

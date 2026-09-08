@@ -24,7 +24,10 @@ export const QUALITY_SETTINGS: Record<QualityTier, QualitySettings> = {
     maxPixelRatio: 1,
     shadowCascades: 1,
     shadowMapSize: 1024,
-    aoScale: .25,
+    // The low tier favors stable play over screen-space effects. Direct light,
+    // fog, and the material palette retain the miniature depth without an
+    // extra full-scene AO pass on constrained GPUs.
+    aoScale: 0,
     reflection: 'sky',
     particleScale: .3,
     depthOfField: false,

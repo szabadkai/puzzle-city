@@ -52,6 +52,7 @@ import { PALETTE_SLOT, PaletteSystem } from './palette';
 import { installPresentationShading, presentationUniforms, setShadowCascadeCount } from './shading';
 import { createAtmosphereState, evaluateAtmosphere } from './atmosphere';
 import { SkyDome } from './sky';
+import { HarborBackdrop } from './harbor-backdrop';
 import { PostPipeline } from './postfx';
 import { CameraDirector } from './camera-director';
 import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER, WaterSurface } from './water-surface';
@@ -91,7 +92,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
           <button id="music-toggle" aria-label="Turn music off" aria-pressed="true"><span>Music</span><span class="music-state" aria-hidden="true">♫</span></button>
           <button id="ui-hide" aria-label="Hide the interface for a screenshot"><span class="desktop-hide-label">Hide UI</span><span class="mobile-hide-label" aria-hidden="true">◫</span></button>
-          <button id="palette-cycle" aria-label="Change the town palette"><span class="desktop-palette-label">Palette</span><span class="mobile-palette-label" aria-hidden="true">◐</span></button>
           <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
           <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
           <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
@@ -228,9 +228,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="about-scrim" id="about-scrim" aria-hidden="true">
       <section class="about-panel" role="dialog" aria-modal="true" aria-labelledby="about-title">
         <button class="about-close" id="about-close" aria-label="Close About">×</button>
-        <span class="about-kicker">A town from the sea</span>
+        <span class="about-kicker">A city between hills and tide</span>
         <h2 id="about-title">Little Tides</h2>
-        <p>Build homes on the water. Residents move in, open shops, and leave stories.</p>
+        <p>Build a tiny fictional Hong Kong harbor between green hills and busy water. Residents move in, open street-level shops, and carry life onto the roofs.</p>
         <section class="about-controls" aria-labelledby="about-controls-title">
           <h3 id="about-controls-title">How to play</h3>
           <dl>
@@ -325,6 +325,8 @@ const sceneFog = new THREE.FogExp2(0x91c7c1, .0135);
 scene.fog = sceneFog;
 const skyDome = new SkyDome();
 scene.add(skyDome.mesh);
+const harborBackdrop = new HarborBackdrop(seed);
+scene.add(harborBackdrop.root);
 const atmosphere = createAtmosphereState();
 
 const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, .1, 300);
@@ -858,7 +860,7 @@ function hideMemoryCard() {
 
 function build(x: number, z: number) {
   if (photo.active) return;
-  if (!city.place(x, z, day * 24 + timeOfDay)) {
+  if (!city.place(x, z, day * 24 + timeOfDay, true)) {
     showToast(city.get(x, z) ? 'That tower is tall enough.' : 'The water is too deep to build there.');
     softTone(150, .05);
     return;
@@ -883,7 +885,7 @@ function build(x: number, z: number) {
 
 function demolish(x: number, z: number) {
   if (photo.active) return;
-  if (!city.remove(x, z, day * 24 + timeOfDay)) return;
+  if (!city.remove(x, z, day * 24 + timeOfDay, true)) return;
   recordBuildAction(x, z, city.get(x, z)?.height ?? 0);
   hideMemoryCard();
   citizens.rebuild(city.cells);
@@ -2473,11 +2475,6 @@ function setUiHidden(hidden: boolean) {
 }
 document.querySelector('#ui-hide')!.addEventListener('click', () => setUiHidden(true));
 document.querySelector('#ui-restore')!.addEventListener('click', () => setUiHidden(false));
-document.querySelector('#palette-cycle')!.addEventListener('click', () => {
-  const next = palette.next();
-  showToast(`Palette: ${next.title}.`);
-  persistSoon();
-});
 document.querySelector('#touch-center')!.addEventListener('click', () => {
   centerView();
   showToast('The harbor drifts back into view.');
@@ -2758,8 +2755,23 @@ window.addEventListener('keydown', (event) => {
   // Browser shortcuts such as Cmd+F or Ctrl+P must never trigger game hotkeys.
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key.toLowerCase() === 'p') {
-    document.querySelector('#perf-panel')!.classList.toggle('show');
+    const panel = document.querySelector<HTMLElement>('#perf-panel')!;
+    const showing = !panel.classList.contains('show');
+    panel.classList.toggle('show', showing);
     document.querySelector('#shadow-tuning')!.classList.toggle('show');
+    if (showing) {
+      // Screenshot capture and shader warm-up can stall requestAnimationFrame.
+      // Begin the overlay from a clean sample window so it reports the live
+      // town, not old navigation or capture pauses.
+      frameTimeEma = 16.7;
+      for (const key of Object.keys(performanceCosts) as Array<keyof typeof performanceCosts>) performanceCosts[key] = 0;
+      performanceUpdate = 0;
+      // Discovery commits can rebuild a large town. Give the profiler a short
+      // clean window so its frame budget reflects steady play rather than an
+      // unlock that happened to land during the sample.
+      discoveryCheckElapsed = -2;
+      ignoreNextPerformanceSample = true;
+    }
   }
   if (event.key.toLowerCase() === 'j') setJournalOpen(!document.querySelector('#journal-scrim')!.classList.contains('show'));
   if (event.key.toLowerCase() === 'h') setUiHidden(!document.body.classList.contains('ui-hidden'));
@@ -3362,6 +3374,7 @@ function updateAtmosphere(time: number, deltaSeconds: number) {
   moon.intensity = atmosphere.moonIntensity;
   moon.position.copy(atmosphere.moonDirection).multiplyScalar(40);
   skyDome.update(atmosphere, camera.position, time);
+  harborBackdrop.update(atmosphere);
   pipeline!.setExposure(atmosphere.exposure * (1 + skyDome.flash * .35));
   pipeline!.focusOn(controls.target);
   // Cascades follow the camera, so shadows re-render whenever the view or the

@@ -59,13 +59,16 @@ export function catColonyAt(foundedAt: number | undefined, absoluteHours: number
 export function weatherAt(seed: number, absoluteHours: number): WeatherState {
   const dayIndex = Math.floor(absoluteHours / 24);
   const localHour = ((absoluteHours % 24) + 24) % 24;
-  const hasRain = hash(seed, dayIndex, 0, 8800) > .56;
-  const startsAt = 7 + hash(seed, dayIndex, 1, 8801) * 10;
-  const duration = 2.5 + hash(seed, dayIndex, 2, 8802) * 3.5;
+  // Humid harbor weather favors quick showers; truly hard rain stays rare.
+  const hasRain = hash(seed, dayIndex, 0, 8800) > .31;
+  const startsAt = 6.5 + hash(seed, dayIndex, 1, 8801) * 12;
+  const duration = 1.15 + hash(seed, dayIndex, 2, 8802) * 2.35;
   const endsAt = Math.min(23, startsAt + duration);
   if (!hasRain || localHour < startsAt || localHour >= endsAt) return { raining: false, intensity: 0, dayIndex, startsAt, endsAt };
   const phase = (localHour - startsAt) / Math.max(.01, endsAt - startsAt);
-  const intensity = Math.sin(phase * Math.PI) * (.55 + hash(seed, dayIndex, 3, 8803) * .45);
+  const stormDay = hash(seed, dayIndex, 4, 8804) > .9;
+  const peak = stormDay ? .86 + hash(seed, dayIndex, 3, 8803) * .14 : .42 + hash(seed, dayIndex, 3, 8803) * .34;
+  const intensity = Math.sin(phase * Math.PI) * peak;
   return { raining: intensity > .03, intensity, dayIndex, startsAt, endsAt };
 }
 

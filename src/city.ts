@@ -53,6 +53,8 @@ const FLOOR = FLOOR_HEIGHT;
 const FOUNDATION_TOP_Y = .34;
 const DEFAULT_SLOT_COLORS = paletteSlotColors(PALETTES[0]);
 const WALL_SLOT_COUNT = PALETTE_SLOT.wallCount;
+const CANOPY_STRIPE_GAP = .006;
+const STATIC_BATCH_SETTLE_DELAY_MS = 750;
 
 type FacadeLayer = 'opening' | 'composition' | 'equipment';
 type FacadeBounds = Readonly<{ sideMin: number; sideMax: number; yMin: number; yMax: number }>;
@@ -301,6 +303,7 @@ export class CityRenderer {
   readonly cells = new Map<string, Cell>();
   private readonly pieces = new Map<string, THREE.Group>();
   private readonly staticBatchRoot = new THREE.Group();
+  private staticBatchRebuildTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly businesses = new Map<string, BusinessSave>();
   private readonly facadeLayouts = new WeakMap<THREE.Group, FacadeDecorationLayout>();
   private readonly discoveries = new Set<string>();
@@ -388,15 +391,17 @@ export class CityRenderer {
   private materialDetail = true;
   private readonly wetTint = new THREE.Color(0x355c5b);
   private discoveryGlow: { mesh: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>; startedAt: number } | null = null;
-  private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
+  private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe9dfc4, roughness: .94 });
   private readonly stone = new THREE.MeshStandardMaterial({ color: this.stoneBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .045, roughness: 1, roughnessMap: this.stoneTexture });
   private readonly stoneDark = new THREE.MeshStandardMaterial({ color: this.stoneDarkBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
   private readonly window = useWindowStagger(useFlicker(new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 }), .035));
-  private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
+  private readonly dark = new THREE.MeshStandardMaterial({ color: 0x292f2d, roughness: .9 });
   private readonly green = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 }));
   private readonly leaf = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 }));
   private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
+  private readonly greenTile = new THREE.MeshStandardMaterial({ color: 0x397568, roughness: .72 });
+  private readonly bamboo = new THREE.MeshStandardMaterial({ color: 0x9b7441, roughness: 1 });
   private readonly warmLight = useFlicker(new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 }), .08);
   /** Earned Harbor Lanterns outshine every other light at night. */
   private readonly harborLanternLight = useFlicker(new THREE.MeshStandardMaterial({ color: 0xffe2a0, emissive: 0xffb050, emissiveIntensity: 2.2 }), .06);
@@ -465,15 +470,16 @@ export class CityRenderer {
     this.businesses.clear();
     for (const business of businesses) this.businesses.set(business.cellKey, { ...business });
     const affected = new Set([...previous.keys(), ...this.businesses.keys()]);
+    const changed: string[] = [];
     for (const key of affected) {
       const before = previous.get(key);
       const after = this.businesses.get(key);
       if (before?.type === after?.type
         && before?.name === after?.name
         && (before?.prosperityTier ?? 0) === (after?.prosperityTier ?? 0)) continue;
-      const [x, z] = key.split(',').map(Number);
-      this.rebuildPiece(x, z);
+      changed.push(key);
     }
+    this.rebuildPieces(changed);
     this.syncHarborLanterns();
     this.syncNightLights();
   }
@@ -544,7 +550,7 @@ export class CityRenderer {
       }
       if (this.get(x, z) || this.shouldBuildEmptyAt(x, z)) this.buildAt(x, z, animateNew && added.has(key));
     }
-    this.rebuildGlobalStaticBatch();
+    this.finishStaticBatchMutation();
     this.syncHarborLanterns();
     this.syncNightLights();
   }
@@ -572,7 +578,7 @@ export class CityRenderer {
       }
       if (this.get(x, z) || this.shouldBuildEmptyAt(x, z)) this.buildAt(x, z, animateNew && added.has(key));
     }
-    this.rebuildGlobalStaticBatch();
+    this.finishStaticBatchMutation();
     this.syncHarborLanterns();
     this.syncNightLights();
   }
@@ -672,7 +678,7 @@ export class CityRenderer {
     return Math.hypot(x, z) <= 8.8;
   }
 
-  place(x: number, z: number, absoluteHours = 0) {
+  place(x: number, z: number, absoluteHours = 0, deferStaticBatch = false) {
     const key = keyOf(x, z);
     const existing = this.cells.get(key);
     if (!existing && !this.isBuildable(x, z)) return false;
@@ -690,7 +696,7 @@ export class CityRenderer {
         renovatedAt: absoluteHours,
       });
     }
-    this.rebuildAround(x, z);
+    this.rebuildAround(x, z, deferStaticBatch);
     this.syncHarborLanterns();
     this.syncNightLights();
     return true;
@@ -707,7 +713,7 @@ export class CityRenderer {
     return preferred;
   }
 
-  remove(x: number, z: number, absoluteHours = 0) {
+  remove(x: number, z: number, absoluteHours = 0, deferStaticBatch = false) {
     const cell = this.get(x, z);
     if (!cell) return false;
     if (cell.height > 1) {
@@ -717,7 +723,7 @@ export class CityRenderer {
     } else {
       this.cells.delete(keyOf(x, z));
     }
-    this.rebuildAround(x, z);
+    this.rebuildAround(x, z, deferStaticBatch);
     this.syncHarborLanterns();
     this.syncNightLights();
     return true;
@@ -732,6 +738,7 @@ export class CityRenderer {
     const retractTarget = this.rainIntensity < .08 ? 0 : .96;
     presentationUniforms.uClothRetract.value += (retractTarget - presentationUniforms.uClothRetract.value) * Math.min(1, deltaSeconds * 1.6);
     presentationUniforms.uSimHours.value = absoluteHours;
+    const hour = ((absoluteHours % 24) + 24) % 24;
     let staticBatchChanged = false;
     if (this.discoveryGlow) {
       const age = (performance.now() - this.discoveryGlow.startedAt) / 1000;
@@ -754,13 +761,31 @@ export class CityRenderer {
         const age = Math.min(1, (performance.now() - startedAt) / 430);
         const eased = 1 - Math.pow(1 - age, 3);
         group.scale.y = .04 + eased * .96;
+        const scaffold = group.userData.constructionScaffold as THREE.Object3D | undefined;
+        if (scaffold) scaffold.visible = age < .94;
         if (age >= 1) {
+          if (scaffold) {
+            group.remove(scaffold);
+            dispose(scaffold);
+            delete group.userData.constructionScaffold;
+          }
           if (cell) cell.placedAt = 0;
           delete group.userData.morphStartedAt;
           staticBatchChanged = true;
         }
       } else {
         group.scale.y = 1;
+      }
+
+      const outdoorFurniture = group.userData.dryEveningFurniture as THREE.Object3D[] | undefined;
+      if (outdoorFurniture) {
+        const shown = hour >= 17 && hour < 23 && this.rainIntensity < .3;
+        for (const object of outdoorFurniture) {
+          if (object.userData.scheduleVisible === shown) continue;
+          object.userData.scheduleVisible = shown;
+          object.visible = shown;
+          staticBatchChanged = true;
+        }
       }
 
       const plotBornAt = group.userData.vegetationPlotBornAt as number | undefined;
@@ -779,8 +804,14 @@ export class CityRenderer {
       const timeNest = group.userData.timeNest as THREE.Object3D | undefined;
       if (timeNest) {
         const nesting = ageInHours(group.userData.foundedAt as number | undefined, absoluteHours) >= 72 && this.rainIntensity < .35;
-        if (timeNest.visible !== nesting) {
+        if (timeNest.userData.scheduleVisible !== nesting) {
+          timeNest.userData.scheduleVisible = nesting;
           timeNest.visible = nesting;
+          timeNest.traverse((object) => {
+            if (!(object instanceof THREE.Mesh)) return;
+            object.userData.scheduleVisible = nesting;
+            object.visible = nesting;
+          });
           staticBatchChanged = true;
         }
       }
@@ -791,7 +822,6 @@ export class CityRenderer {
       if (body) body.rotation.z = Math.sin(time * 1.35 + index * 1.7) * (.025 + this.rainIntensity * .035);
     }
     const smokeActive = this.smokeGeometry.getAttribute('aActive') as THREE.BufferAttribute | undefined;
-    const hour = ((absoluteHours % 24) + 24) % 24;
     let activeSmoke = 0;
     if (smokeActive) {
       let changed = false;
@@ -806,7 +836,7 @@ export class CityRenderer {
       if (changed) smokeActive.needsUpdate = true;
     }
     this.smokePoints.visible = activeSmoke > 0;
-    if (staticBatchChanged) this.rebuildGlobalStaticBatch();
+    if (staticBatchChanged) this.finishStaticBatchMutation();
   }
 
   setDaylight(daylight: number) {
@@ -837,6 +867,18 @@ export class CityRenderer {
     this.wallVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .14);
     this.roofVertexMaterial.roughness = .82 - this.rainIntensity * .34;
     this.roofVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .2);
+    for (const group of this.pieces.values()) {
+      const stormSignal = group.userData.stormSignal as THREE.Object3D | undefined;
+      if (stormSignal) {
+        const shown = this.rainIntensity > .65;
+        stormSignal.visible = shown;
+        stormSignal.traverse((object) => {
+          if (!(object instanceof THREE.Mesh)) return;
+          object.userData.scheduleVisible = shown;
+          object.visible = shown;
+        });
+      }
+    }
   }
 
   /** Palette colours for the quay stone and trim. Walls and roofs read the palette texture directly. */
@@ -1004,10 +1046,10 @@ export class CityRenderer {
     for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
       if (!this.get(x, z) && this.shouldBuildEmptyAt(x, z)) this.buildAt(x, z);
     }
-    this.rebuildGlobalStaticBatch();
+    this.finishStaticBatchMutation();
   }
 
-  private rebuildAround(x: number, z: number) {
+  private rebuildAround(x: number, z: number, deferStaticBatch = false) {
     this.clearGlobalStaticBatch();
     for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
       const px = x + dx;
@@ -1025,23 +1067,27 @@ export class CityRenderer {
       // houses appear to collapse and gain a level at random.
       if (this.get(px, pz) || this.shouldBuildEmptyAt(px, pz)) this.buildAt(px, pz, px === x && pz === z);
     }
-    this.rebuildGlobalStaticBatch();
+    this.finishStaticBatchMutation(deferStaticBatch);
   }
 
-  private rebuildPiece(x: number, z: number) {
+  private rebuildPieces(keys: Iterable<string>) {
+    const affected = [...new Set(keys)];
+    if (!affected.length) return;
     this.clearGlobalStaticBatch();
-    const key = keyOf(x, z);
-    const old = this.pieces.get(key);
-    if (old) {
-      this.root.remove(old);
-      dispose(old);
-      this.pieces.delete(key);
+    for (const key of affected) {
+      const [x, z] = key.split(',').map(Number);
+      const old = this.pieces.get(key);
+      if (old) {
+        this.root.remove(old);
+        dispose(old);
+        this.pieces.delete(key);
+      }
+      // Business and wear changes replace the mesh without changing its height.
+      // Keep the established building at full scale instead of replaying the
+      // construction animation whenever that background state changes.
+      if (this.get(x, z) || this.shouldBuildEmptyAt(x, z)) this.buildAt(x, z);
     }
-    // Business and wear changes replace the mesh without changing its height.
-    // Keep the established building at full scale instead of replaying the
-    // construction animation whenever that background state changes.
-    if (this.get(x, z) || this.shouldBuildEmptyAt(x, z)) this.buildAt(x, z);
-    this.rebuildGlobalStaticBatch();
+    this.finishStaticBatchMutation();
   }
 
   private buildAt(x: number, z: number, animate = false) {
@@ -1057,6 +1103,7 @@ export class CityRenderer {
     if (cell) this.buildCell(group, cell);
     else this.buildFeature(group, x, z);
     this.consolidateStaticMeshes(group);
+    if (animate && cell) this.addConstructionScaffold(group, cell);
     group.traverse((object) => this.markReflective(object));
     this.root.add(group);
     this.pieces.set(keyOf(x, z), group);
@@ -1201,10 +1248,13 @@ export class CityRenderer {
   }
 
   private clearGlobalStaticBatch() {
+    // The first change in an edit session already restored every source mesh.
+    // Follow-up formation/business changes should not traverse the town again.
+    if (!this.staticBatchRoot.children.length) return;
     for (const piece of this.pieces.values()) {
       piece.traverse((child) => {
         if (child.userData.hiddenByStaticBatch) {
-          child.visible = true;
+          child.visible = child.userData.scheduleVisible ?? true;
           delete child.userData.hiddenByStaticBatch;
         }
       });
@@ -1221,6 +1271,10 @@ export class CityRenderer {
    * the town grows. Pieces still animating their construction stay separate.
    */
   private rebuildGlobalStaticBatch() {
+    if (this.staticBatchRebuildTimer !== null) {
+      clearTimeout(this.staticBatchRebuildTimer);
+      this.staticBatchRebuildTimer = null;
+    }
     this.clearGlobalStaticBatch();
     const buckets = new Map<string, THREE.Mesh[]>();
     for (const group of this.pieces.values()) {
@@ -1261,6 +1315,23 @@ export class CityRenderer {
       }
     }
     this.syncSmokeSources();
+  }
+
+  /**
+   * During interactive edits, keep the per-piece meshes live and coalesce all
+   * resulting visual changes into one town-wide merge after input settles.
+   */
+  private finishStaticBatchMutation(defer = this.staticBatchRebuildTimer !== null) {
+    if (!defer) {
+      this.rebuildGlobalStaticBatch();
+      return;
+    }
+    this.syncSmokeSources();
+    if (this.staticBatchRebuildTimer !== null) clearTimeout(this.staticBatchRebuildTimer);
+    this.staticBatchRebuildTimer = setTimeout(() => {
+      this.staticBatchRebuildTimer = null;
+      this.rebuildGlobalStaticBatch();
+    }, STATIC_BATCH_SETTLE_DELAY_MS);
   }
 
   private syncSmokeSources() {
@@ -1384,7 +1455,8 @@ export class CityRenderer {
       }
     }
     const balconyPlanned = !clockFaceDirections.has(primaryFacadeDirection)
-      && ((count === 2 && this.isCorner(neighborHeights)) || (cell.height >= 2 && count <= 1))
+      && cell.height >= 2
+      && ((count === 2 && this.isCorner(neighborHeights)) || count <= 1 || hash(this.seed, cell.x, cell.z, 1412) > .28)
       && this.reserveFacadeDecoration(group, primaryFacadeDirection, 'balcony', 'composition', {
         sideMin: -.78, sideMax: .78, yMin: topY - .78, yMax: topY - .24,
       });
@@ -1431,8 +1503,9 @@ export class CityRenderer {
     }
 
     const isolated = count <= 1;
-    if (cell.height >= 3 && isolated) {
-      const hasArchiveCrown = Boolean(this.confluenceAt(cell.x, cell.z, 'harbor-archive'));
+    const hasArchiveCrown = Boolean(this.confluenceAt(cell.x, cell.z, 'harbor-archive'));
+    if (cell.height >= 3 && isolated && hasArchiveCrown) group.userData.archiveReplacesTowerRoof = true;
+    if (cell.height >= 3 && isolated && hash(this.seed, cell.x, cell.z, 1418) > .68) {
       // The archive is a replacement crown, not another room balanced on top
       // of the lookout's pitched roof. Keeping both roofs was what produced
       // the intersecting, top-heavy silhouette.
@@ -1455,13 +1528,17 @@ export class CityRenderer {
         else if (this.discoveries.has('gulls-return') && CARDINALS.some(([dx, dz]) => this.businesses.get(keyOf(cell.x + dx, cell.z + dz))?.type === 'bakery')) {
           const nest = this.addBirdNest(group, topY + 1.42);
           nest.visible = false;
+          nest.userData.scheduleVisible = false;
+          nest.traverse((object) => {
+            if (!(object instanceof THREE.Mesh)) return;
+            object.visible = false;
+            object.userData.scheduleVisible = false;
+          });
           group.userData.timeNest = nest;
         }
-      } else {
-        group.userData.archiveReplacesTowerRoof = true;
       }
-      if (clockFaceDirections.size) this.addClockFaces(group, [...clockFaceDirections], topY - .43);
-    } else if (!courtAnchor && !terrace && arcade !== 'roof promenade' && count <= 2 && diagonalCount < 3) {
+    } else if (!courtAnchor && !terrace && arcade !== 'roof promenade' && cell.height <= 2 && count <= 2 && diagonalCount < 3
+      && hash(this.seed, cell.x, cell.z, 1419) > .25) {
       const style = pick(HOUSE_ROOF_STYLES, hash(this.seed, cell.x, cell.z, 2610));
       group.userData.houseStyle = style;
       const hip = style === 'hip';
@@ -1493,7 +1570,20 @@ export class CityRenderer {
         || this.confluenceAt(cell.x, cell.z, 'banner-house');
       if (!signatureRoof && !receivesTerrace && (count === 4 || (count >= 2 && diagonalCount >= 3))) this.addRoofGarden(group, topY + .2, cell);
       else if (!signatureRoof && !receivesTerrace && cell.height >= 2 && hash(this.seed, cell.x, cell.z, 146) > .5) this.addWaterTank(group, topY + .18);
+      group.userData.flatTongLauRoof = true;
     }
+
+    if (cell.height >= 3 && isolated && !group.userData.hasPitchedTowerRoof && !this.confluenceAt(cell.x, cell.z, 'harbor-archive')) {
+      this.addRooftopAerial(group, topY);
+      if (!this.landmarkAt(cell.x, cell.z, 'signal-beacon')
+        && !this.confluenceAt(cell.x, cell.z, 'observatory-beacon')) this.addFlag(group, topY + 1.2);
+      if (this.discoveries.has('tower-bell')) {
+        const bellDirection = ([0, 1, 2, 3] as Direction[]).find((dir) => !clockFaceDirections.has(dir)) ?? 2;
+        this.addTowerBell(group, topY + .05, bellDirection);
+      }
+      if (this.discoveries.has('birds-nest')) this.addBirdNest(group, topY + .88);
+    }
+    if (cell.height >= 3 && isolated && clockFaceDirections.size) this.addClockFaces(group, [...clockFaceDirections], topY - .43);
 
     if (courtAnchor && courtFeature && courtAnchor.x === cell.x && courtAnchor.z === cell.z) {
       if (this.landmarkAt(cell.x, cell.z, 'roof-hall')) this.addRoofHall(group, topY);
@@ -1508,6 +1598,7 @@ export class CityRenderer {
       const accessDirection = roofAccessDirection(cell, this.cells, this.seed);
       if (accessDirection !== null) this.addRoofAccess(group, topY, accessDirection);
     }
+    if (group.userData.flatTongLauRoof && !receivesTerrace) this.addTongLauRoofLife(group, cell, topY);
     if (balconyPlanned) this.addBalcony(group, cell, topY);
     if (!receivesTerrace && this.discoveries.has('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
     if (festivalRibbonsPlanned) this.addFestivalRibbon(group, cell, topY);
@@ -1572,6 +1663,7 @@ export class CityRenderer {
     const [px, pz] = this.edgePosition(dir, CELL * .507);
     if (level === 0) (group.userData.domesticGroundFacadeDirections ??= []).push(dir);
     const doorOffset = isDoor ? doorLateralOffset(neighborCount) : 0;
+    if (level === 0) this.addGroundFloorTiles(group, dir, px, pz, lateral, isDoor);
     if (isDoor) {
       const doorX = px + lateral.x * doorOffset;
       const doorZ = pz + lateral.z * doorOffset;
@@ -1608,14 +1700,48 @@ export class CityRenderer {
       windowMesh.position.set(px + lateral.x * offset, y, pz + lateral.z * offset);
       windowMesh.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       group.add(windowMesh);
+      this.addWindowGrille(group, dir, px + lateral.x * offset, pz + lateral.z * offset, y);
       const sill = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .09 : .5, .06, dir % 2 ? .5 : .09), this.cream), false);
       sill.position.set(px + lateral.x * offset, y - .29, pz + lateral.z * offset);
       group.add(sill);
     }
-    if (level > 0 && hash(this.seed, cell.x, cell.z, 810 + dir * 11 + level) > .77) {
+    if (level > 0 && hash(this.seed, cell.x, cell.z, 810 + dir * 11 + level) > .58) {
       this.addAirConditioner(group, cell, dir, level, lateral, px, pz, y - .2);
     }
-    if (level === 0 && hash(this.seed, cell.x, cell.z, 850 + dir) > .8) this.addPipe(group, cell, dir, lateral, px, pz);
+    if (level === 0 && hash(this.seed, cell.x, cell.z, 850 + dir) > .52) this.addPipe(group, cell, dir, lateral, px, pz);
+  }
+
+  private addGroundFloorTiles(group: THREE.Group, dir: Direction, px: number, pz: number, lateral: THREE.Vector3, leavesDoorClear: boolean) {
+    const [dx, dz] = CARDINALS[dir];
+    const panels = leavesDoorClear ? [[-.7, .55], [.7, .55]] as const : [[0, 1.92]] as const;
+    for (const [side, width] of panels) {
+      const panel = shadow(this.orientedBox(width, .54, .035, dir, this.greenTile), false);
+      panel.position.set(px + dx * .026 + lateral.x * side, .61, pz + dz * .026 + lateral.z * side);
+      group.add(panel);
+    }
+    for (let row = 0; row < 3; row++) {
+      const joint = shadow(this.orientedBox(1.94, .018, .044, dir, this.cream), false);
+      joint.position.set(px + dx * .052, .36 + row * .26, pz + dz * .052);
+      group.add(joint);
+    }
+    for (const side of [-.48, 0, .48]) {
+      const joint = shadow(this.orientedBox(.018, .54, .044, dir, this.cream), false);
+      joint.position.set(px + dx * .052 + lateral.x * side, .61, pz + dz * .052 + lateral.z * side);
+      group.add(joint);
+    }
+  }
+
+  private addWindowGrille(group: THREE.Group, dir: Direction, x: number, z: number, y: number) {
+    const [dx, dz] = CARDINALS[dir];
+    const lateral = new THREE.Vector3(dz, 0, -dx);
+    for (const side of [-.12, .12]) {
+      const bar = shadow(this.orientedBox(.022, .49, .025, dir, this.metal), false);
+      bar.position.set(x + dx * .055 + lateral.x * side, y, z + dz * .055 + lateral.z * side);
+      group.add(bar);
+    }
+    const crossbar = shadow(this.orientedBox(.4, .022, .025, dir, this.metal), false);
+    crossbar.position.set(x + dx * .057, y, z + dz * .057);
+    group.add(crossbar);
   }
 
   private addAwning(group: THREE.Group, cell: Cell, dir: Direction, lateral: THREE.Vector3, px: number, pz: number, side: number) {
@@ -1626,9 +1752,11 @@ export class CityRenderer {
     const colors = [0xb5463e, 0x3f7770, 0xd08b3e];
     const awningColor = pick(colors, hash(this.seed, cell.x, cell.z, 690 + dir));
     const awningMaterial = this.cachedMaterial(this.colorMaterials, awningColor, .9);
+    const stripeStep = .21;
+    const stripeWidth = stripeStep - CANOPY_STRIPE_GAP;
     for (let i = 0; i < 5; i++) {
-      const strip = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .42 : .24, .08, dir % 2 ? .24 : .42), i % 2 ? this.cream : awningMaterial), false);
-      const offset = (i - 2) * .21;
+      const strip = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .42 : stripeWidth, .08, dir % 2 ? stripeWidth : .42), i % 2 ? this.cream : awningMaterial), false);
+      const offset = (i - 2) * stripeStep;
       strip.position.set(px + dx * .21 + lateral.x * offset, 1.25, pz + dz * .21 + lateral.z * offset);
       strip.rotation.set(...facadeCanopyPitch(dir, .13));
       strip.name = `residential-awning-${i}`;
@@ -1713,6 +1841,28 @@ export class CityRenderer {
     group.userData.businessPosterOutward = posterOutward;
   }
 
+  private addProjectingBusinessSign(group: THREE.Group, business: BusinessSave, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, color: number) {
+    const label = business.name.split('/')[0].trim().split(/\s+/).slice(0, 2).map((word) => word[0]).join('').toUpperCase();
+    const { material, tile } = this.signMaterial(label, color);
+    const side = .9;
+    const outward = 1.46;
+    const arm = shadow(this.orientedBox(.42, .035, .035, dir, this.metal), false);
+    this.detailPosition(arm, dx, dz, lateral, side, 1.34, 1.52);
+    group.add(arm);
+    const backing = shadow(this.orientedBox(.045, .98, .46, dir, this.dark), false);
+    this.detailPosition(backing, dx, dz, lateral, side, outward, 1.04);
+    group.add(backing);
+    for (const face of [-1, 1]) {
+      const sign = shadow(new THREE.Mesh(this.signGeometry(tile, .4, .9), material), false);
+      this.detailPosition(sign, dx, dz, lateral, side + face * .027, outward, 1.04);
+      sign.rotation.y = dir % 2 ? 0 : Math.PI / 2;
+      if (face < 0) sign.rotation.y += Math.PI;
+      sign.name = `projecting-sign-${business.type}-${face > 0 ? 'front' : 'back'}`;
+      group.add(sign);
+    }
+    group.userData.projectingBusinessSign = business.type;
+  }
+
   private addBusinessFacade(group: THREE.Group, cell: Cell, business: BusinessSave) {
     const dir = this.doorDirection(cell);
     const [dx, dz] = CARDINALS[dir];
@@ -1755,6 +1905,7 @@ export class CityRenderer {
     if (business.type === 'shipyard') this.addShipyardDetails(group, dir, dx, dz, lateral, accent);
     if ((business.prosperityTier ?? 0) > 0) this.addProsperousBusinessDetails(group, cell, business, dir, dx, dz, lateral, accent);
     this.addBusinessPoster(group, dir, dx, dz, lateral, business.type, colors[business.type]);
+    this.addProjectingBusinessSign(group, business, dir, dx, dz, lateral, colors[business.type]);
   }
 
   private addProsperousBusinessDetails(
@@ -1876,8 +2027,9 @@ export class CityRenderer {
     switch (type) {
       case 'bakery': {
         // A low striped bread awning with a warm open display.
+        const stripeStep = .235;
         for (let index = 0; index < 7; index++) {
-          const strip = addBox(.235, .105, .62, index % 2 ? this.cream : accent, (index - 3) * .235, 1.4, 1.42);
+          const strip = addBox(stripeStep - CANOPY_STRIPE_GAP, .105, .62, index % 2 ? this.cream : accent, (index - 3) * stripeStep, 1.4, 1.42);
           strip.rotation.set(...facadeCanopyPitch(dir, .12));
         }
         addBox(1.5, .12, .12, this.wood, 0, 1.27, 1.1);
@@ -1930,14 +2082,13 @@ export class CityRenderer {
         break;
       }
       case 'restaurant': {
-        // A red portal and paired lanterns frame the evening entrance.
+        // A metal-framed dai pai dong frontage glows beneath practical bulbs.
         addPostPair(accent, .88, 1.42, 1.3);
         addBox(1.94, .18, .15, accent, 0, 1.3, 1.58);
-        for (const side of [-.55, .55]) {
-          const lantern = new THREE.Mesh(new THREE.SphereGeometry(.13, 10, 7), this.warmLight);
-          lantern.scale.y = 1.45;
-          this.detailPosition(lantern, dx, dz, lateral, side, 1.39, 1.3);
-          group.add(lantern);
+        for (const side of [-.62, 0, .62]) {
+          const bulb = new THREE.Mesh(new THREE.SphereGeometry(.065, 8, 6), this.warmLight);
+          this.detailPosition(bulb, dx, dz, lateral, side, 1.41, 1.38);
+          group.add(bulb);
         }
         break;
       }
@@ -2014,12 +2165,13 @@ export class CityRenderer {
     const shelf = this.orientedBox(.72, .38, .24, dir, this.wood);
     this.detailPosition(shelf, dx, dz, lateral, .72, 1.38, .32);
     group.add(shelf);
-    for (let i = 0; i < 3; i++) {
-      const bread = new THREE.Mesh(new THREE.CapsuleGeometry(.055, .13, 2, 6), this.cream);
-      this.detailPosition(bread, dx, dz, lateral, .5 + i * .2, 1.43, .57);
-      bread.rotation.z = Math.PI / 2;
-      bread.rotation.y = dir % 2 ? Math.PI / 2 : 0;
-      group.add(bread);
+    for (let i = 0; i < 4; i++) {
+      const pastry = i < 2
+        ? new THREE.Mesh(new THREE.CylinderGeometry(.075, .075, .035, 10), accent)
+        : new THREE.Mesh(new THREE.SphereGeometry(.075, 7, 5), this.cream);
+      this.detailPosition(pastry, dx, dz, lateral, .46 + i * .18, 1.43, .55);
+      pastry.name = i < 2 ? `egg-tart-${i}` : `pineapple-bun-${i - 2}`;
+      group.add(pastry);
     }
     const basket = new THREE.Mesh(new THREE.CylinderGeometry(.16, .13, .18, 8), accent);
     this.detailPosition(basket, dx, dz, lateral, -.68, 1.39, .2);
@@ -2028,15 +2180,18 @@ export class CityRenderer {
 
   private addCafeDetails(group: THREE.Group, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
     for (const side of [-.72, .72]) {
-      const table = new THREE.Mesh(new THREE.CylinderGeometry(.22, .25, .08, 10), accent);
+      const table = new THREE.Mesh(new THREE.BoxGeometry(.42, .07, .3), accent);
       this.detailPosition(table, dx, dz, lateral, side, 1.48, .38);
       group.add(table);
       const stem = new THREE.Mesh(new THREE.CylinderGeometry(.035, .05, .34, 7), this.metal);
       this.detailPosition(stem, dx, dz, lateral, side, 1.48, .19);
       group.add(stem);
-      const cup = new THREE.Mesh(new THREE.CylinderGeometry(.045, .04, .08, 8), this.cream);
-      this.detailPosition(cup, dx, dz, lateral, side, 1.48, .47);
-      group.add(cup);
+      const milkTea = new THREE.Mesh(new THREE.CylinderGeometry(.045, .04, .11, 8), this.cachedMaterial(this.colorMaterials, 0xb46f3e, .6));
+      milkTea.name = 'milk-tea-glass';
+      this.detailPosition(milkTea, dx, dz, lateral, side, 1.48, .49);
+      const booth = new THREE.Mesh(new RoundedBoxGeometry(.5, .42, .22, 1, .05), side < 0 ? this.greenTile : this.cream);
+      this.detailPosition(booth, dx, dz, lateral, side, 1.24, .32);
+      group.add(milkTea, booth);
     }
   }
 
@@ -2063,6 +2218,12 @@ export class CityRenderer {
   }
 
   private addWorkshopDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (let index = 0; index < 7; index++) {
+      const slat = this.orientedBox(.035, .82, .035, dir, index % 2 ? this.metal : accent);
+      this.detailPosition(slat, dx, dz, lateral, -.66 + index * .22, 1.26, .86);
+      slat.name = `corrugated-workshop-shutter-${index}`;
+      group.add(slat);
+    }
     for (let i = 0; i < 2; i++) {
       const crate = this.orientedBox(.34 + i * .08, .32, .31, dir, i ? accent : this.wood);
       this.detailPosition(crate, dx, dz, lateral, .5, 1.38, .18 + i * .3);
@@ -2103,14 +2264,27 @@ export class CityRenderer {
   }
 
   private addRestaurantDetails(group: THREE.Group, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    const timed: THREE.Object3D[] = [];
     for (const side of [-.45, .45]) {
       const table = new THREE.Mesh(new THREE.CylinderGeometry(.24, .27, .1, 10), this.wood);
+      table.name = 'dai-pai-dong-table';
       this.detailPosition(table, dx, dz, lateral, side, 1.55, .36);
       const bowl = new THREE.Mesh(new THREE.TorusGeometry(.075, .025, 5, 10), accent);
+      bowl.name = 'dai-pai-dong-bowl';
       this.detailPosition(bowl, dx, dz, lateral, side, 1.55, .46);
       bowl.rotation.x = Math.PI / 2;
       group.add(table, bowl);
+      timed.push(table, bowl);
+      for (const chairSide of [-.2, .2]) {
+        const chair = new THREE.Mesh(new RoundedBoxGeometry(.18, .28, .18, 1, .035), this.greenTile);
+        chair.name = 'dai-pai-dong-chair';
+        this.detailPosition(chair, dx, dz, lateral, side + chairSide, 1.76, .2);
+        group.add(chair);
+        timed.push(chair);
+      }
     }
+    for (const object of timed) object.userData.scheduleVisible = true;
+    group.userData.dryEveningFurniture = timed;
   }
 
   private addTeaHouseDetails(group: THREE.Group, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
@@ -2174,6 +2348,12 @@ export class CityRenderer {
   }
 
   private addShipyardDetails(group: THREE.Group, dir: Direction, dx: number, dz: number, lateral: THREE.Vector3, accent: THREE.Material) {
+    for (let index = 0; index < 6; index++) {
+      const slat = this.orientedBox(.045, .7, .04, dir, index % 2 ? this.metal : accent);
+      this.detailPosition(slat, dx, dz, lateral, -.6 + index * .24, 1.25, .86);
+      slat.name = `corrugated-shipyard-shutter-${index}`;
+      group.add(slat);
+    }
     for (const side of [-.52, 0, .52]) {
       const rib = new THREE.Mesh(new THREE.TorusGeometry(.28, .035, 5, 10, Math.PI), side === 0 ? accent : this.wood);
       this.detailPosition(rib, dx, dz, lateral, side, 1.46, .35);
@@ -2428,6 +2608,123 @@ export class CityRenderer {
       leg.position.set(x, y + .1, -.25);
       group.add(leg);
     }
+  }
+
+  private addRooftopAerial(group: THREE.Group, y: number) {
+    const mast = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.018, .025, 1.28, 6), this.metal), false);
+    mast.position.set(-.34, y + .74, .31);
+    const crossbar = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.012, .012, .72, 5), this.metal), false);
+    crossbar.position.set(-.34, y + 1.17, .31);
+    crossbar.rotation.z = Math.PI / 2;
+    group.add(mast, crossbar);
+    for (let index = 0; index < 4; index++) {
+      const element = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.007, .007, .36, 4), this.metal), false);
+      element.position.set(-.6 + index * .18, y + 1.17, .31);
+      element.rotation.x = Math.PI / 2;
+      group.add(element);
+    }
+    group.userData.rooftopAerial = true;
+  }
+
+  private addTongLauRoofLife(group: THREE.Group, cell: Cell, y: number) {
+    const roll = hash(this.seed, cell.x, cell.z, 1420);
+    if (!group.userData.rooftopAerial && roll > .22) this.addRooftopAerial(group, y);
+
+    if (roll < .66) {
+      const table = shadow(new THREE.Mesh(new THREE.BoxGeometry(.52, .08, .52), this.greenTile), false);
+      table.name = 'rooftop-mahjong-table';
+      table.position.set(.38, y + .4, .32);
+      const stem = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.035, .045, .34, 6), this.metal), false);
+      stem.position.set(.38, y + .22, .32);
+      group.add(table, stem);
+      for (const [index, [x, z]] of [[.38, -.02], [.38, .66], [.04, .32], [.72, .32]].entries()) {
+        const chair = shadow(new THREE.Mesh(new RoundedBoxGeometry(.22, .3, .22, 1, .04), index % 2 ? this.cream : this.metal), false);
+        chair.name = `rooftop-folding-chair-${index}`;
+        chair.position.set(x, y + .23, z);
+        group.add(chair);
+      }
+    } else {
+      const pot = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.17, .14, .24, 8), this.cream), false);
+      pot.position.set(.46, y + .3, .35);
+      const trunk = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.025, .035, .42, 6), this.wood), false);
+      trunk.position.set(.46, y + .57, .35);
+      const crown = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.25, 1), this.green), false);
+      crown.position.set(.46, y + .8, .35);
+      const fruit = new THREE.Mesh(new THREE.SphereGeometry(.04, 6, 4), this.cachedMaterial(this.colorMaterials, 0xe2a53b, .9));
+      fruit.position.set(.58, y + .78, .43);
+      group.add(pot, trunk, crown, fruit);
+    }
+
+    if (hash(this.seed, cell.x, cell.z, 1421) > .46) {
+      for (const x of [-.62, .62]) {
+        const pole = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.014, .018, .72, 5), this.metal), false);
+        pole.position.set(x, y + .52, -.55);
+        group.add(pole);
+      }
+      const line = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.008, .008, 1.24, 5), this.dark), false);
+      line.position.set(0, y + .82, -.55);
+      line.rotation.z = Math.PI / 2;
+      group.add(line);
+      const clothMaterial = this.cachedMaterial(this.colorMaterials, 0x4e7990, 1);
+      clothMaterial.side = THREE.DoubleSide;
+      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(.34, .28), clothMaterial);
+      cloth.name = 'laundry-rooftop-everyday';
+      cloth.position.set(.16, y + .66, -.54);
+      group.add(cloth);
+      (group.userData.laundry ??= []).push(cloth);
+    }
+    group.userData.everydayRooftopLife = true;
+  }
+
+  private addConstructionScaffold(group: THREE.Group, cell: Cell) {
+    const scaffold = new THREE.Group();
+    scaffold.name = 'bamboo-construction-scaffold';
+    scaffold.userData.nonPrintable = true;
+    const height = .38 + FLOOR * cell.height + .75;
+    const outward = CELL * .64;
+    // A tied bamboo cage wraps the whole building while it rises. Keeping it
+    // brown and structural distinguishes it from the green rooftop planting.
+    for (let dir = 0; dir < 4; dir++) {
+      const [dx, dz] = CARDINALS[dir];
+      const lateral = new THREE.Vector3(dz, 0, -dx);
+      for (const side of [-.94, -.32, .32, .94]) {
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(.025, .031, height, 6), this.bamboo);
+        pole.position.set(dx * outward + lateral.x * side, height / 2, dz * outward + lateral.z * side);
+        scaffold.add(pole);
+      }
+      for (let level = .48; level < height; level += .62) {
+        const rail = new THREE.Mesh(new THREE.CylinderGeometry(.018, .022, 2.05, 6), this.bamboo);
+        rail.position.set(dx * outward, level, dz * outward);
+        rail.rotation.z = Math.PI / 2;
+        rail.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+        scaffold.add(rail);
+      }
+      for (const side of [-.58, .58]) {
+        const brace = new THREE.Mesh(new THREE.CylinderGeometry(.013, .017, Math.hypot(height, 1.05), 5), this.bamboo);
+        brace.position.set(dx * (outward + .015) + lateral.x * side, height / 2, dz * (outward + .015) + lateral.z * side);
+        brace.rotation.z = side > 0 ? .35 : -.35;
+        brace.rotation.y = dir % 2 ? Math.PI / 2 : 0;
+        scaffold.add(brace);
+      }
+    }
+    // The full wrap is still one transient draw call.
+    scaffold.updateMatrixWorld(true);
+    const parts = scaffold.children
+      .filter((child): child is THREE.Mesh => child instanceof THREE.Mesh)
+      .map((mesh) => mesh.geometry.clone().applyMatrix4(mesh.matrix));
+    const merged = mergeGeometries(parts, false);
+    parts.forEach((part) => part.dispose());
+    scaffold.children.forEach((child) => {
+      if (child instanceof THREE.Mesh) child.geometry.dispose();
+    });
+    scaffold.clear();
+    if (merged) {
+      const wrap = shadow(new THREE.Mesh(merged, this.bamboo), false);
+      wrap.name = 'brown-bamboo-scaffold-wrap';
+      scaffold.add(wrap);
+    }
+    group.add(scaffold);
+    group.userData.constructionScaffold = scaffold;
   }
 
   private addRoofAccess(group: THREE.Group, y: number, dir: Direction) {
@@ -2782,7 +3079,18 @@ export class CityRenderer {
     }
     const beacon = new THREE.Mesh(new THREE.SphereGeometry(.14, 10, 8), this.warmLight);
     beacon.position.y = y + 1.92;
-    group.add(beacon);
+    const stormSignal = new THREE.Group();
+    stormSignal.name = 'raised-storm-signal';
+    stormSignal.visible = this.rainIntensity > .65;
+    for (const height of [1.05, 1.32]) {
+      const ball = shadow(new THREE.Mesh(new THREE.SphereGeometry(.105, 8, 6), this.dark), false);
+      ball.position.set(.48, y + height, .02);
+      ball.visible = stormSignal.visible;
+      ball.userData.scheduleVisible = stormSignal.visible;
+      stormSignal.add(ball);
+    }
+    group.add(beacon, stormSignal);
+    group.userData.stormSignal = stormSignal;
     group.userData.placeLandmark = 'signal-beacon';
   }
 

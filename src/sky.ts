@@ -92,6 +92,13 @@ export class SkyDome {
     this.mesh.userData.nonPrintable = true;
   }
 
+  /** Stars scatter into noise on the water, so the reflection pass hides them. */
+  setStarsVisible(visible: boolean) {
+    this.uniforms.uNight.value = visible ? this.nightForStars : 0;
+  }
+
+  private nightForStars = 0;
+
   update(atmosphere: AtmosphereState, cameraPosition: THREE.Vector3, time: number) {
     this.mesh.position.copy(cameraPosition);
     const uniforms = this.uniforms;
@@ -104,7 +111,8 @@ export class SkyDome {
     uniforms.uGlow.value = atmosphere.horizonGlow;
     uniforms.uMoonDirection.value.copy(atmosphere.moonDirection);
     uniforms.uMoonIntensity.value = atmosphere.moonIntensity;
-    uniforms.uNight.value = atmosphere.night * (1 - atmosphere.wetness);
+    this.nightForStars = atmosphere.night * (1 - atmosphere.wetness);
+    uniforms.uNight.value = this.nightForStars;
     uniforms.uTime.value = time;
   }
 }

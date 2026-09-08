@@ -4,7 +4,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type HarborLanternId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
 import { PALETTE_SLOT, PALETTES, paletteSlotColors } from './palette';
-import { paletteSlotColor, presentationUniforms, useClothSway, useFlicker, useFoliageSway, usePaletteLookup } from './shading';
+import { paletteSlotColor, presentationUniforms, useClothSway, useFlicker, useFoliageSway, usePaletteLookup, useWindowStagger } from './shading';
+import { WATER_LEVEL } from './water-surface';
 import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER } from './water-surface';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { facadeDirectionAt, plazaAnchorAt, type CardinalDirection as Direction } from './topology';
@@ -378,13 +379,25 @@ export class CityRenderer {
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
   private readonly stone = new THREE.MeshStandardMaterial({ color: this.stoneBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .045, roughness: 1, roughnessMap: this.stoneTexture });
   private readonly stoneDark = new THREE.MeshStandardMaterial({ color: this.stoneDarkBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
-  private readonly window = useFlicker(new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 }), .035);
+  private readonly window = useWindowStagger(useFlicker(new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 }), .035));
   private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
   private readonly green = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 }));
   private readonly leaf = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 }));
   private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
   private readonly warmLight = useFlicker(new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 }), .08);
+  /** Earned Harbor Lanterns outshine every other light at night. */
+  private readonly harborLanternLight = useFlicker(new THREE.MeshStandardMaterial({ color: 0xffe2a0, emissive: 0xffb050, emissiveIntensity: 2.2 }), .06);
+  private nightLightAnchors: THREE.Vector3[] = [];
+  private readonly lightPoolMaterial = new THREE.MeshBasicMaterial({
+    map: createGlowTexture(),
+    color: 0xffb45f,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  private readonly lightPools = new THREE.InstancedMesh(new THREE.PlaneGeometry(2.4, 2.4).rotateX(-Math.PI / 2), this.lightPoolMaterial, 96);
   private readonly flagMaterial = new THREE.MeshStandardMaterial({ color: DEFAULT_SLOT_COLORS[PALETTE_SLOT.trim], side: THREE.DoubleSide, roughness: .9 });
   private readonly featureWaterMaterial = new THREE.MeshStandardMaterial({ color: 0x69a7a3, roughness: .35 });
   private readonly blossom = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 }));
@@ -402,7 +415,11 @@ export class CityRenderer {
     this.smokePoints.name = 'town-smoke-points';
     this.smokePoints.frustumCulled = false;
     this.harborLanternRoot.name = 'earned-harbor-lanterns';
-    this.root.add(this.staticBatchRoot, this.harborLanternRoot, this.nightGlows, this.smokePoints);
+    this.lightPools.name = 'lantern-light-pools';
+    this.lightPools.count = 0;
+    this.lightPools.frustumCulled = false;
+    this.lightPools.renderOrder = 1;
+    this.root.add(this.staticBatchRoot, this.harborLanternRoot, this.nightGlows, this.smokePoints, this.lightPools);
   }
 
   static cellSize() { return CELL; }
@@ -786,6 +803,9 @@ export class CityRenderer {
     this.warmLight.emissiveIntensity = .4 + night * 3.8;
     this.nightGlowMaterial.opacity = Math.max(0, night * .72 - .08);
     this.nightGlows.visible = this.nightGlowCount > 0 && this.nightGlowMaterial.opacity > .01;
+    this.lightPoolMaterial.opacity = Math.max(0, night * .55 - .06);
+    this.lightPools.visible = this.lightPools.count > 0 && this.lightPoolMaterial.opacity > .01;
+    this.harborLanternLight.emissiveIntensity = 1.2 + night * 3.6;
     for (const group of this.pieces.values()) {
       const theatreLights = group.userData.theatreLights as THREE.PointLight[] | undefined;
       if (theatreLights) for (const [index, light] of theatreLights.entries()) {
@@ -1068,6 +1088,9 @@ export class CityRenderer {
       for (let index = 0; index < count; index++) data.set([pivot.x, pivot.y, pivot.z, w], index * 4);
     }
     mesh.geometry.setAttribute('aTreeGrowth', new THREE.Float32BufferAttribute(data, 4));
+    // Windows in one building light together, at a moment set by the cell.
+    const offset = mesh.material === this.window ? .1 + hash(this.seed, group.userData.cellX as number, group.userData.cellZ as number, 4410) * .8 : 0;
+    mesh.geometry.setAttribute('aLightOffset', new THREE.Float32BufferAttribute(new Float32Array(count).fill(offset), 1));
   }
 
   /** Washing hangs on the retract attribute: its top edge in world space, or a sentinel for flags and kites. */
@@ -3326,7 +3349,7 @@ export class CityRenderer {
     const merged = geometries.length ? mergeGeometries(geometries, false) : null;
     for (const geometry of geometries) geometry.dispose();
     if (merged) {
-      const batch = shadow(new THREE.Mesh(merged, this.warmLight), false);
+      const batch = shadow(new THREE.Mesh(merged, this.harborLanternLight), false);
       batch.name = 'earned-harbor-lantern-batch';
       batch.traverse((object) => {
         object.layers.enable(REFLECTION_LAYER);
@@ -3383,6 +3406,32 @@ export class CityRenderer {
     this.nightGlowGeometry.computeBoundingSphere();
     this.nightGlowCount = positions.length / 3;
     this.nightGlows.visible = this.nightGlowCount > 0 && this.nightGlowMaterial.opacity > .01;
+    this.nightLightAnchors = [];
+    for (let index = 0; index < positions.length; index += 3) this.nightLightAnchors.push(new THREE.Vector3(positions[index], positions[index + 1], positions[index + 2]));
+    this.syncLightPools();
+  }
+
+  /** World positions of every lit lantern and window cluster, for the point-light pool. */
+  lightAnchors(): readonly THREE.Vector3[] {
+    return this.nightLightAnchors;
+  }
+
+  /** A soft additive pool of light under each lantern, on the roof, quay, or water below it. */
+  private syncLightPools() {
+    const matrix = new THREE.Matrix4();
+    const count = Math.min(this.lightPools.instanceMatrix.count, this.nightLightAnchors.length);
+    for (let index = 0; index < count; index++) {
+      const anchor = this.nightLightAnchors[index];
+      const cell = this.get(Math.round(anchor.x / CELL), Math.round(anchor.z / CELL));
+      const roofTop = cell ? cell.height * FLOOR + .42 : -Infinity;
+      const surface = cell ? (anchor.y > roofTop ? roofTop + .02 : GROUND_WALK_Y + .03) : WATER_LEVEL + .03;
+      const size = .8 + Math.min(1.6, anchor.y - surface) * .45;
+      matrix.compose(new THREE.Vector3(anchor.x, surface, anchor.z), new THREE.Quaternion(), new THREE.Vector3(size, 1, size));
+      this.lightPools.setMatrixAt(index, matrix);
+    }
+    this.lightPools.count = count;
+    this.lightPools.instanceMatrix.needsUpdate = true;
+    this.lightPools.visible = count > 0 && this.lightPoolMaterial.opacity > .01;
   }
 
   private emptyFeature(x: number, z: number): string | null {

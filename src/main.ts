@@ -453,6 +453,31 @@ const shadowSettings = { bias: -.00018, normalBias: .028 };
 const moon = new THREE.DirectionalLight(0xa9ccf2, 0);
 moon.position.set(14, 18, -12);
 scene.add(moon);
+// A fixed pool of point lights follows the lanterns nearest the view. The count
+// never changes at runtime, so no material recompiles.
+const lanternLights = Array.from({ length: quality.pointLights }, () => {
+  const light = new THREE.PointLight(0xffb060, 0, 9, 2);
+  scene.add(light);
+  return light;
+});
+const lanternScratch = new THREE.Vector3();
+
+function updateLanternLights(night: number, warm: THREE.Color) {
+  if (!lanternLights.length) return;
+  const anchors = [...city.lightAnchors()]
+    .sort((a, b) => a.distanceToSquared(controls.target) - b.distanceToSquared(controls.target));
+  for (const [index, light] of lanternLights.entries()) {
+    const anchor = anchors[index];
+    if (!anchor || night < .02) {
+      light.intensity = 0;
+      continue;
+    }
+    lanternScratch.copy(anchor);
+    light.position.copy(lanternScratch);
+    light.color.copy(warm);
+    light.intensity = night * 5.5;
+  }
+}
 let pipeline: PostPipeline | null = null;
 
 type PhotoAspect = '9:16' | '4:5' | '16:9';
@@ -2875,7 +2900,9 @@ function renderFrameAt(width: number, height: number) {
   onboardingMarkers.visible = false;
   updateAtmosphere(clock.elapsedTime, 0);
   camera.updateMatrixWorld();
+  skyDome.setStarsVisible(false);
   water.renderReflection(renderer, scene, camera);
+  skyDome.setStarsVisible(true);
   pipeline!.render(0);
   hover.visible = wasHidden.hover;
   onboardingMarkers.visible = wasHidden.markers;
@@ -3365,6 +3392,11 @@ function animate() {
   const daylight = daylightAt(shownHour);
   updateWind(time);
   updateAtmosphere(time, rawDelta);
+  // Windows switch on across forty in-game minutes around dusk and off around dawn.
+  const duskOn = THREE.MathUtils.smoothstep(shownHour, 18.3, 19);
+  const dawnOff = 1 - THREE.MathUtils.smoothstep(shownHour, 5.6, 6.3);
+  presentationUniforms.uLightsOn.value = shownHour >= 12 ? duskOn : dawnOff;
+  updateLanternLights(atmosphere.night, palette.color(PALETTE_SLOT.trim));
   wakes.update();
   city.setWeather(shownRain);
   city.update(time, absoluteHours);
@@ -3487,7 +3519,9 @@ function animate() {
   camera.updateMatrixWorld();
   renderer.info.reset();
   gpuTimer.begin('reflection');
+  skyDome.setStarsVisible(false);
   water.renderReflection(renderer, scene, camera);
+  skyDome.setStarsVisible(true);
   gpuTimer.end();
   // WebGL's drawing buffer is not preserved by default. Keep presenting the
   // scene while a journal view is open so overlay recompositing cannot reveal

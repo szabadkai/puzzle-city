@@ -32,8 +32,8 @@ type Keyframe = Readonly<{ hour: number; kelvin: number; sun: number; exposure: 
 
 // Golden hour is the most saturated state, not the brightest.
 const KEYFRAMES: readonly Keyframe[] = [
-  { hour: 0, kelvin: 2500, sun: 0, exposure: .82, ambient: .62, fog: .0105, night: 1 },
-  { hour: 4.6, kelvin: 2500, sun: 0, exposure: .82, ambient: .62, fog: .0105, night: 1 },
+  { hour: 0, kelvin: 2500, sun: 0, exposure: .74, ambient: .4, fog: .0105, night: 1 },
+  { hour: 4.6, kelvin: 2500, sun: 0, exposure: .74, ambient: .4, fog: .0105, night: 1 },
   { hour: 5.6, kelvin: 2200, sun: .9, exposure: .9, ambient: .78, fog: .0125, night: .55 },
   { hour: 7, kelvin: 3800, sun: 3.2, exposure: 1, ambient: .9, fog: .0115, night: .08 },
   { hour: 12, kelvin: 5500, sun: 4, exposure: 1.02, ambient: 1, fog: .0082, night: 0 },
@@ -41,8 +41,8 @@ const KEYFRAMES: readonly Keyframe[] = [
   { hour: 17.5, kelvin: 3300, sun: 3.6, exposure: 1.08, ambient: .84, fog: .011, night: 0 },
   { hour: 18.6, kelvin: 2500, sun: 2.4, exposure: 1.02, ambient: .78, fog: .0135, night: .12 },
   { hour: 19.6, kelvin: 2200, sun: .5, exposure: .9, ambient: .68, fog: .0125, night: .6 },
-  { hour: 21, kelvin: 2500, sun: 0, exposure: .82, ambient: .62, fog: .0105, night: 1 },
-  { hour: 24, kelvin: 2500, sun: 0, exposure: .82, ambient: .62, fog: .0105, night: 1 },
+  { hour: 21, kelvin: 2500, sun: 0, exposure: .74, ambient: .4, fog: .0105, night: 1 },
+  { hour: 24, kelvin: 2500, sun: 0, exposure: .74, ambient: .4, fog: .0105, night: 1 },
 ];
 
 const NIGHT_ZENITH = new THREE.Color('#070c1f');
@@ -122,7 +122,10 @@ export function evaluateAtmosphere(hour: number, palette: PaletteSystem, rainInt
   const azimuth = THREE.MathUtils.degToRad(130.5) - (hour - 6) / 24 * Math.PI * 2;
   target.sunElevation = elevation;
   target.sunDirection.set(Math.cos(azimuth) * Math.cos(elevation), Math.sin(elevation), Math.sin(azimuth) * Math.cos(elevation)).normalize();
-  target.moonDirection.set(-target.sunDirection.x, Math.max(.35, -target.sunDirection.y * .6 + .4), -target.sunDirection.z).normalize();
+  // The moon hangs low ahead of the default view so its glitter path crosses the water toward the camera.
+  const moonAzimuth = THREE.MathUtils.degToRad(228);
+  const moonElevation = THREE.MathUtils.degToRad(26 + Math.sin(((hour + 6) % 24) / 24 * Math.PI) * 10);
+  target.moonDirection.set(Math.cos(moonAzimuth) * Math.cos(moonElevation), Math.sin(moonElevation), Math.sin(moonAzimuth) * Math.cos(moonElevation));
   target.night = keys.night;
   target.wetness = rain;
 

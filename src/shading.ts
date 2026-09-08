@@ -21,6 +21,8 @@ export const presentationUniforms = {
   uClothRetract: { value: 0 },
   /** Simulation clock in absolute hours. Trees grow against it in the vertex shader. */
   uSimHours: { value: 0 },
+  /** Fraction of homes that have switched their windows on, 0 by day and 1 at night. */
+  uLightsOn: { value: 0 },
 };
 
 /** Hours a planted tree takes to reach full size. Mirrors `TREE_MATURE_HOURS`. */
@@ -42,6 +44,12 @@ export function useClothSway<T extends THREE.Material>(material: T) {
 /** Marks foliage: the whole canopy leans gently with the wind in the vertex shader. */
 export function useFoliageSway<T extends THREE.Material>(material: T) {
   material.userData.foliage = true;
+  return material;
+}
+
+/** Marks window glass: each building switches on at its own moment around dusk. */
+export function useWindowStagger<T extends THREE.Material>(material: T) {
+  material.userData.windowStagger = true;
   return material;
 }
 
@@ -74,6 +82,9 @@ uniform vec2 uWind;
 uniform float uSimHours;
 // xyz: world pivot of a growing tree; w: birth hour + 1, negative for seats that appear late, 0 for no growth.
 attribute vec4 aTreeGrowth;
+// Per-building moment in the dusk ramp at which its windows light, 0 to 1.
+attribute float aLightOffset;
+varying float vLtLightOffset;
 #ifdef LT_CLOTH
 uniform float uClothRetract;
 attribute float aRetractTop;
@@ -89,6 +100,7 @@ const FOG_VERTEX = /* glsl */`
   #endif
   ltWorld = modelMatrix * ltWorld;
   vLtWorld = ltWorld.xyz;
+  vLtLightOffset = aLightOffset;
 }
 `;
 
@@ -147,6 +159,13 @@ uniform float uFogFloor;
 uniform float uFogHeightFalloff;
 uniform float uFogDesaturate;
 uniform float uTime;
+uniform float uLightsOn;
+varying float vLtLightOffset;
+`;
+
+const WINDOW_STAGGER = /* glsl */`
+#include <emissivemap_fragment>
+totalEmissiveRadiance *= smoothstep( vLtLightOffset - 0.04, vLtLightOffset + 0.04, uLightsOn ) * 0.94 + 0.06;
 `;
 
 const FLICKER = /* glsl */`
@@ -187,6 +206,7 @@ function injectPresentation(this: THREE.Material, shader: Shader) {
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <fog_pars_fragment>', FOG_PARS_FRAGMENT)
     .replace('#include <fog_fragment>', FOG_FRAGMENT);
+  if (this.userData.windowStagger) shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', WINDOW_STAGGER);
   const flicker = this.userData.flicker as number | undefined;
   if (flicker) {
     shader.fragmentShader = `#define LT_FLICKER ${flicker.toFixed(3)}\n${shader.fragmentShader}`.replace('#include <emissivemap_fragment>', FLICKER);
@@ -199,7 +219,7 @@ function injectPresentation(this: THREE.Material, shader: Shader) {
 }
 
 function presentationCacheKey(this: THREE.Material) {
-  return `little-tides:${this.userData.paletteLookup ? 'palette' : 'plain'}:csm${cascadeCount}:cloth${this.userData.cloth ? 1 : 0}:foliage${this.userData.foliage ? 1 : 0}:flicker${this.userData.flicker ?? 0}`;
+  return `little-tides:${this.userData.paletteLookup ? 'palette' : 'plain'}:csm${cascadeCount}:cloth${this.userData.cloth ? 1 : 0}:foliage${this.userData.foliage ? 1 : 0}:flicker${this.userData.flicker ?? 0}:windows${this.userData.windowStagger ? 1 : 0}`;
 }
 
 /**

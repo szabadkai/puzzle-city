@@ -273,9 +273,12 @@ const FRAGMENT_SHADER = /* glsl */`
     vec3 halfSun = normalize(uSunDirection + viewDir);
     float sunSpec = pow(max(dot(normal, halfSun), 0.0), 260.0);
     color += uSunColor * sunSpec * uSunIntensity * 0.6 * step(0.0, uSunDirection.y);
+    // The moon path: a mask from the smooth swell keeps the sparkle in a lane toward the moon.
     vec3 halfMoon = normalize(uMoonDirection + viewDir);
-    float moonSpec = pow(max(dot(normal, halfMoon), 0.0), 140.0);
-    color += vec3(0.75, 0.82, 1.0) * moonSpec * uMoonIntensity * 0.9;
+    vec3 swellNormal = normalize(vec3(-a.x * 0.35, 1.0, -a.y * 0.35));
+    float moonLane = pow(max(dot(swellNormal, halfMoon), 0.0), 60.0);
+    float moonSpec = pow(max(dot(normal, halfMoon), 0.0), 300.0) * moonLane;
+    color += vec3(0.75, 0.82, 1.0) * moonSpec * uMoonIntensity * 0.5;
 
     float foamNoise = texture2D(uNoise, uv * 0.8 + vec2(uTime * 0.05, -uTime * 0.04)).r;
     float wavePhase = sin(uTime * 1.4 + foamNoise * 6.2832 + shoreDistance * 4.0) * 0.5 + 0.5;

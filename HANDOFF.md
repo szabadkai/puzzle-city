@@ -57,9 +57,25 @@ The visual direction is a warm, fictional old East Asian harbor: layered tiled e
 
 Façade decoration is coordinated through per-wall occupancy claims in `CityRenderer`. Large authored compositions reserve first, ordinary openings can sit behind a deliberate balcony, and opportunistic equipment must find a collision-free edge slot or disappear; keep new wall-mounted decoration inside that planner rather than placing it independently.
 
+## Presentation and capture layer
+
+The renderer was rebuilt around a post-processing pipeline so every default frame reads as a phone video. Presentation and capture stay separate from gameplay, formation logic, and simulation rules.
+
+- `src/quality.ts` detects a low, mid, or high tier from the GPU string and the first measured frames, persists it, and times GPU passes with `EXT_disjoint_timer_query_webgl2`. `window.__perf` publishes the frame report. WebGL context loss restores the renderer.
+- `src/palette.ts` and `src/palettes/*.json` hold five palettes in a one-row float texture. Wall and roof vertices carry a palette slot; the shader looks the colour up, so a palette switch updates 32 texels and blends over 0.8 s. New buildings never repeat a cardinal neighbour's wall colour.
+- `src/shading.ts` installs one `onBeforeCompile` hook on `MeshStandardMaterial` for every material in the scene: palette lookup, cascaded shadow defines, height-weighted fog, cloth and foliage sway, GPU tree growth, staggered window lighting, flicker, and wet surfaces. Shared uniforms live in `presentationUniforms`.
+- `src/atmosphere.ts` keyframes sun colour temperature, sun intensity, sky, fog, ambient, exposure, and weather against the simulation clock. `src/sky.ts` draws the gradient dome with sun, moon, and stars. `src/postfx.ts` runs N8AO, bloom, exposure, ACES tone mapping, a black lift with saturation, and optional depth of field through `postprocessing`.
+- `src/water-surface.ts` renders the water with layered wave normals, a shoreline distance field for foam and shallows, a mirrored-camera reflection (buildings, lights, and sky; emissive and sky only on low tier), sun and moon glitter, and rain ripples. `src/wakes.ts` and `src/rain.ts` are instanced particle systems.
+- `src/camera-director.ts` drifts the camera after six idle seconds, follows a tapped resident, and damps every move frame-rate independently.
+- `src/capture.ts` composes stills with a wordmark, shares or downloads files, and records clips through WebCodecs into a ring buffer (MP4, or WebM without H.264) with a MediaRecorder fallback. Photo mode in `main.ts` letterboxes the canvas to the export aspect, overrides hour, weather, depth of field, and palette for the picture only, and renders the timelapse offline from the build history stored in the save. `src/share-code.ts` deflates a town into a `#t=` URL fragment.
+- `CityRenderer` merges every mesh under a settled piece into one mesh per material for the whole town, cloth included. Trees grow in the vertex shader from a per-vertex pivot and birth hour, so the batch never rebuilds for growth. A 122-building town draws in about 68 main calls.
+
+Known gaps against the visual spec: the automated compression re-encode needs `ffmpeg`, which the capture test does not install; clips recorded through WebCodecs carry no audio track (the MediaRecorder fallback captures the synthesized cues); the point-light budget applies to lantern anchors only; and there is no per-building recolour tool, so the palette swatch rule has nothing to constrain yet.
+
 ## Code map
 
-- `src/main.ts` — application shell, Three.js scene, render loop, input, camera, water, ambience, day/night cycle, persistence, UI, and adaptive performance governor.
+- `src/main.ts` — application shell, Three.js scene, render loop, input, photo mode, ambience, day/night cycle, persistence, UI, and adaptive performance governor.
+- `src/quality.ts`, `src/palette.ts`, `src/shading.ts`, `src/atmosphere.ts`, `src/sky.ts`, `src/postfx.ts`, `src/water-surface.ts`, `src/wakes.ts`, `src/rain.ts`, `src/camera-director.ts`, `src/capture.ts`, `src/share-code.ts` — the presentation and capture layer described above.
 - `src/city.ts` — sparse cell model, procedural architecture/storefront generation, local topology rebuilds, and static geometry batching.
 - `src/citizens.ts` — navigation graph, A* routing, resident lifecycle, routines, relationships, business visits, and citizen rendering.
 - `src/businesses.ts` — business recipes, emergence thresholds, scoring, opening hours, ownership, and validity maintenance.
@@ -90,7 +106,8 @@ The town is stored in `localStorage` under `little-tides-town-v1`. The current p
 - discovered stable event IDs, illustrated journal entries, and recurring-event cooldown timestamps.
 - crafting stocks, completed production steps, and the production cursor.
 - remembered formation, living-place, and Confluence IDs, earned lantern IDs, First/Second Tide introduction state, and the currently followed clue.
-- the optional living-place origin of businesses founded inside an active neighborhood footprint.
+- the optional living-place origin of businesses founded inside an active neighborhood footprint;
+- the active palette id and the ordered build history that the timelapse replays.
 
 Save compatibility is not a product constraint while the game is in development. The loader accepts only the current schema, and future system changes may deliberately start a fresh town instead of carrying migration code. The in-game **New tide** action clears the existing local save.
 

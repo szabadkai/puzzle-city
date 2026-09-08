@@ -5,6 +5,62 @@ import { townProsperityLevel } from './businesses';
 import { detectFormations } from './formations';
 import { placeLandmarkSocket, type PlaceIdentityOccurrence } from './place-identities';
 import { hash } from './random';
+
+const CLOUD_COUNT = 11;
+const CLOUD_ALTITUDE = 13;
+const DAY_CLOUD = new THREE.Color(0xfff7ec);
+const NIGHT_CLOUD = new THREE.Color(0x4a566b);
+const DUSK_CLOUD = new THREE.Color(0xffb98d);
+const RAIN_CLOUD = new THREE.Color(0x8e979f);
+
+function paintCloudTexture(seed: number, variant: number): THREE.CanvasTexture {
+  const height = 256;
+  const width = height * 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d')!;
+  const paintPuff = (x: number, y: number, radius: number) => {
+    const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, 'rgba(255,255,255,.98)');
+    gradient.addColorStop(.62, 'rgba(255,255,255,.7)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = gradient;
+    context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  };
+  const baseCount = 9;
+  for (let puff = 0; puff < baseCount; puff++) {
+    const along = (puff + .5) / baseCount;
+    const radius = height * (.14 + Math.sin(along * Math.PI) * .2 + hash(seed, puff, variant, 7001) * .06);
+    const x = width * (.12 + along * .76) + (hash(seed, puff, variant, 7002) - .5) * 30;
+    const y = height * .64 - radius * .6 + (hash(seed, puff, variant, 7003) - .5) * 24;
+    paintPuff(x, y, radius);
+  }
+  const capCount = 6;
+  for (let puff = 0; puff < capCount; puff++) {
+    const along = .2 + (puff + hash(seed, puff, variant, 7004)) / capCount * .6;
+    const radius = height * (.07 + hash(seed, puff, variant, 7005) * .07);
+    const x = width * along;
+    const y = height * (.3 - Math.sin(along * Math.PI) * .08) + hash(seed, puff, variant, 7006) * 20;
+    paintPuff(x, y, radius);
+  }
+  context.globalCompositeOperation = 'destination-out';
+  const base = context.createLinearGradient(0, height * .66, 0, height);
+  base.addColorStop(0, 'rgba(0,0,0,0)');
+  base.addColorStop(1, 'rgba(0,0,0,1)');
+  context.fillStyle = base;
+  context.fillRect(0, height * .66, width, height * .34);
+  context.globalCompositeOperation = 'source-atop';
+  const shade = context.createLinearGradient(0, 0, 0, height);
+  shade.addColorStop(0, 'rgba(255,255,255,0)');
+  shade.addColorStop(.5, 'rgba(190,198,212,.18)');
+  shade.addColorStop(1, 'rgba(110,122,145,.6)');
+  context.fillStyle = shade;
+  context.fillRect(0, 0, width, height);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 import { roofWalkY } from './spatial';
 import { isWalkableRoof } from './architecture';
 import { findPlazaAnchors } from './topology';
@@ -264,6 +320,9 @@ export class HarborAmbience {
   private readonly fleet: BoatActor[] = [];
   private readonly fauna: FaunaSystem;
   private readonly clouds = new THREE.Group();
+  private readonly cloudMaterials: THREE.SpriteMaterial[] = [];
+  private readonly cloudDrift: { sprite: THREE.Sprite; angle: number; radius: number; speed: number }[] = [];
+  private readonly cloudColor = new THREE.Color();
   private readonly petals: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly fireflies: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly floatingLanterns: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
@@ -285,7 +344,6 @@ export class HarborAmbience {
   private readonly festivalCombinedMatrix = new THREE.Matrix4();
   private readonly rain: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly importYard: THREE.Group;
-  private readonly cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
   private readonly starMaterial = new THREE.PointsMaterial({ color: 0xffe4a3, size: .13, transparent: true, opacity: 0, depthWrite: false });
   private readonly sunDisc: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private cells: Cell[] = [];
@@ -319,7 +377,7 @@ export class HarborAmbience {
   private topology!: WaterTopology;
   private readonly townCenter = new THREE.Vector3();
 
-  constructor(private readonly seed: number, camera: THREE.Camera, cells: Iterable<Cell>) {
+  constructor(private readonly seed: number, private readonly camera: THREE.Camera, cells: Iterable<Cell>) {
     this.root.name = 'harbor-ambience';
     this.createFleet();
     this.importYard = this.createImportYard();
@@ -649,8 +707,7 @@ export class HarborAmbience {
     }
     this.updateImportYard(time, timeOfDay);
     this.fauna.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, rainIntensity);
-    this.clouds.position.x = Math.sin(time * .018) * 2.5;
-    this.cloudMaterial.opacity = .12 + daylight * .32;
+    this.updateClouds(time, daylight, timeOfDay, rainIntensity);
     this.starMaterial.opacity = Math.pow(1 - daylight, 2) * (.62 + Math.sin(time * .7) * .08);
     this.sunDisc.material.opacity = daylight * .68;
     this.petals.rotation.y = time * .025;
@@ -1636,23 +1693,44 @@ export class HarborAmbience {
   }
 
   private createClouds() {
-    const geometries: THREE.BufferGeometry[] = [];
-    for (let cloudIndex = 0; cloudIndex < 5; cloudIndex++) {
-      for (let puff = 0; puff < 4; puff++) {
-        const geometry = new THREE.IcosahedronGeometry(1.1 + (puff % 2) * .45, 1);
-        const matrix = new THREE.Matrix4().compose(
-          new THREE.Vector3(-24 + cloudIndex * 11 + puff * 1.25, 10 + (cloudIndex % 2) * 2.5 + Math.sin(puff) * .32, -20 - cloudIndex * 2),
-          new THREE.Quaternion(),
-          new THREE.Vector3(1.65, .55, .7),
-        );
-        geometry.applyMatrix4(matrix);
-        geometries.push(geometry);
-      }
+    const textures = [0, 1, 2].map((variant) => paintCloudTexture(this.seed, variant));
+    for (const texture of textures) {
+      this.cloudMaterials.push(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, fog: false }));
     }
-    const geometry = mergeGeometries(geometries, false);
-    for (const part of geometries) part.dispose();
-    if (geometry) this.clouds.add(new THREE.Mesh(geometry, this.cloudMaterial));
+    for (let index = 0; index < CLOUD_COUNT; index++) {
+      const sprite = new THREE.Sprite(this.cloudMaterials[index % textures.length]);
+      sprite.raycast = () => {};
+      const width = 18 + hash(this.seed, index, 0, 7100) * 16;
+      sprite.scale.set(width * (hash(this.seed, index, 1, 7100) < .5 ? -1 : 1), width * .5, 1);
+      sprite.position.y = CLOUD_ALTITUDE + (hash(this.seed, index, 2, 7100) - .5) * 8;
+      this.cloudDrift.push({
+        sprite,
+        angle: index / CLOUD_COUNT * Math.PI * 2 + hash(this.seed, index, 3, 7100) * .5,
+        radius: 52 + hash(this.seed, index, 4, 7100) * 34,
+        speed: .0012 + hash(this.seed, index, 5, 7100) * .0014,
+      });
+      this.clouds.add(sprite);
+    }
+    this.clouds.name = 'clouds';
     this.root.add(this.clouds);
+  }
+
+  private updateClouds(time: number, daylight: number, timeOfDay: number, rainIntensity: number) {
+    for (const cloud of this.cloudDrift) {
+      const angle = cloud.angle + time * cloud.speed;
+      cloud.sprite.position.x = Math.cos(angle) * cloud.radius;
+      cloud.sprite.position.z = Math.sin(angle) * cloud.radius;
+    }
+    const twilight = Math.max(0, 1 - Math.abs(timeOfDay - 19.2) / 2.4, 1 - Math.abs(timeOfDay - 4.8) / 2.1);
+    this.cloudColor.copy(NIGHT_CLOUD).lerp(DAY_CLOUD, daylight).lerp(DUSK_CLOUD, twilight * .55).lerp(RAIN_CLOUD, rainIntensity * .8);
+    // Sprites seen from high above read as flat discs on the water, so the sky
+    // only fills in as the camera drops toward the horizon.
+    const overhead = THREE.MathUtils.smoothstep(this.camera.position.y - CLOUD_ALTITUDE, 2, 16);
+    const opacity = (.3 + daylight * .5 + rainIntensity * .2) * (1 - overhead);
+    for (const material of this.cloudMaterials) {
+      material.color.copy(this.cloudColor);
+      material.opacity = opacity;
+    }
   }
 
   private createStars() {

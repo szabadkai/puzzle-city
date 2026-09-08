@@ -6,6 +6,7 @@ import { createServer } from 'vite';
 const gradient = { addColorStop() {} };
 const context = {
   createRadialGradient() { return gradient; },
+  createLinearGradient() { return gradient; },
   fillRect() {},
   strokeRect() {},
   fillText() {},

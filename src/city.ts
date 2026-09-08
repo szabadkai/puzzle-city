@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type HarborLanternId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
 import { PALETTE_SLOT, PALETTES, paletteSlotColors } from './palette';
-import { paletteSlotColor, usePaletteLookup } from './shading';
+import { paletteSlotColor, presentationUniforms, useClothSway, useFlicker, usePaletteLookup } from './shading';
 import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER } from './water-surface';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { facadeDirectionAt, plazaAnchorAt, type CardinalDirection as Direction } from './topology';
@@ -312,17 +312,51 @@ export class CityRenderer {
   private readonly nightGlows = new THREE.Points(this.nightGlowGeometry, this.nightGlowMaterial);
   private nightGlowCount = 0;
   private readonly smokeGeometry = new THREE.BufferGeometry();
-  private readonly smokeMaterial = new THREE.PointsMaterial({
-    color: 0xd8d1c4,
-    map: createSmokeTexture(),
-    size: .34,
-    sizeAttenuation: true,
+  private readonly smokeUniforms = {
+    uTime: presentationUniforms.uTime,
+    uWind: presentationUniforms.uWind,
+    uMap: { value: createSmokeTexture() },
+    uPointScale: { value: 400 },
+    uColor: { value: new THREE.Color(0xe8e2d6) },
+  };
+  // Each puff rises, drifts with the wind, grows, and fades entirely on the GPU.
+  private readonly smokeMaterial = new THREE.ShaderMaterial({
+    uniforms: this.smokeUniforms,
     transparent: true,
-    opacity: .34,
     depthWrite: false,
+    vertexShader: /* glsl */`
+      attribute float aPhase;
+      attribute float aSeed;
+      attribute float aActive;
+      uniform float uTime;
+      uniform vec2 uWind;
+      uniform float uPointScale;
+      varying float vAlpha;
+      void main() {
+        float t = fract(uTime * 0.11 * (0.8 + aSeed * 0.4) + aPhase);
+        float rise = t * 2.1;
+        vec3 drift = vec3(uWind.x, 0.0, uWind.y) * (t * t * 2.6);
+        vec3 wobble = vec3(sin(uTime * 0.7 + aSeed * 31.0) * 0.16, 0.0, cos(uTime * 0.55 + aSeed * 17.0) * 0.13) * t;
+        vec4 mvPosition = modelViewMatrix * vec4(position + vec3(0.0, rise, 0.0) + drift + wobble, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = (0.55 + t * 2.1) * uPointScale / max(1.0, -mvPosition.z);
+        vAlpha = (1.0 - t * t) * smoothstep(0.0, 0.1, t) * aActive * 0.72;
+      }
+    `,
+    fragmentShader: /* glsl */`
+      uniform sampler2D uMap;
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        vec4 puff = texture2D(uMap, gl_PointCoord);
+        gl_FragColor = vec4(uColor, puff.a * vAlpha);
+      }
+    `,
   });
   private readonly smokePoints = new THREE.Points(this.smokeGeometry, this.smokeMaterial);
   private smokeAnchors: Array<{ x: number; y: number; z: number; phase: number; index: number; use: BusinessType | 'home' }> = [];
+  private puffsPerChimney = 8;
+  private readonly clothMaterials = new Map<THREE.Material, THREE.MeshStandardMaterial>();
   private readonly signAtlas = createSignAtlas();
   private readonly wallMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
@@ -337,19 +371,20 @@ export class CityRenderer {
   private readonly accentVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92, side: THREE.DoubleSide });
   private readonly seed: number;
   private rainIntensity = -1;
+  private lastUpdateTime = 0;
   private materialDetail = true;
   private readonly wetTint = new THREE.Color(0x355c5b);
   private discoveryGlow: { mesh: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>; startedAt: number } | null = null;
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
   private readonly stone = new THREE.MeshStandardMaterial({ color: this.stoneBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .045, roughness: 1, roughnessMap: this.stoneTexture });
   private readonly stoneDark = new THREE.MeshStandardMaterial({ color: this.stoneDarkBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
-  private readonly window = new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 });
+  private readonly window = useFlicker(new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 }), .035);
   private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
   private readonly green = new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 });
   private readonly leaf = new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 });
   private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
-  private readonly warmLight = new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 });
+  private readonly warmLight = useFlicker(new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 }), .08);
   private readonly flagMaterial = new THREE.MeshStandardMaterial({ color: DEFAULT_SLOT_COLORS[PALETTE_SLOT.trim], side: THREE.DoubleSide, roughness: .9 });
   private readonly featureWaterMaterial = new THREE.MeshStandardMaterial({ color: 0x69a7a3, roughness: .35 });
   private readonly blossom = new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 });
@@ -371,6 +406,16 @@ export class CityRenderer {
   }
 
   static cellSize() { return CELL; }
+
+  /** Low tier keeps every chimney smoking with fewer puffs. */
+  setParticleScale(scale: number) {
+    this.puffsPerChimney = Math.max(3, Math.round(8 * scale));
+  }
+
+  /** Half the drawing-buffer height, so smoke puffs keep their world size on any screen. */
+  setPointScale(drawingBufferHeight: number) {
+    this.smokeUniforms.uPointScale.value = drawingBufferHeight / 2;
+  }
 
   load(cells: Cell[], absoluteHours = 0) {
     for (const cell of cells) {
@@ -652,6 +697,8 @@ export class CityRenderer {
   serialize() { return [...this.cells.values()].map((cell) => ({ ...cell, placedAt: 0 })); }
 
   update(time: number, absoluteHours = 0) {
+    const deltaSeconds = Math.max(0, Math.min(.1, time - this.lastUpdateTime));
+    this.lastUpdateTime = time;
     let staticBatchChanged = false;
     if (this.discoveryGlow) {
       const age = (performance.now() - this.discoveryGlow.startedAt) / 1000;
@@ -705,41 +752,36 @@ export class CityRenderer {
           staticBatchChanged = true;
         }
       }
-      const flag = group.userData.flag as THREE.Object3D | undefined;
-      if (flag) flag.rotation.y = Math.sin(time * 3 + group.position.z) * .15;
       const timeNest = group.userData.timeNest as THREE.Object3D | undefined;
       if (timeNest) timeNest.visible = ageInHours(group.userData.foundedAt as number | undefined, absoluteHours) >= 72 && this.rainIntensity < .35;
       const laundry = group.userData.laundry as THREE.Object3D[] | undefined;
       if (laundry) for (const cloth of laundry) {
-        cloth.visible = this.rainIntensity < .08;
-        cloth.rotation.z = Math.sin(time * 2.2 + cloth.id) * .045;
+        // Rain draws the washing in. Ease the scale so nothing pops.
+        const target = this.rainIntensity < .08 ? 1 : .04;
+        cloth.scale.y += (target - cloth.scale.y) * Math.min(1, deltaSeconds * 1.6);
+        cloth.visible = cloth.scale.y > .06;
       }
     }
     for (const [index, lantern] of this.harborLanternRoot.children.entries()) {
       const body = lantern.userData.lanternBody as THREE.Object3D | undefined;
       if (body) body.rotation.z = Math.sin(time * 1.35 + index * 1.7) * (.025 + this.rainIntensity * .035);
     }
-    const smokePositions = this.smokeGeometry.getAttribute('position') as THREE.BufferAttribute;
+    const smokeActive = this.smokeGeometry.getAttribute('aActive') as THREE.BufferAttribute | undefined;
     const hour = ((absoluteHours % 24) + 24) % 24;
     let activeSmoke = 0;
-    for (let index = 0; index < this.smokeAnchors.length; index++) {
-      const anchor = this.smokeAnchors[index];
-      const active = this.smokeActiveAt(anchor.use, hour);
-      if (!active) {
-        smokePositions.setXYZ(index, 0, -100, 0);
-        continue;
+    if (smokeActive) {
+      let changed = false;
+      for (let index = 0; index < this.smokeAnchors.length; index++) {
+        const active = this.smokeActiveAt(this.smokeAnchors[index].use, hour) ? 1 : 0;
+        activeSmoke += active;
+        if (smokeActive.getX(index) !== active) {
+          smokeActive.setX(index, active);
+          changed = true;
+        }
       }
-      activeSmoke += 1;
-      const phase = (time * .14 + anchor.phase) % 1;
-      smokePositions.setXYZ(
-        index,
-        anchor.x + Math.sin(time * .55 + anchor.index) * .11 * phase,
-        anchor.y + phase * 1.35,
-        anchor.z + Math.cos(time * .43 + anchor.index) * .08 * phase,
-      );
+      if (changed) smokeActive.needsUpdate = true;
     }
     this.smokePoints.visible = activeSmoke > 0;
-    if (this.smokeAnchors.length) smokePositions.needsUpdate = true;
     if (staticBatchChanged) this.rebuildGlobalStaticBatch();
   }
 
@@ -996,8 +1038,11 @@ export class CityRenderer {
   private consolidateStaticMeshes(group: THREE.Group) {
     const buckets = new Map<string, THREE.Mesh[]>();
     for (const child of [...group.children]) {
-      if (!(child instanceof THREE.Mesh) || child.name === 'flag' || child.name.startsWith('laundry-')) continue;
-      if (Array.isArray(child.material)) continue;
+      if (!(child instanceof THREE.Mesh) || Array.isArray(child.material)) continue;
+      if (child.name === 'flag' || child.name.startsWith('laundry-')) {
+        child.material = this.clothVariant(child.material);
+        continue;
+      }
       this.applyVertexBatchMaterial(child);
       const vegetationStage = child.userData.vegetationStage as number | undefined;
       const key = `${child.material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}:${vegetationStage ?? '-'}`;
@@ -1035,6 +1080,17 @@ export class CityRenderer {
     object.layers.enable(REFLECTION_LAYER);
     const material = object instanceof THREE.Mesh ? object.material as THREE.Material : null;
     if (material === this.window || material === this.warmLight) object.layers.enable(EMISSIVE_REFLECTION_LAYER);
+  }
+
+  /** Cloth shares colours with static accents but needs its own swaying material. */
+  private clothVariant(source: THREE.Material) {
+    let variant = this.clothMaterials.get(source);
+    if (!variant) {
+      const standard = source as THREE.MeshStandardMaterial;
+      variant = useClothSway(new THREE.MeshStandardMaterial({ color: standard.color, roughness: standard.roughness, side: THREE.DoubleSide, map: standard.map ?? null, emissive: standard.emissive, emissiveIntensity: standard.emissiveIntensity }));
+      this.clothMaterials.set(source, variant);
+    }
+    return variant;
   }
 
   private applyVertexBatchMaterial(mesh: THREE.Mesh) {
@@ -1127,19 +1183,32 @@ export class CityRenderer {
       const smoke = group.getObjectByName('smoke-source');
       if (!smoke) continue;
       const use = this.businesses.get(key)?.type ?? 'home';
-      for (let index = 0; index < 3; index++) {
+      for (let index = 0; index < this.puffsPerChimney; index++) {
         this.smokeAnchors.push({
           x: group.position.x + smoke.position.x,
           y: smoke.position.y,
           z: group.position.z + smoke.position.z,
-          phase: (index * .31 + hash(this.seed, group.position.x, group.position.z, index + 730)) % 1,
+          phase: (index / this.puffsPerChimney + hash(this.seed, group.position.x, group.position.z, index + 730) * .08) % 1,
           index,
           use,
         });
       }
     }
-    this.smokeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(this.smokeAnchors.length * 3, 3));
-    this.smokePoints.visible = this.smokeAnchors.length > 0;
+    const count = this.smokeAnchors.length;
+    const positions = new Float32Array(count * 3);
+    const phases = new Float32Array(count);
+    const seeds = new Float32Array(count);
+    for (const [index, anchor] of this.smokeAnchors.entries()) {
+      positions.set([anchor.x, anchor.y, anchor.z], index * 3);
+      phases[index] = anchor.phase;
+      seeds[index] = hash(this.seed, anchor.x * 10, anchor.z * 10, anchor.index + 990);
+    }
+    this.smokeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    this.smokeGeometry.setAttribute('aPhase', new THREE.Float32BufferAttribute(phases, 1));
+    this.smokeGeometry.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
+    this.smokeGeometry.setAttribute('aActive', new THREE.Float32BufferAttribute(new Float32Array(count), 1));
+    this.smokeGeometry.computeBoundingSphere();
+    this.smokePoints.visible = count > 0;
   }
 
   private smokeActiveAt(use: BusinessType | 'home', hour: number) {

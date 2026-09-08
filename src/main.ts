@@ -126,6 +126,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="shadow-tuning" id="shadow-tuning" aria-label="Shadow tuning">
       <label>bias <input id="shadow-bias" type="range" min="-0.002" max="0.002" step="0.00002" value="-0.00018"><span id="shadow-bias-value"></span></label>
       <label>normal <input id="shadow-normal-bias" type="range" min="0" max="0.2" step="0.002" value="0.028"><span id="shadow-normal-bias-value"></span></label>
+      <label>wind <input id="wind-strength" type="range" min="0" max="3" step="0.05" value="1"><span id="wind-strength-value"></span></label>
     </div>
     <aside class="grow-inspector" id="grow-inspector" aria-label="GROW developer inspector"></aside>
     <aside class="citizen-card" id="citizen-card" aria-live="polite">
@@ -381,6 +382,7 @@ function applyRenderScale() {
   pipeline?.setSize(width, height);
   const drawingBuffer = renderer.getDrawingBufferSize(new THREE.Vector2());
   water.setSize(drawingBuffer.x, drawingBuffer.y);
+  city.setPointScale(drawingBuffer.y);
 }
 
 renderer.domElement.addEventListener('webglcontextlost', (event) => {
@@ -481,6 +483,7 @@ skyDome.mesh.layers.enable(REFLECTION_LAYER);
 skyDome.mesh.layers.enable(EMISSIVE_REFLECTION_LAYER);
 
 const city = new CityRenderer(seed);
+city.setParticleScale(quality.particleScale);
 scene.add(city.root);
 
 const shadowLiftTint = new THREE.Color();
@@ -2661,6 +2664,22 @@ function readShadowTuning() {
 shadowBiasInput.addEventListener('input', readShadowTuning);
 shadowNormalBiasInput.addEventListener('input', readShadowTuning);
 readShadowTuning();
+const windStrengthInput = document.querySelector<HTMLInputElement>('#wind-strength')!;
+let windStrengthScale = 1;
+windStrengthInput.addEventListener('input', () => {
+  windStrengthScale = Number(windStrengthInput.value);
+  document.querySelector('#wind-strength-value')!.textContent = windStrengthScale.toFixed(2);
+});
+
+/** One coherent wind: a slow heading drift with gusts. Smoke, cloth, and water all read it. */
+function updateWind(time: number) {
+  const heading = .7 + Math.sin(time * .021) * .55 + Math.sin(time * .0073) * .3;
+  const gust = .55 + .3 * Math.sin(time * .37) + .15 * Math.sin(time * 1.31 + 2);
+  const strength = gust * windStrengthScale;
+  presentationUniforms.uTime.value = time;
+  presentationUniforms.uWind.value.set(Math.cos(heading) * strength, Math.sin(heading) * strength);
+  water.wind.copy(presentationUniforms.uWind.value);
+}
 
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'p') {
@@ -2849,6 +2868,7 @@ function renderFrameAt(width: number, height: number) {
   csm.updateFrustums();
   pipeline!.setSize(width, height);
   water.setSize(width, height);
+  city.setPointScale(height);
   renderer.shadowMap.needsUpdate = true;
   const wasHidden = { hover: hover.visible, markers: onboardingMarkers.visible };
   hover.visible = false;
@@ -3343,6 +3363,7 @@ function animate() {
   const shownHour = renderHour();
   const shownRain = renderRain(weather.intensity);
   const daylight = daylightAt(shownHour);
+  updateWind(time);
   updateAtmosphere(time, rawDelta);
   wakes.update();
   city.setWeather(shownRain);
@@ -3502,6 +3523,7 @@ function applyViewport() {
     renderer.domElement.style.height = `${layout.height}px`;
     pipeline?.setSize(layout.render.width, layout.render.height);
     water.setSize(layout.render.width, layout.render.height);
+    city.setPointScale(layout.render.height);
     return;
   }
   renderer.domElement.style.width = '';

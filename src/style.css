@@ -1030,6 +1030,8 @@ button:active { transform: translateY(1px); }
 }
 
 @media (max-width: 700px), (hover: none) and (pointer: coarse) {
+  body .photo-quick { right: 18px; bottom: 112px; width: 50px; height: 50px; }
+
   .mobile-controls {
     position: absolute;
     z-index: 12;

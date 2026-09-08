@@ -1610,8 +1610,9 @@ export class CitizenSystem {
     const target = citizen.path[0];
     if (!target) return;
     const direction = this.walkDirection.copy(target).sub(citizen.model.position);
-    const perpendicular = this.laneOffset.set(direction.z, 0, -direction.x);
-    if (perpendicular.lengthSq() > 1e-6) direction.addScaledVector(perpendicular.normalize(), citizen.lane);
+    // Arrivals spread along the line of travel. At a doorstep that line runs
+    // along the wall, so nobody is pushed into the wall or over the water.
+    const along = this.laneOffset.copy(direction).normalize();
     const distance = direction.length();
     const factor = this.speedFactor(citizen);
     const step = Math.min(distance, deltaSeconds * WALK_SPEED * factor);
@@ -1624,8 +1625,8 @@ export class CitizenSystem {
     const arrivalRadius = citizen.path.length > 1 ? .16 : .06;
     if (distance >= arrivalRadius) return;
     if (citizen.path.length === 1) {
-      const aside = this.standingRoom(citizen, target, perpendicular);
-      citizen.model.position.set(target.x + perpendicular.x * aside, target.y, target.z + perpendicular.z * aside);
+      const aside = this.standingRoom(citizen, target, along);
+      citizen.model.position.set(target.x + along.x * aside, target.y, target.z + along.z * aside);
     }
     citizen.path.shift();
     if (citizen.path.length) return;
@@ -1652,10 +1653,10 @@ export class CitizenSystem {
   }
 
   /** Two people who arrive at one doorstep stand shoulder to shoulder instead of inside each other. */
-  private standingRoom(citizen: Citizen, target: THREE.Vector3, perpendicular: THREE.Vector3) {
+  private standingRoom(citizen: Citizen, target: THREE.Vector3, along: THREE.Vector3) {
     const spot = this.laneTarget;
     for (const aside of [citizen.lane, citizen.lane + .17, citizen.lane - .17, citizen.lane + .34]) {
-      spot.set(target.x + perpendicular.x * aside, target.y, target.z + perpendicular.z * aside);
+      spot.set(target.x + along.x * aside, target.y, target.z + along.z * aside);
       const taken = this.citizens.some((other) => other !== citizen && !other.path.length && !this.indoors(other) && other.model.position.distanceToSquared(spot) < .14 * .14);
       if (!taken) return aside;
     }

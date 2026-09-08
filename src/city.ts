@@ -1403,7 +1403,9 @@ export class CityRenderer {
         sideMin: -.76, sideMax: .76, yMin: topY - .62, yMax: topY - .27,
       });
 
-    const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * 1.005, FOUNDATION_TOP_Y + .12, CELL * 1.005, 1, .04), this.stone));
+    // The plinth steps back under the wall's rounded bottom edge. This keeps
+    // the quay ledge in front of it clear for walkers without a gap under the wall.
+    const foundation = shadow(new THREE.Mesh(new RoundedBoxGeometry(CELL * .94, FOUNDATION_TOP_Y + .12, CELL * .94, 1, .04), this.stone));
     foundation.position.y = (FOUNDATION_TOP_Y - .12) / 2;
     group.add(foundation);
 

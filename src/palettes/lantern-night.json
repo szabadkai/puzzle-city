@@ -1,0 +1,14 @@
+{
+  "id": "lantern-night",
+  "title": "Lantern Night",
+  "order": 3,
+  "walls": ["#2c3560", "#3a4576", "#26305a", "#4a4f7e", "#1f2848", "#3c3a66", "#34456d", "#2a3d63"],
+  "roofs": ["#1a1f3a", "#2b2540"],
+  "trim": "#ffb347",
+  "stone": "#3a3f55",
+  "water": "#0a1020",
+  "sky": { "zenith": "#050818", "horizon": "#1b2547" },
+  "shadow": "#1a1440",
+  "haze": "#101a33",
+  "night": true
+}

@@ -39,7 +39,7 @@ function isPng(bytes: Uint8Array) {
   return PNG_SIGNATURE.every((byte, index) => bytes[index] === byte);
 }
 
-function isSavedTown(value: unknown): value is SavedTown {
+export function isSavedTown(value: unknown): value is SavedTown {
   if (!value || typeof value !== 'object') return false;
   const town = value as Partial<SavedTown>;
   const validVersion = town.version === 10;

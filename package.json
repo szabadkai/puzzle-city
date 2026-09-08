@@ -13,13 +13,20 @@
     "test:lanterns": "node --experimental-strip-types scripts/lanterns-check.mjs",
     "test:formations": "node --experimental-strip-types scripts/formations-check.mjs",
     "test:water-routes": "node scripts/water-routes-check.mjs",
-    "test:render-structure": "node scripts/render-structure-check.mjs"
+    "test:render-structure": "node scripts/render-structure-check.mjs",
+    "capture-test": "node scripts/capture-test.mjs",
+    "test:palettes": "node scripts/palette-check.mjs"
   },
   "dependencies": {
-    "three": "^0.180.0"
+    "mp4-muxer": "^5.2.2",
+    "n8ao": "^2.0.1",
+    "postprocessing": "^6.39.4",
+    "three": "^0.180.0",
+    "webm-muxer": "^5.1.4"
   },
   "devDependencies": {
     "@types/three": "^0.180.0",
+    "playwright": "^1.63.0",
     "typescript": "^5.8.3",
     "vite": "^7.1.3"
   }

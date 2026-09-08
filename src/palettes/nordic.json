@@ -1,0 +1,13 @@
+{
+  "id": "nordic",
+  "title": "Nordic",
+  "order": 1,
+  "walls": ["#d9a441", "#7a2e2a", "#5c6670", "#e0d6c2", "#b5a27c", "#46595e", "#8f6f52", "#a9433f"],
+  "roofs": ["#2f3a3f", "#4a3b36"],
+  "trim": "#e8e0cc",
+  "stone": "#8d8a80",
+  "water": "#1f4a55",
+  "sky": { "zenith": "#4c7fa8", "horizon": "#d7dde3" },
+  "shadow": "#4a4c8c",
+  "haze": "#b9c6cf"
+}

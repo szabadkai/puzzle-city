@@ -28,6 +28,10 @@ The harbor keeps changing between discoveries. Trees mature over several simulat
 
 You can save the current town as a PNG postcard. The image also contains the save data, so Little Tides can load the town from the picture later. The same panel can export the visible buildings as a printable STL model.
 
+Photo mode (the camera button, or `F`) pauses the town, hides the interface, and frames the view at 9:16, 4:5, or 16:9. It can change the hour, the weather, the depth of field, and the palette for the picture only. From there you can save a postcard with a wordmark, record the last 5, 10, or 15 seconds as an MP4 clip, render a timelapse of how the town grew, copy a share link, or send the file to the system share sheet. A share link carries the whole town in the URL, so anyone who opens it gets the same harbor.
+
+Five colour palettes (Harbour Morning, Nordic, Dusk Pastel, Lantern Night, Monsoon) recolour walls, roofs, stone, water, and sky. The Palette button in the top menu cycles through them, and the choice is saved with the town.
+
 ## Controls
 
 - Left click: build
@@ -38,7 +42,9 @@ You can save the current town as a PNG postcard. The image also contains the sav
 - Touch: drag with one finger to orbit, drag with two fingers to move, and pinch to zoom
 - J: open or close the journal
 - I or Observe: inspect buildings, trees, residents, boats, cats, and waterlife
-- P: toggle the performance overlay
+- F: open or close photo mode
+- H: hide or show the interface for a screenshot
+- P: toggle the performance overlay with shadow and wind tuning
 - G: toggle the GROW developer inspector
 
 ## Development
@@ -50,11 +56,13 @@ npm run dev
 
 Create a production build with `npm run build`.
 
-Run the deterministic checks with `npm run test:formations`, `npm run test:crafting`, `npm run test:memory`, `npm run test:lanterns`, `npm run test:water-routes`, and `npm run test:render-structure`.
+Run the deterministic checks with `npm run test:formations`, `npm run test:crafting`, `npm run test:memory`, `npm run test:lanterns`, `npm run test:water-routes`, `npm run test:render-structure`, and `npm run test:palettes`.
+
+`npm run capture-test` loads a fixture town through a share link in headless Chromium, takes three default portrait screenshots, scales them to 200 px, writes a contact sheet next to any reference thumbnails in `scripts/capture-reference/`, and checks the draw-call and frame-time budgets. Add `-- --webkit` to also run WebKit, or `-- --dev` to test the dev server. The output lands in `test-output/`.
 
 GitHub Actions deploys the `main` branch to GitHub Pages.
 
-Press `P` while testing a larger town to see FPS, draw calls, triangles, render scale, fallback state, and an EMA breakdown of the main CPU work.
+Press `P` while testing a larger town to see FPS, draw calls (scene plus post passes), triangles, the quality tier, render scale, fallback state, an EMA breakdown of the main CPU work, and GPU time per pass. The same overlay exposes shadow bias and wind strength sliders. The quality tier is detected on first load and can be forced from the About panel or with `?tier=low|mid|high`.
 
 ## Credits
 

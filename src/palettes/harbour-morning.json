@@ -1,0 +1,13 @@
+{
+  "id": "harbour-morning",
+  "title": "Harbour Morning",
+  "order": 0,
+  "walls": ["#f1e4cf", "#dfd0b3", "#d98a67", "#d9b967", "#c26b5c", "#7fb0a5", "#7d94a6", "#c99c9e"],
+  "roofs": ["#8a4a3f", "#365f5c"],
+  "trim": "#f0c962",
+  "stone": "#c4b596",
+  "water": "#2f8a86",
+  "sky": { "zenith": "#66aac4", "horizon": "#ead9b8" },
+  "shadow": "#7f5a8f",
+  "haze": "#c6d8d3"
+}

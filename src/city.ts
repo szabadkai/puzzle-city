@@ -3,6 +3,10 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type HarborLanternId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
+import { PALETTE_SLOT, PALETTES, paletteSlotColors } from './palette';
+import { paletteSlotColor, presentationUniforms, useClothSway, useFlicker, useFoliageSway, usePaletteLookup, useWindowStagger } from './shading';
+import { WATER_LEVEL } from './water-surface';
+import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER } from './water-surface';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { facadeDirectionAt, plazaAnchorAt, type CardinalDirection as Direction } from './topology';
 import { hasDock, hasWaterStairs } from './water';
@@ -42,8 +46,8 @@ import {
 const CELL = CELL_SIZE;
 const FLOOR = FLOOR_HEIGHT;
 const BASE_Y = 0.05;
-const WALL_COLORS = [0xd88966, 0xd9b967, 0xbc6c5c, 0x73a69a, 0x7390a1, 0xb9828d, 0xd8c99f, 0x9f9a7e];
-const ROOF_COLORS = [0x733e38, 0xa6533c, 0x315f5b, 0x3f5260, 0x5b4748, 0x354747];
+const DEFAULT_SLOT_COLORS = paletteSlotColors(PALETTES[0]);
+const WALL_SLOT_COUNT = PALETTE_SLOT.wallCount;
 
 type FacadeLayer = 'opening' | 'composition' | 'equipment';
 type FacadeBounds = Readonly<{ sideMin: number; sideMax: number; yMin: number; yMax: number }>;
@@ -309,17 +313,51 @@ export class CityRenderer {
   private readonly nightGlows = new THREE.Points(this.nightGlowGeometry, this.nightGlowMaterial);
   private nightGlowCount = 0;
   private readonly smokeGeometry = new THREE.BufferGeometry();
-  private readonly smokeMaterial = new THREE.PointsMaterial({
-    color: 0xd8d1c4,
-    map: createSmokeTexture(),
-    size: .34,
-    sizeAttenuation: true,
+  private readonly smokeUniforms = {
+    uTime: presentationUniforms.uTime,
+    uWind: presentationUniforms.uWind,
+    uMap: { value: createSmokeTexture() },
+    uPointScale: { value: 400 },
+    uColor: { value: new THREE.Color(0xe8e2d6) },
+  };
+  // Each puff rises, drifts with the wind, grows, and fades entirely on the GPU.
+  private readonly smokeMaterial = new THREE.ShaderMaterial({
+    uniforms: this.smokeUniforms,
     transparent: true,
-    opacity: .34,
     depthWrite: false,
+    vertexShader: /* glsl */`
+      attribute float aPhase;
+      attribute float aSeed;
+      attribute float aActive;
+      uniform float uTime;
+      uniform vec2 uWind;
+      uniform float uPointScale;
+      varying float vAlpha;
+      void main() {
+        float t = fract(uTime * 0.11 * (0.8 + aSeed * 0.4) + aPhase);
+        float rise = t * 2.1;
+        vec3 drift = vec3(uWind.x, 0.0, uWind.y) * (t * t * 2.6);
+        vec3 wobble = vec3(sin(uTime * 0.7 + aSeed * 31.0) * 0.16, 0.0, cos(uTime * 0.55 + aSeed * 17.0) * 0.13) * t;
+        vec4 mvPosition = modelViewMatrix * vec4(position + vec3(0.0, rise, 0.0) + drift + wobble, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = min(420.0, (0.55 + t * 2.1) * uPointScale / max(1.0, -mvPosition.z));
+        vAlpha = (1.0 - t * t) * smoothstep(0.0, 0.1, t) * aActive * 0.72;
+      }
+    `,
+    fragmentShader: /* glsl */`
+      uniform sampler2D uMap;
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        vec4 puff = texture2D(uMap, gl_PointCoord);
+        gl_FragColor = vec4(uColor, puff.a * vAlpha);
+      }
+    `,
   });
   private readonly smokePoints = new THREE.Points(this.smokeGeometry, this.smokeMaterial);
   private smokeAnchors: Array<{ x: number; y: number; z: number; phase: number; index: number; use: BusinessType | 'home' }> = [];
+  private puffsPerChimney = 8;
+  private readonly clothMaterials = new Map<THREE.Material, THREE.MeshStandardMaterial>();
   private readonly signAtlas = createSignAtlas();
   private readonly wallMaterials = new Map<number, THREE.MeshStandardMaterial>();
   private readonly roofMaterials = new Map<number, THREE.MeshStandardMaterial>();
@@ -327,28 +365,43 @@ export class CityRenderer {
   private readonly plasterTexture = createSurfaceTexture('plaster');
   private readonly roofTexture = createSurfaceTexture('roof');
   private readonly stoneTexture = createSurfaceTexture('stone');
-  private readonly wallVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.plasterTexture, bumpMap: this.plasterTexture, bumpScale: .028, roughness: .92, roughnessMap: this.plasterTexture });
-  private readonly roofVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.roofTexture, bumpMap: this.roofTexture, bumpScale: .035, roughness: .82, roughnessMap: this.roofTexture });
+  private readonly wallVertexMaterial = usePaletteLookup(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.plasterTexture, bumpMap: this.plasterTexture, bumpScale: .028, roughness: .92, roughnessMap: this.plasterTexture }));
+  private readonly roofVertexMaterial = usePaletteLookup(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.roofTexture, bumpMap: this.roofTexture, bumpScale: .035, roughness: .82, roughnessMap: this.roofTexture }));
+  private readonly stoneBase = DEFAULT_SLOT_COLORS[PALETTE_SLOT.stone].clone();
+  private readonly stoneDarkBase = DEFAULT_SLOT_COLORS[PALETTE_SLOT.stoneDark].clone();
   private readonly accentVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92, side: THREE.DoubleSide });
   private readonly seed: number;
   private rainIntensity = -1;
+  private lastUpdateTime = 0;
   private materialDetail = true;
   private readonly wetTint = new THREE.Color(0x355c5b);
   private discoveryGlow: { mesh: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>; startedAt: number } | null = null;
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
-  private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .045, roughness: 1, roughnessMap: this.stoneTexture });
-  private readonly stoneDark = new THREE.MeshStandardMaterial({ color: 0x786f63, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
-  private readonly window = new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 });
+  private readonly stone = new THREE.MeshStandardMaterial({ color: this.stoneBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .045, roughness: 1, roughnessMap: this.stoneTexture });
+  private readonly stoneDark = new THREE.MeshStandardMaterial({ color: this.stoneDarkBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
+  private readonly window = useWindowStagger(useFlicker(new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 }), .035));
   private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
-  private readonly green = new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 });
-  private readonly leaf = new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 });
+  private readonly green = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 }));
+  private readonly leaf = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x648d51, roughness: 1 }));
   private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
-  private readonly warmLight = new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 });
-  private readonly flagMaterial = new THREE.MeshStandardMaterial({ color: 0xf3cc62, side: THREE.DoubleSide, roughness: .9 });
+  private readonly warmLight = useFlicker(new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 }), .08);
+  /** Earned Harbor Lanterns outshine every other light at night. */
+  private readonly harborLanternLight = useFlicker(new THREE.MeshStandardMaterial({ color: 0xffe2a0, emissive: 0xffb050, emissiveIntensity: 2.2 }), .06);
+  private nightLightAnchors: THREE.Vector3[] = [];
+  private readonly lightPoolMaterial = new THREE.MeshBasicMaterial({
+    map: createGlowTexture(),
+    color: 0xff8f3a,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  private readonly lightPools = new THREE.InstancedMesh(new THREE.PlaneGeometry(2.4, 2.4).rotateX(-Math.PI / 2), this.lightPoolMaterial, 96);
+  private readonly flagMaterial = new THREE.MeshStandardMaterial({ color: DEFAULT_SLOT_COLORS[PALETTE_SLOT.trim], side: THREE.DoubleSide, roughness: .9 });
   private readonly featureWaterMaterial = new THREE.MeshStandardMaterial({ color: 0x69a7a3, roughness: .35 });
-  private readonly blossom = new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 });
-  private readonly silverLeaf = new THREE.MeshStandardMaterial({ color: 0x9ab7a1, roughness: .82, emissive: 0x315b51, emissiveIntensity: .12 });
+  private readonly blossom = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 }));
+  private readonly silverLeaf = useFoliageSway(new THREE.MeshStandardMaterial({ color: 0x9ab7a1, roughness: .82, emissive: 0x315b51, emissiveIntensity: .12 }));
   private readonly glass = new THREE.MeshStandardMaterial({ color: 0x9bc7bd, transparent: true, opacity: .46, roughness: .24, metalness: .04, side: THREE.DoubleSide });
 
   constructor(seed: number) {
@@ -362,10 +415,24 @@ export class CityRenderer {
     this.smokePoints.name = 'town-smoke-points';
     this.smokePoints.frustumCulled = false;
     this.harborLanternRoot.name = 'earned-harbor-lanterns';
-    this.root.add(this.staticBatchRoot, this.harborLanternRoot, this.nightGlows, this.smokePoints);
+    this.lightPools.name = 'lantern-light-pools';
+    this.lightPools.count = 0;
+    this.lightPools.frustumCulled = false;
+    this.lightPools.renderOrder = 1;
+    this.root.add(this.staticBatchRoot, this.harborLanternRoot, this.nightGlows, this.smokePoints, this.lightPools);
   }
 
   static cellSize() { return CELL; }
+
+  /** Low tier keeps every chimney smoking with fewer puffs. */
+  setParticleScale(scale: number) {
+    this.puffsPerChimney = Math.max(3, Math.round(8 * scale));
+  }
+
+  /** Half the drawing-buffer height, so smoke puffs keep their world size on any screen. */
+  setPointScale(drawingBufferHeight: number) {
+    this.smokeUniforms.uPointScale.value = drawingBufferHeight / 2;
+  }
 
   load(cells: Cell[], absoluteHours = 0) {
     for (const cell of cells) {
@@ -605,7 +672,7 @@ export class CityRenderer {
     } else {
       this.cells.set(key, {
         x, z, height: 1,
-        color: Math.floor(hash(this.seed, x, z, 91) * WALL_COLORS.length),
+        color: this.wallColorFor(x, z),
         placedAt: performance.now(),
         foundedAt: absoluteHours,
         renovatedAt: absoluteHours,
@@ -615,6 +682,17 @@ export class CityRenderer {
     this.syncHarborLanterns();
     this.syncNightLights();
     return true;
+  }
+
+  /** Picks a wall colour that no cardinal neighbour already uses. */
+  private wallColorFor(x: number, z: number) {
+    const preferred = Math.floor(hash(this.seed, x, z, 91) * WALL_SLOT_COUNT);
+    const taken = new Set(CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz)?.color ?? -1));
+    for (let offset = 0; offset < WALL_SLOT_COUNT; offset++) {
+      const candidate = (preferred + offset) % WALL_SLOT_COUNT;
+      if (!taken.has(candidate)) return candidate;
+    }
+    return preferred;
   }
 
   remove(x: number, z: number, absoluteHours = 0) {
@@ -636,6 +714,12 @@ export class CityRenderer {
   serialize() { return [...this.cells.values()].map((cell) => ({ ...cell, placedAt: 0 })); }
 
   update(time: number, absoluteHours = 0) {
+    const deltaSeconds = Math.max(0, Math.min(.1, time - this.lastUpdateTime));
+    this.lastUpdateTime = time;
+    // Rain draws the washing in. The cloth shader eases every piece at once.
+    const retractTarget = this.rainIntensity < .08 ? 0 : .96;
+    presentationUniforms.uClothRetract.value += (retractTarget - presentationUniforms.uClothRetract.value) * Math.min(1, deltaSeconds * 1.6);
+    presentationUniforms.uSimHours.value = absoluteHours;
     let staticBatchChanged = false;
     if (this.discoveryGlow) {
       const age = (performance.now() - this.discoveryGlow.startedAt) / 1000;
@@ -666,16 +750,7 @@ export class CityRenderer {
       } else {
         group.scale.y = 1;
       }
-      const tree = group.userData.tree as THREE.Object3D | undefined;
-      if (tree) tree.rotation.z = Math.sin(time * 1.35 + group.position.x) * .025;
-      const growingTree = group.userData.growingTree as THREE.Object3D | undefined;
-      if (growingTree) {
-        const progress = treeGrowthAt(group.userData.treeBornAt as number | undefined, absoluteHours);
-        const scale = .24 + progress * .76;
-        growingTree.scale.set(scale, .32 + progress * .68, scale);
-        const shadeSeats = group.userData.shadeSeats as THREE.Object3D | undefined;
-        if (shadeSeats) shadeSeats.visible = progress > .82;
-      }
+
       const plotBornAt = group.userData.vegetationPlotBornAt as number | undefined;
       if (plotBornAt !== undefined) {
         const plotAge = absoluteHours - plotBornAt;
@@ -689,41 +764,36 @@ export class CityRenderer {
           staticBatchChanged = true;
         }
       }
-      const flag = group.userData.flag as THREE.Object3D | undefined;
-      if (flag) flag.rotation.y = Math.sin(time * 3 + group.position.z) * .15;
       const timeNest = group.userData.timeNest as THREE.Object3D | undefined;
-      if (timeNest) timeNest.visible = ageInHours(group.userData.foundedAt as number | undefined, absoluteHours) >= 72 && this.rainIntensity < .35;
-      const laundry = group.userData.laundry as THREE.Object3D[] | undefined;
-      if (laundry) for (const cloth of laundry) {
-        cloth.visible = this.rainIntensity < .08;
-        cloth.rotation.z = Math.sin(time * 2.2 + cloth.id) * .045;
+      if (timeNest) {
+        const nesting = ageInHours(group.userData.foundedAt as number | undefined, absoluteHours) >= 72 && this.rainIntensity < .35;
+        if (timeNest.visible !== nesting) {
+          timeNest.visible = nesting;
+          staticBatchChanged = true;
+        }
       }
+
     }
     for (const [index, lantern] of this.harborLanternRoot.children.entries()) {
       const body = lantern.userData.lanternBody as THREE.Object3D | undefined;
       if (body) body.rotation.z = Math.sin(time * 1.35 + index * 1.7) * (.025 + this.rainIntensity * .035);
     }
-    const smokePositions = this.smokeGeometry.getAttribute('position') as THREE.BufferAttribute;
+    const smokeActive = this.smokeGeometry.getAttribute('aActive') as THREE.BufferAttribute | undefined;
     const hour = ((absoluteHours % 24) + 24) % 24;
     let activeSmoke = 0;
-    for (let index = 0; index < this.smokeAnchors.length; index++) {
-      const anchor = this.smokeAnchors[index];
-      const active = this.smokeActiveAt(anchor.use, hour);
-      if (!active) {
-        smokePositions.setXYZ(index, 0, -100, 0);
-        continue;
+    if (smokeActive) {
+      let changed = false;
+      for (let index = 0; index < this.smokeAnchors.length; index++) {
+        const active = this.smokeActiveAt(this.smokeAnchors[index].use, hour) ? 1 : 0;
+        activeSmoke += active;
+        if (smokeActive.getX(index) !== active) {
+          smokeActive.setX(index, active);
+          changed = true;
+        }
       }
-      activeSmoke += 1;
-      const phase = (time * .14 + anchor.phase) % 1;
-      smokePositions.setXYZ(
-        index,
-        anchor.x + Math.sin(time * .55 + anchor.index) * .11 * phase,
-        anchor.y + phase * 1.35,
-        anchor.z + Math.cos(time * .43 + anchor.index) * .08 * phase,
-      );
+      if (changed) smokeActive.needsUpdate = true;
     }
     this.smokePoints.visible = activeSmoke > 0;
-    if (this.smokeAnchors.length) smokePositions.needsUpdate = true;
     if (staticBatchChanged) this.rebuildGlobalStaticBatch();
   }
 
@@ -733,6 +803,9 @@ export class CityRenderer {
     this.warmLight.emissiveIntensity = .4 + night * 3.8;
     this.nightGlowMaterial.opacity = Math.max(0, night * .72 - .08);
     this.nightGlows.visible = this.nightGlowCount > 0 && this.nightGlowMaterial.opacity > .01;
+    this.lightPoolMaterial.opacity = Math.max(0, night * .5 - .22);
+    this.lightPools.visible = this.lightPools.count > 0 && this.lightPoolMaterial.opacity > .01;
+    this.harborLanternLight.emissiveIntensity = 1.2 + night * 3.6;
     for (const group of this.pieces.values()) {
       const theatreLights = group.userData.theatreLights as THREE.PointLight[] | undefined;
       if (theatreLights) for (const [index, light] of theatreLights.entries()) {
@@ -747,20 +820,24 @@ export class CityRenderer {
     this.rainIntensity = nextRainIntensity;
     this.stone.roughness = 1 - this.rainIntensity * .48;
     this.stoneDark.roughness = 1 - this.rainIntensity * .42;
-    this.stone.color.setHex(0xb9ad91).lerp(this.wetTint, this.rainIntensity * .18);
-    this.stoneDark.color.setHex(0x786f63).lerp(this.wetTint, this.rainIntensity * .16);
-    for (const [color, material] of this.wallMaterials) {
-      material.roughness = .92 - this.rainIntensity * .3;
-      material.color.setHex(color).lerp(this.wetTint, this.rainIntensity * .14);
-    }
-    for (const [color, material] of this.roofMaterials) {
-      material.roughness = .82 - this.rainIntensity * .34;
-      material.color.setHex(color).lerp(this.wetTint, this.rainIntensity * .2);
-    }
+    this.applyStoneColors();
     this.wallVertexMaterial.roughness = .92 - this.rainIntensity * .3;
     this.wallVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .14);
     this.roofVertexMaterial.roughness = .82 - this.rainIntensity * .34;
     this.roofVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .2);
+  }
+
+  /** Palette colours for the quay stone and trim. Walls and roofs read the palette texture directly. */
+  setPaletteColors(stone: THREE.Color, stoneDark: THREE.Color, trim: THREE.Color) {
+    this.stoneBase.copy(stone);
+    this.stoneDarkBase.copy(stoneDark);
+    this.flagMaterial.color.copy(trim);
+    this.applyStoneColors();
+  }
+
+  private applyStoneColors() {
+    this.stone.color.copy(this.stoneBase).lerp(this.wetTint, this.rainIntensity * .18);
+    this.stoneDark.color.copy(this.stoneDarkBase).lerp(this.wetTint, this.rainIntensity * .16);
   }
 
   setMaterialDetail(enabled: boolean) {
@@ -968,29 +1045,93 @@ export class CityRenderer {
     if (cell) this.buildCell(group, cell);
     else this.buildFeature(group, x, z);
     this.consolidateStaticMeshes(group);
+    group.traverse((object) => this.markReflective(object));
     this.root.add(group);
     this.pieces.set(keyOf(x, z), group);
   }
 
+  private static isCloth(object: THREE.Object3D) {
+    return object.name === 'flag' || object.name.startsWith('laundry-');
+  }
+
+  /** Static meshes anywhere under the piece, with cloth listed separately. */
+  private collectMeshes(group: THREE.Group) {
+    const statics: THREE.Mesh[] = [];
+    const cloth: THREE.Mesh[] = [];
+    group.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+      if (CityRenderer.isCloth(object)) cloth.push(object);
+      else statics.push(object);
+    });
+    return { statics, cloth };
+  }
+
+  /**
+   * Every static mesh carries a growth attribute so merged geometry stays
+   * uniform. Trees store their pivot and birth hour; shade seats store a
+   * negative birth hour so they appear late in the growth; the rest store zero.
+   */
+  private prepareGrowth(group: THREE.Group, mesh: THREE.Mesh) {
+    if (mesh.geometry.getAttribute('aTreeGrowth')) return;
+    const growingTree = group.userData.growingTree as THREE.Object3D | undefined;
+    const shadeSeats = group.userData.shadeSeats as THREE.Object3D | undefined;
+    const bornAt = (group.userData.treeBornAt as number | undefined) ?? 0;
+    let inside: THREE.Object3D | null = null;
+    for (let ancestor: THREE.Object3D | null = mesh; ancestor && ancestor !== group; ancestor = ancestor.parent) {
+      if (ancestor === growingTree || ancestor === shadeSeats) inside = ancestor;
+    }
+    const count = mesh.geometry.getAttribute('position').count;
+    const data = new Float32Array(count * 4);
+    if (inside && growingTree) {
+      const pivot = growingTree.getWorldPosition(new THREE.Vector3());
+      const w = inside === shadeSeats ? -(bornAt + 2) : bornAt + 2;
+      for (let index = 0; index < count; index++) data.set([pivot.x, pivot.y, pivot.z, w], index * 4);
+    }
+    mesh.geometry.setAttribute('aTreeGrowth', new THREE.Float32BufferAttribute(data, 4));
+    // Windows in one building light together, at a moment set by the cell.
+    const offset = mesh.material === this.window ? .1 + hash(this.seed, group.userData.cellX as number, group.userData.cellZ as number, 4410) * .8 : 0;
+    mesh.geometry.setAttribute('aLightOffset', new THREE.Float32BufferAttribute(new Float32Array(count).fill(offset), 1));
+  }
+
+  /** Washing hangs on the retract attribute: its top edge in world space, or a sentinel for flags and kites. */
+  private prepareCloth(mesh: THREE.Mesh) {
+    mesh.material = this.clothVariant(mesh.material as THREE.Material);
+    if (mesh.geometry.getAttribute('aRetractTop')) return;
+    mesh.updateWorldMatrix(true, false);
+    const box = new THREE.Box3().setFromBufferAttribute(mesh.geometry.getAttribute('position') as THREE.BufferAttribute).applyMatrix4(mesh.matrixWorld);
+    const retracts = mesh.name.startsWith('laundry-') && !mesh.name.includes('kite');
+    const top = retracts ? box.max.y : -1000;
+    const count = mesh.geometry.getAttribute('position').count;
+    mesh.geometry.setAttribute('aRetractTop', new THREE.Float32BufferAttribute(new Float32Array(count).fill(top), 1));
+  }
+
+  /**
+   * Merges a new piece's direct static children so a building under
+   * construction costs few draw calls. Nested groups keep their own children;
+   * the town-wide batch takes those once the piece settles.
+   */
   private consolidateStaticMeshes(group: THREE.Group) {
+    group.updateMatrixWorld(true);
+    const { statics, cloth } = this.collectMeshes(group);
+    for (const mesh of cloth) this.prepareCloth(mesh);
+    for (const mesh of statics) this.prepareGrowth(group, mesh);
     const buckets = new Map<string, THREE.Mesh[]>();
-    for (const child of [...group.children]) {
-      if (!(child instanceof THREE.Mesh) || child.name === 'flag' || child.name.startsWith('laundry-')) continue;
-      if (Array.isArray(child.material)) continue;
+    for (const child of statics) {
+      if (child.parent !== group) continue;
       this.applyVertexBatchMaterial(child);
       const vegetationStage = child.userData.vegetationStage as number | undefined;
-      const key = `${child.material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}:${vegetationStage ?? '-'}`;
+      const key = `${(child.material as THREE.Material).uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}:${vegetationStage ?? '-'}`;
       const bucket = buckets.get(key) ?? [];
       bucket.push(child);
       buckets.set(key, bucket);
     }
+    const groupInverse = group.matrixWorld.clone().invert();
     for (const meshes of buckets.values()) {
       if (meshes.length < 2) continue;
       const keepIndexed = meshes.every((mesh) => mesh.geometry.index !== null);
       const geometries = meshes.map((mesh) => {
-        mesh.updateMatrix();
         const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
-        geometry.applyMatrix4(mesh.matrix);
+        geometry.applyMatrix4(new THREE.Matrix4().multiplyMatrices(groupInverse, mesh.matrixWorld));
         return geometry;
       });
       const mergedGeometry = mergeGeometries(geometries, false);
@@ -1002,19 +1143,38 @@ export class CityRenderer {
       merged.visible = meshes[0].visible;
       if (meshes[0].userData.vegetationStage !== undefined) merged.userData.vegetationStage = meshes[0].userData.vegetationStage;
       for (const mesh of meshes) {
-        group.remove(mesh);
+        mesh.removeFromParent();
         mesh.geometry.dispose();
       }
       group.add(merged);
     }
   }
 
+  /** Buildings reflect in the water; lit windows and lanterns reflect even on low tier. */
+  private markReflective(object: THREE.Object3D) {
+    object.layers.enable(REFLECTION_LAYER);
+    const material = object instanceof THREE.Mesh ? object.material as THREE.Material : null;
+    if (material === this.window || material === this.warmLight) object.layers.enable(EMISSIVE_REFLECTION_LAYER);
+  }
+
+  /** Cloth shares colours with static accents but needs its own swaying material. */
+  private clothVariant(source: THREE.Material) {
+    let variant = this.clothMaterials.get(source);
+    if (!variant) {
+      const standard = source as THREE.MeshStandardMaterial;
+      variant = useClothSway(new THREE.MeshStandardMaterial({ color: standard.color, roughness: standard.roughness, side: THREE.DoubleSide, map: standard.map ?? null, emissive: standard.emissive, emissiveIntensity: standard.emissiveIntensity }));
+      this.clothMaterials.set(source, variant);
+    }
+    return variant;
+  }
+
   private applyVertexBatchMaterial(mesh: THREE.Mesh) {
     const source = mesh.material as THREE.Material;
     const target = source.userData.vertexBatchMaterial as THREE.MeshStandardMaterial | undefined;
     const colorValue = source.userData.vertexBatchColor as number | undefined;
-    if (!target || colorValue === undefined) return;
-    const color = new THREE.Color(colorValue);
+    const slot = source.userData.vertexBatchSlot as number | undefined;
+    if (!target || (colorValue === undefined && slot === undefined)) return;
+    const color = slot === undefined ? new THREE.Color(colorValue) : paletteSlotColor(slot);
     const position = mesh.geometry.getAttribute('position');
     const colors = new Float32Array(position.count * 3);
     for (let index = 0; index < position.count; index++) {
@@ -1026,21 +1186,14 @@ export class CityRenderer {
     mesh.material = target;
   }
 
-  private isStaticMesh(object: THREE.Object3D): object is THREE.Mesh {
-    return object instanceof THREE.Mesh
-      && object.name !== 'flag'
-      && !object.name.startsWith('laundry-')
-      && !Array.isArray(object.material);
-  }
-
   private clearGlobalStaticBatch() {
     for (const piece of this.pieces.values()) {
-      for (const child of piece.children) {
+      piece.traverse((child) => {
         if (child.userData.hiddenByStaticBatch) {
           child.visible = true;
           delete child.userData.hiddenByStaticBatch;
         }
-      }
+      });
     }
     for (const child of this.staticBatchRoot.children) {
       if (child instanceof THREE.Mesh) child.geometry.dispose();
@@ -1048,42 +1201,47 @@ export class CityRenderer {
     this.staticBatchRoot.clear();
   }
 
+  /**
+   * Merges every settled piece's static meshes by material into one mesh per
+   * material for the whole town, cloth included, so draw calls stay flat as
+   * the town grows. Pieces still animating their construction stay separate.
+   */
   private rebuildGlobalStaticBatch() {
     this.clearGlobalStaticBatch();
-    const buckets = new Map<string, Array<{ mesh: THREE.Mesh; matrix: THREE.Matrix4 }>>();
-    const combined = new THREE.Matrix4();
+    const buckets = new Map<string, THREE.Mesh[]>();
     for (const group of this.pieces.values()) {
       const cell = this.cells.get(keyOf(group.userData.cellX as number, group.userData.cellZ as number));
       if (group.userData.morphStartedAt !== undefined || (cell?.placedAt ?? 0) > 0) continue;
-      group.updateMatrix();
-      for (const child of group.children) {
-        if (!this.isStaticMesh(child) || !child.visible) continue;
-        child.updateMatrix();
+      group.updateMatrixWorld(true);
+      const { statics, cloth } = this.collectMeshes(group);
+      for (const child of [...statics, ...cloth]) {
+        if (!child.visible) continue;
         const material = child.material as THREE.Material;
         const key = `${material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
         const bucket = buckets.get(key) ?? [];
-        bucket.push({ mesh: child, matrix: combined.multiplyMatrices(group.matrix, child.matrix).clone() });
+        bucket.push(child);
         buckets.set(key, bucket);
       }
     }
-    for (const entries of buckets.values()) {
-      if (entries.length < 2) continue;
-      const keepIndexed = entries.every(({ mesh }) => mesh.geometry.index !== null);
-      const geometries = entries.map(({ mesh, matrix }) => {
+    for (const meshes of buckets.values()) {
+      if (meshes.length < 2) continue;
+      const keepIndexed = meshes.every((mesh) => mesh.geometry.index !== null);
+      const geometries = meshes.map((mesh) => {
         const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
-        geometry.applyMatrix4(matrix);
+        geometry.applyMatrix4(mesh.matrixWorld);
         return geometry;
       });
       const geometry = mergeGeometries(geometries, false);
       for (const part of geometries) part.dispose();
       if (!geometry) continue;
-      const first = entries[0].mesh;
+      const first = meshes[0];
       const batch = new THREE.Mesh(geometry, first.material as THREE.Material);
       batch.castShadow = first.castShadow;
       batch.receiveShadow = first.receiveShadow;
       batch.matrixAutoUpdate = false;
+      this.markReflective(batch);
       this.staticBatchRoot.add(batch);
-      for (const { mesh } of entries) {
+      for (const mesh of meshes) {
         mesh.userData.hiddenByStaticBatch = true;
         mesh.visible = false;
       }
@@ -1097,19 +1255,32 @@ export class CityRenderer {
       const smoke = group.getObjectByName('smoke-source');
       if (!smoke) continue;
       const use = this.businesses.get(key)?.type ?? 'home';
-      for (let index = 0; index < 3; index++) {
+      for (let index = 0; index < this.puffsPerChimney; index++) {
         this.smokeAnchors.push({
           x: group.position.x + smoke.position.x,
           y: smoke.position.y,
           z: group.position.z + smoke.position.z,
-          phase: (index * .31 + hash(this.seed, group.position.x, group.position.z, index + 730)) % 1,
+          phase: (index / this.puffsPerChimney + hash(this.seed, group.position.x, group.position.z, index + 730) * .08) % 1,
           index,
           use,
         });
       }
     }
-    this.smokeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(this.smokeAnchors.length * 3, 3));
-    this.smokePoints.visible = this.smokeAnchors.length > 0;
+    const count = this.smokeAnchors.length;
+    const positions = new Float32Array(count * 3);
+    const phases = new Float32Array(count);
+    const seeds = new Float32Array(count);
+    for (const [index, anchor] of this.smokeAnchors.entries()) {
+      positions.set([anchor.x, anchor.y, anchor.z], index * 3);
+      phases[index] = anchor.phase;
+      seeds[index] = hash(this.seed, anchor.x * 10, anchor.z * 10, anchor.index + 990);
+    }
+    this.smokeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    this.smokeGeometry.setAttribute('aPhase', new THREE.Float32BufferAttribute(phases, 1));
+    this.smokeGeometry.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
+    this.smokeGeometry.setAttribute('aActive', new THREE.Float32BufferAttribute(new Float32Array(count), 1));
+    this.smokeGeometry.computeBoundingSphere();
+    this.smokePoints.visible = count > 0;
   }
 
   private smokeActiveAt(use: BusinessType | 'home', hour: number) {
@@ -1131,10 +1302,8 @@ export class CityRenderer {
       .map(([dx, dz]) => this.get(cell.x + dx, cell.z + dz)?.height ?? 0);
     const count = neighborHeights.filter((height) => height > 0).length;
     const diagonalCount = diagonalHeights.filter((height) => height > 0).length;
-    const wallColor = WALL_COLORS[cell.color % WALL_COLORS.length];
-    const walls = this.cachedMaterial(this.wallMaterials, wallColor, .92);
-    const roofColor = pick(ROOF_COLORS, hash(this.seed, cell.x, cell.z, 13));
-    const roof = this.cachedMaterial(this.roofMaterials, roofColor, .82);
+    const walls = this.cachedMaterial(this.wallMaterials, PALETTE_SLOT.wall + cell.color % WALL_SLOT_COUNT, .92);
+    const roof = this.cachedMaterial(this.roofMaterials, PALETTE_SLOT.roof + (hash(this.seed, cell.x, cell.z, 13) < .5 ? 0 : 1), .82);
     const courtAnchor = roofCourtAnchor(cell, this.cells);
     const courtFeature = roofCourtFeature(cell, this.cells);
     const terrace = walkableSteppedTerrace(cell, this.cells);
@@ -2092,25 +2261,32 @@ export class CityRenderer {
     return [dx * distance, dz * distance];
   }
 
-  private cachedMaterial(cache: Map<number, THREE.MeshStandardMaterial>, color: number, roughness: number) {
-    let material = cache.get(color);
+  /**
+   * Wall and roof caches are keyed by palette slot; the accent cache by hex colour.
+   * The returned material is a stand-in: batching moves each mesh onto the shared
+   * vertex-colour material and encodes the slot or colour per vertex.
+   */
+  private cachedMaterial(cache: Map<number, THREE.MeshStandardMaterial>, key: number, roughness: number) {
+    let material = cache.get(key);
     if (!material) {
+      const paletteSlot = cache === this.wallMaterials || cache === this.roofMaterials;
       const texture = cache === this.wallMaterials ? this.plasterTexture : cache === this.roofMaterials ? this.roofTexture : null;
       material = new THREE.MeshStandardMaterial({
-        color,
+        color: paletteSlot ? DEFAULT_SLOT_COLORS[key] : key,
         roughness,
         map: texture,
         roughnessMap: this.materialDetail ? texture : null,
         bumpMap: this.materialDetail ? texture : null,
         bumpScale: cache === this.wallMaterials ? .028 : cache === this.roofMaterials ? .035 : 0,
       });
-      material.userData.vertexBatchColor = color;
+      if (paletteSlot) material.userData.vertexBatchSlot = key;
+      else material.userData.vertexBatchColor = key;
       material.userData.vertexBatchMaterial = cache === this.wallMaterials
         ? this.wallVertexMaterial
         : cache === this.roofMaterials
           ? this.roofVertexMaterial
           : this.accentVertexMaterial;
-      cache.set(color, material);
+      cache.set(key, material);
     }
     return material;
   }
@@ -2284,7 +2460,7 @@ export class CityRenderer {
     const window = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.72, .34), this.window), false);
     window.position.set(center, y + .78, center + .545);
     group.add(back, window);
-    const roof = shadow(new THREE.Mesh(new THREE.ConeGeometry(1.18, .58, 4), this.cachedMaterial(this.roofMaterials, 0x733e38, .82)));
+    const roof = shadow(new THREE.Mesh(new THREE.ConeGeometry(1.18, .58, 4), this.cachedMaterial(this.roofMaterials, PALETTE_SLOT.roof, .82)));
     roof.position.set(center, y + 1.52, center);
     roof.rotation.y = Math.PI / 4;
     roof.scale.z = .78;
@@ -2736,8 +2912,8 @@ export class CityRenderer {
   }
 
   private addHarborArchive(group: THREE.Group, y: number) {
-    const blue = this.cachedMaterial(this.roofMaterials, 0x3f5260, .82);
-    const plaster = this.cachedMaterial(this.wallMaterials, 0xd8c99f, .92);
+    const blue = this.cachedMaterial(this.roofMaterials, PALETTE_SLOT.roof + 1, .82);
+    const plaster = this.cachedMaterial(this.wallMaterials, PALETTE_SLOT.wall + 1, .92);
     const deck = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.9, .9, .18, 8), this.stoneDark));
     deck.position.y = y + .09;
     deck.rotation.y = Math.PI / 8;
@@ -3173,8 +3349,12 @@ export class CityRenderer {
     const merged = geometries.length ? mergeGeometries(geometries, false) : null;
     for (const geometry of geometries) geometry.dispose();
     if (merged) {
-      const batch = shadow(new THREE.Mesh(merged, this.warmLight), false);
+      const batch = shadow(new THREE.Mesh(merged, this.harborLanternLight), false);
       batch.name = 'earned-harbor-lantern-batch';
+      batch.traverse((object) => {
+        object.layers.enable(REFLECTION_LAYER);
+        object.layers.enable(EMISSIVE_REFLECTION_LAYER);
+      });
       this.harborLanternRoot.add(batch);
     }
   }
@@ -3226,6 +3406,32 @@ export class CityRenderer {
     this.nightGlowGeometry.computeBoundingSphere();
     this.nightGlowCount = positions.length / 3;
     this.nightGlows.visible = this.nightGlowCount > 0 && this.nightGlowMaterial.opacity > .01;
+    this.nightLightAnchors = [];
+    for (let index = 0; index < positions.length; index += 3) this.nightLightAnchors.push(new THREE.Vector3(positions[index], positions[index + 1], positions[index + 2]));
+    this.syncLightPools();
+  }
+
+  /** World positions of every lit lantern and window cluster, for the point-light pool. */
+  lightAnchors(): readonly THREE.Vector3[] {
+    return this.nightLightAnchors;
+  }
+
+  /** A soft additive pool of light under each lantern, on the roof, quay, or water below it. */
+  private syncLightPools() {
+    const matrix = new THREE.Matrix4();
+    const count = Math.min(this.lightPools.instanceMatrix.count, this.nightLightAnchors.length);
+    for (let index = 0; index < count; index++) {
+      const anchor = this.nightLightAnchors[index];
+      const cell = this.get(Math.round(anchor.x / CELL), Math.round(anchor.z / CELL));
+      const roofTop = cell ? cell.height * FLOOR + .42 : -Infinity;
+      const surface = cell ? (anchor.y > roofTop ? roofTop + .02 : GROUND_WALK_Y + .03) : WATER_LEVEL + .03;
+      const size = .8 + Math.min(1.6, anchor.y - surface) * .45;
+      matrix.compose(new THREE.Vector3(anchor.x, surface, anchor.z), new THREE.Quaternion(), new THREE.Vector3(size, 1, size));
+      this.lightPools.setMatrixAt(index, matrix);
+    }
+    this.lightPools.count = count;
+    this.lightPools.instanceMatrix.needsUpdate = true;
+    this.lightPools.visible = count > 0 && this.lightPoolMaterial.opacity > .01;
   }
 
   private emptyFeature(x: number, z: number): string | null {
@@ -3869,7 +4075,7 @@ export class CityRenderer {
       stool.position.set(.28, .3, zOffset);
       shadeSeats.add(stool);
     }
-    shadeSeats.visible = false;
+    shadeSeats.visible = true;
     group.add(shadeSeats);
     group.userData.shadeSeats = shadeSeats;
     if (feature !== 'courtyard garden') {
@@ -3907,7 +4113,7 @@ export class CityRenderer {
     const covered = feature === 'covered skybridge' || feature === 'lantern gate';
     const grand = feature === 'lantern gate';
     const y = high ? HIGH_CROSSING_SPAN_Y : FLOOR * 1.42;
-    const walls = this.cachedMaterial(this.wallMaterials, pick(WALL_COLORS, hash(this.seed, x, z, 500)), .9);
+    const walls = this.cachedMaterial(this.wallMaterials, PALETTE_SLOT.wall + Math.floor(hash(this.seed, x, z, 500) * WALL_SLOT_COUNT), .9);
     const span = shadow(new THREE.Mesh(new RoundedBoxGeometry(northSouth ? 1.25 : CELL * 1.08, .58, northSouth ? CELL * 1.08 : 1.25, 1, .16), walls));
     span.position.y = y;
     group.add(span);

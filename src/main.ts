@@ -8,7 +8,7 @@ import { createWorldSnapshot, DISCOVERY_EVENTS, GrowSystem, resolveFocus, type D
 import { HarborAmbience, type HarborMemoryInspection } from './harbor';
 import { weatherAt, type TownMemorySnapshot } from './memory';
 import { CraftingSystem } from './crafting';
-import { CARDINALS, keyOf, type ConfluenceId, type FormationId, type HarborLanternId, type JournalEntry, type JournalIllustration, type PlaceIdentityId, type SavedTown } from './types';
+import { CARDINALS, keyOf, type BuildAction, type ConfluenceId, type FormationId, type HarborLanternId, type JournalEntry, type JournalIllustration, type PlaceIdentityId, type SavedTown } from './types';
 import { FLOOR_HEIGHT } from './spatial';
 import { makeTidePostcard, readTidePostcard, TidePostcardError } from './tide-postcard';
 import { makeTownStl } from './town-stl';
@@ -46,10 +46,30 @@ import {
   type ConfluenceOccurrence,
 } from './confluences';
 import { HARBOR_LANTERNS, harborLanternStates, harborLanternsCompletedByEdit } from './lanterns';
+import { decodeShareCode, shareCodeFromLocation, shareCodeSupported } from './share-code';
+import { CSM } from 'three/addons/csm/CSM.js';
+import { PALETTE_SLOT, PaletteSystem } from './palette';
+import { installPresentationShading, presentationUniforms, setShadowCascadeCount } from './shading';
+import { createAtmosphereState, evaluateAtmosphere } from './atmosphere';
+import { SkyDome } from './sky';
+import { PostPipeline } from './postfx';
+import { CameraDirector } from './camera-director';
+import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER, WaterSurface } from './water-surface';
+import { WakeSystem } from './wakes';
+import { RainSystem } from './rain';
+import { CLIP_FPS, ClipRecorder, composeStill, deliverFile, ForwardRecorder, requestWakeLock, webCodecsAvailable, type ClipResult } from './capture';
+import { encodeShareCode, SHARE_CODE_COMFORTABLE_BYTES, shareUrl } from './share-code';
+import type { DepthOfFieldPreset } from './postfx';
+import { PALETTES } from './palette';
+import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, storedTierOverride, type QualityTier } from './quality';
 import './style.css';
+
+installPresentationShading();
 
 const STORAGE_KEY = 'little-tides-town-v1';
 const MUSIC_MUTED_KEY = 'little-tides-music-muted';
+const DETECTED_TIER_KEY = 'little-tides-quality-detected';
+const HIGH_REFRESH_KEY = 'little-tides-high-refresh';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="hud">
@@ -70,6 +90,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="top-actions-menu" id="top-actions-menu">
           <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
           <button id="music-toggle" aria-label="Turn music off" aria-pressed="true"><span>Music</span><span class="music-state" aria-hidden="true">♫</span></button>
+          <button id="ui-hide" aria-label="Hide the interface for a screenshot"><span class="desktop-hide-label">Hide UI</span><span class="mobile-hide-label" aria-hidden="true">◫</span></button>
+          <button id="palette-cycle" aria-label="Change the town palette"><span class="desktop-palette-label">Palette</span><span class="mobile-palette-label" aria-hidden="true">◐</span></button>
           <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
           <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
           <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
@@ -77,7 +99,36 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
     </div>
     <div class="toast" id="toast"></div>
+    <div class="follow-label" id="follow-label" aria-live="polite"></div>
+    <button id="ui-restore" class="keep-visible" aria-label="Show the interface"></button>
+    <button id="photo-open" class="photo-quick" aria-label="Open photo mode" title="Photo mode (F)">📷</button>
+    <div class="photo-countdown keep-visible" id="photo-countdown" aria-live="polite"></div>
+    <section class="photo-panel keep-visible" id="photo-panel" aria-label="Photo mode" aria-hidden="true">
+      <header><strong>Photo mode</strong><button id="photo-close" aria-label="Leave photo mode">×</button></header>
+      <div class="photo-controls">
+        <label class="wide">Time of day <span id="photo-hour-label"></span><input id="photo-hour" type="range" min="0" max="24" step="0.25"></label>
+        <label>Weather<select id="photo-weather"><option value="sim">As simulated</option><option value="clear">Clear</option><option value="overcast">Overcast</option><option value="rain">Rain</option><option value="night">Night, clear</option></select></label>
+        <label>Depth of field<select id="photo-dof"><option value="off">Off</option><option value="tilt-shift">Tilt-shift</option><option value="cinematic">Cinematic</option></select></label>
+        <label>Aspect<select id="photo-aspect"><option value="9:16">9:16 portrait</option><option value="4:5">4:5</option><option value="16:9">16:9</option></select></label>
+        <label>Palette<select id="photo-palette"></select></label>
+        <label class="photo-check wide"><input id="photo-wordmark" type="checkbox" checked>Wordmark in the corner</label>
+      </div>
+      <div class="photo-actions">
+        <button id="photo-still" class="primary">Save postcard</button>
+        <div class="with-select"><button id="photo-clip" class="primary">Record clip</button><select id="photo-clip-seconds" aria-label="Clip length"><option value="5">5 s</option><option value="10" selected>10 s</option><option value="15">15 s</option></select></div>
+        <div class="with-select"><button id="photo-timelapse">Timelapse</button><select id="photo-timelapse-seconds" aria-label="Timelapse length"><option value="10">10 s</option><option value="15" selected>15 s</option><option value="30">30 s</option></select></div>
+        <button id="photo-share-link">Copy share link</button>
+        <button id="photo-share" class="wide">Share</button>
+      </div>
+      <p class="photo-status" id="photo-status" aria-live="polite"></p>
+      <div class="photo-progress" id="photo-progress"><i id="photo-progress-fill"></i></div>
+    </section>
     <div class="perf-panel" id="perf-panel">Performance</div>
+    <div class="shadow-tuning" id="shadow-tuning" aria-label="Shadow tuning">
+      <label>bias <input id="shadow-bias" type="range" min="-0.002" max="0.002" step="0.00002" value="-0.00018"><span id="shadow-bias-value"></span></label>
+      <label>normal <input id="shadow-normal-bias" type="range" min="0" max="0.2" step="0.002" value="0.028"><span id="shadow-normal-bias-value"></span></label>
+      <label>wind <input id="wind-strength" type="range" min="0" max="3" step="0.05" value="1"><span id="wind-strength-value"></span></label>
+    </div>
     <aside class="grow-inspector" id="grow-inspector" aria-label="GROW developer inspector"></aside>
     <aside class="citizen-card" id="citizen-card" aria-live="polite">
       <button class="card-close" id="card-close" aria-label="Close citizen card">×</button>
@@ -189,6 +240,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <div><dt>History</dt><dd>Choose Observe, then select a person or place.</dd></div>
           </dl>
         </section>
+        <label class="quality-setting" for="quality-select">Graphics quality
+          <select id="quality-select" aria-label="Graphics quality">
+            <option value="auto">Auto</option>
+            <option value="low">Low</option>
+            <option value="mid">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
         <p class="creator-credit">Made by <a href="https://szabadkai.com" target="_blank" rel="noreferrer">Levente Szabadkai</a> · <a href="https://github.com/szabadkai/puzzle-city" target="_blank" rel="noreferrer">GitHub</a>.</p>
         <a class="feedback-link" href="https://github.com/szabadkai/puzzle-city/issues/new" target="_blank" rel="noreferrer">Send feedback on GitHub</a>
         <details class="music-credit">
@@ -215,9 +274,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `;
 
-const saved = loadTown();
+const saved = (await loadSharedTown()) ?? loadTown();
 const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
-let timeOfDay = saved?.timeOfDay ?? 7.5;
+// New towns open at golden hour. The most saturated light makes the first frame.
+let timeOfDay = saved?.timeOfDay ?? 17.5;
 let day = saved?.day ?? 1;
 const restoredCatEntry = saved?.journal?.find((entry) => entry.eventId === 'harbor-cats');
 let catColonyFoundedAt = saved?.catColonyFoundedAt
@@ -235,27 +295,116 @@ const litHarborLanternIds = new Set<HarborLanternId>(
   saved?.harborLanternMode === 'confluence-mastery' ? saved.harborLanterns ?? [] : [],
 );
 let festivalInvitationPending = false;
+const BUILD_HISTORY_LIMIT = 6000;
+const buildHistory: BuildAction[] = saved?.history ?? [];
+
+function recordBuildAction(x: number, z: number, height: number) {
+  buildHistory.push([day * 24 + timeOfDay, x, z, height]);
+  if (buildHistory.length > BUILD_HISTORY_LIMIT) buildHistory.splice(0, buildHistory.length - BUILD_HISTORY_LIMIT);
+}
+
+/** Older saves have no history. Order their buildings by founding and renovation time. */
+function synthesizedHistory(cells: Iterable<{ x: number; z: number; height: number; foundedAt?: number; renovatedAt?: number }>): BuildAction[] {
+  const actions: BuildAction[] = [];
+  for (const cell of cells) {
+    const founded = cell.foundedAt ?? 0;
+    const renovated = Math.max(founded, cell.renovatedAt ?? founded);
+    for (let level = 1; level <= cell.height; level++) {
+      const t = cell.height === 1 ? 0 : (level - 1) / (cell.height - 1);
+      actions.push([founded + (renovated - founded) * t, cell.x, cell.z, level]);
+    }
+  }
+  return actions.sort((a, b) => a[0] - b[0]);
+}
+
+const palette = new PaletteSystem(saved?.palette);
+presentationUniforms.uPalette.value = palette.texture;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x91c7c1);
 const sceneFog = new THREE.FogExp2(0x91c7c1, .0135);
 scene.fog = sceneFog;
+const skyDome = new SkyDome();
+scene.add(skyDome.mesh);
+const atmosphere = createAtmosphereState();
 
 const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, .1, 300);
 camera.position.set(18, 19, 20);
 
+const LANDSCAPE_HORIZONTAL_FOV = 58;
+const PORTRAIT_VERTICAL_FOV = 50;
+
+function viewportSize() {
+  const viewport = window.visualViewport;
+  return viewport ? { width: Math.round(viewport.width), height: Math.round(viewport.height) } : { width: innerWidth, height: innerHeight };
+}
+
+/** Portrait locks the vertical field of view, landscape the horizontal one. */
+function applyCameraFov() {
+  if (camera.aspect < 1) {
+    camera.fov = PORTRAIT_VERTICAL_FOV;
+  } else {
+    const horizontal = THREE.MathUtils.degToRad(LANDSCAPE_HORIZONTAL_FOV);
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(horizontal / 2) / camera.aspect));
+  }
+  camera.updateProjectionMatrix();
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
-const maximumPixelRatio = Math.min(devicePixelRatio, 1.5);
+const tierOverride = storedTierOverride();
+const detectedTier = readDetectedTier();
+let qualityTier: QualityTier = tierOverride ?? detectedTier ?? guessTier(renderer);
+let tierNeedsRefinement = !tierOverride && !detectedTier;
+let quality = QUALITY_SETTINGS[qualityTier];
+let maximumPixelRatio = Math.min(devicePixelRatio, quality.maxPixelRatio);
 let renderPixelRatio = maximumPixelRatio;
+const gpuTimer = new GpuTimer(renderer);
+// The post pipeline renders several passes per frame. Count them all.
+renderer.info.autoReset = false;
+const highRefreshAllowed = localStorage.getItem(HIGH_REFRESH_KEY) === 'true';
+
+function readDetectedTier(): QualityTier | null {
+  const stored = localStorage.getItem(DETECTED_TIER_KEY);
+  return stored === 'low' || stored === 'mid' || stored === 'high' ? stored : null;
+}
+
+function applyQualityTier(tier: QualityTier) {
+  qualityTier = tier;
+  quality = QUALITY_SETTINGS[tier];
+  maximumPixelRatio = Math.min(devicePixelRatio, quality.maxPixelRatio);
+  renderPixelRatio = Math.min(renderPixelRatio, maximumPixelRatio);
+  applyRenderScale();
+}
+
+function applyRenderScale() {
+  if (photo.active) return;
+  renderer.setPixelRatio(renderPixelRatio);
+  const { width, height } = viewportSize();
+  pipeline?.setSize(width, height);
+  const drawingBuffer = renderer.getDrawingBufferSize(new THREE.Vector2());
+  water.setSize(drawingBuffer.x, drawingBuffer.y);
+  city.setPointScale(drawingBuffer.y);
+}
+
+renderer.domElement.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault();
+  showToast('The graphics context was lost. Restoring the harbor...');
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  applyViewport();
+  palette.texture.needsUpdate = true;
+  renderer.shadowMap.needsUpdate = true;
+  ignoreNextPerformanceSample = true;
+  showToast('The harbor is back.');
+});
 renderer.setPixelRatio(renderPixelRatio);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.shadowMap.autoUpdate = false;
 renderer.shadowMap.needsUpdate = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+// Tone mapping runs in the post pipeline so bloom sees scene-referred light.
+renderer.toneMapping = THREE.NoToneMapping;
 document.querySelector('#app')!.prepend(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -263,7 +412,8 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = false;
 controls.enablePan = true;
 controls.screenSpacePanning = false;
-controls.minDistance = 12;
+// Close enough for a cat or a kite to fill a third of a portrait frame.
+controls.minDistance = 2.2;
 controls.maxDistance = 120;
 controls.minPolarAngle = .42;
 // Allow a near-horizontal orbit for looking directly at building facades while
@@ -275,122 +425,108 @@ controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
 controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 controls.touches.ONE = THREE.TOUCH.ROTATE;
 controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+const director = new CameraDirector(camera, controls, renderer.domElement);
 
 const hemi = new THREE.HemisphereLight(0xffe8bd, 0x315f63, 2.25);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffc984, 4.7);
-sun.position.set(-14, 23, 12);
-sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.left = -25;
-sun.shadow.camera.right = 25;
-sun.shadow.camera.top = 25;
-sun.shadow.camera.bottom = -25;
-sun.shadow.camera.near = 3;
-sun.shadow.camera.far = 60;
-sun.shadow.bias = -.0005;
-scene.add(sun);
+// One sun, split into cascades fitted to the camera frustum every frame.
+setShadowCascadeCount(quality.shadowCascades);
+const csm = new CSM({
+  camera,
+  parent: scene,
+  cascades: quality.shadowCascades,
+  shadowMapSize: quality.shadowMapSize,
+  maxFar: 110,
+  mode: 'practical',
+  lightDirection: new THREE.Vector3(.5, -.7, -.45).normalize(),
+  lightIntensity: 4,
+  lightNear: 1,
+  lightFar: 240,
+  lightMargin: 40,
+  shadowBias: -.00018,
+});
+csm.fade = true;
+for (const light of csm.lights) {
+  light.shadow.normalBias = .028;
+  light.shadow.radius = 2.5;
+}
+const shadowSettings = { bias: -.00018, normalBias: .028 };
 const moon = new THREE.DirectionalLight(0xa9ccf2, 0);
 moon.position.set(14, 18, -12);
 scene.add(moon);
-
-function createWaterNoiseTexture(size = 128) {
-  const data = new Uint8Array(size * size * 4);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const u = x / size * Math.PI * 2;
-    const v = y / size * Math.PI * 2;
-    const first = Math.sin(u * 3 + Math.sin(v * 2)) * .5 + .5;
-    const second = Math.sin(v * 5 - Math.cos(u * 2)) * .5 + .5;
-    const fine = Math.sin((u + v) * 7) * .5 + .5;
-    const index = (y * size + x) * 4;
-    data[index] = Math.round(first * 255);
-    data[index + 1] = Math.round(second * 255);
-    data[index + 2] = Math.round(fine * 255);
-    data[index + 3] = 255;
-  }
-  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  texture.needsUpdate = true;
-  return texture;
-}
-
-const WATER_FLAT_RADIUS = 165;
-const WATER_CURVE_RADIUS = 320;
-const WATER_MESH_RADIUS = 520;
-
-function createCurvedWaterGeometry() {
-  // Keep the playable harbor level, then roll the distant sea below the sightline.
-  // The outer rim sits beyond the camera's far plane, so only the smooth tangent
-  // of the curved surface can form the horizon.
-  const geometry = new THREE.RingGeometry(0, WATER_MESH_RADIUS, 160, 72);
-  const positions = geometry.getAttribute('position');
-  for (let index = 0; index < positions.count; index++) {
-    const radius = Math.hypot(positions.getX(index), positions.getY(index));
-    const curvedDistance = Math.max(0, radius - WATER_FLAT_RADIUS);
-    positions.setZ(index, -(curvedDistance * curvedDistance) / (2 * WATER_CURVE_RADIUS));
-  }
-  positions.needsUpdate = true;
-  geometry.computeVertexNormals();
-  geometry.rotateX(-Math.PI / 2);
-  geometry.computeBoundingSphere();
-  return geometry;
-}
-
-const waterUniforms = {
-  uTime: { value: 0 },
-  uDay: { value: 1 },
-  uRain: { value: 0 },
-  uNoise: { value: createWaterNoiseTexture() },
-  uSky: { value: new THREE.Color(0x91c7c1) },
-  uHorizonCenter: { value: new THREE.Vector2() },
-};
-const waterMaterial = new THREE.ShaderMaterial({
-  uniforms: waterUniforms,
-  transparent: false,
-  vertexShader: `
-    varying vec3 vWorld;
-    void main() {
-      vec4 world = modelMatrix * vec4(position, 1.0);
-      vWorld = world.xyz;
-      gl_Position = projectionMatrix * viewMatrix * world;
-    }
-  `,
-  fragmentShader: `
-    uniform float uTime;
-    uniform float uDay;
-    uniform float uRain;
-    uniform sampler2D uNoise;
-    uniform vec3 uSky;
-    uniform vec2 uHorizonCenter;
-    varying vec3 vWorld;
-    void main() {
-      vec2 baseUv = vWorld.xz * .018;
-      vec3 first = texture2D(uNoise, baseUv + vec2(uTime * .007, -uTime * .004)).rgb;
-      vec3 second = texture2D(uNoise, baseUv * 1.73 + vec2(-uTime * .004, uTime * .006)).rgb;
-      float wave = (first.r + second.g - 1.0) * (.12 + uRain * .08);
-      float ribbons = first.b * .55 + second.r * .45;
-      vec3 deep = vec3(.075, .34, .37);
-      vec3 pale = vec3(.24, .61, .58);
-      vec3 color = mix(deep, pale, .50 + wave * 1.75 + ribbons * .055);
-      color += vec3(.055, .035, .008) * ribbons;
-      color *= mix(.34, 1.0, uDay);
-      color += vec3(.018, .026, .055) * (1.0 - uDay);
-      color = mix(color, color * .72 + vec3(.025, .055, .065), uRain * .58);
-      float horizonHaze = smoothstep(95.0, 170.0, distance(vWorld.xz, uHorizonCenter));
-      color = mix(color, uSky, horizonHaze);
-      gl_FragColor = vec4(color, 1.0);
-    }
-  `,
+// A fixed pool of point lights follows the lanterns nearest the view. The count
+// never changes at runtime, so no material recompiles.
+const lanternLights = Array.from({ length: quality.pointLights }, () => {
+  const light = new THREE.PointLight(0xffb060, 0, 9, 2);
+  scene.add(light);
+  return light;
 });
-const water = new THREE.Mesh(createCurvedWaterGeometry(), waterMaterial);
-water.position.y = -.31;
-scene.add(water);
+const lanternScratch = new THREE.Vector3();
+
+function updateLanternLights(night: number, warm: THREE.Color) {
+  if (!lanternLights.length) return;
+  const anchors = [...city.lightAnchors()]
+    .sort((a, b) => a.distanceToSquared(controls.target) - b.distanceToSquared(controls.target));
+  for (const [index, light] of lanternLights.entries()) {
+    const anchor = anchors[index];
+    if (!anchor || night < .02) {
+      light.intensity = 0;
+      continue;
+    }
+    lanternScratch.copy(anchor);
+    light.position.copy(lanternScratch);
+    light.color.copy(warm);
+    light.intensity = night * 5.5;
+  }
+}
+let pipeline: PostPipeline | null = null;
+
+type PhotoAspect = '9:16' | '4:5' | '16:9';
+type PhotoWeather = 'sim' | 'clear' | 'overcast' | 'rain' | 'night';
+const photo = {
+  active: false,
+  hour: null as number | null,
+  weather: 'sim' as PhotoWeather,
+  aspect: '9:16' as PhotoAspect,
+  paletteBefore: palette.id,
+  depthOfFieldBefore: 'off' as DepthOfFieldPreset,
+  wordmark: true,
+  busy: false,
+  recorder: null as ClipRecorder | null,
+  lastClip: null as { blob: Blob; name: string } | null,
+  lastStill: null as { blob: Blob; name: string } | null,
+  /** Seconds left in the wordmark tail after Record Clip was pressed. Null while idle. */
+  tailSeconds: null as number | null,
+  tailResolve: null as (() => void) | null,
+};
+
+
+const water = new WaterSurface(quality);
+scene.add(water.mesh);
+const wakes = new WakeSystem(6, quality.particleScale);
+scene.add(wakes.mesh);
+const rain = new RainSystem(Math.round(3000 * quality.particleScale));
+scene.add(rain.mesh);
+const cameraForward = new THREE.Vector3();
+skyDome.mesh.layers.enable(REFLECTION_LAYER);
+skyDome.mesh.layers.enable(EMISSIVE_REFLECTION_LAYER);
 
 const city = new CityRenderer(seed);
+city.setParticleScale(quality.particleScale);
 scene.add(city.root);
+
+const shadowLiftTint = new THREE.Color();
+const ambientOcclusionColor = new THREE.Color();
+
+function applyPaletteColors() {
+  city.setPaletteColors(palette.color(PALETTE_SLOT.stone), palette.color(PALETTE_SLOT.stoneDark), palette.color(PALETTE_SLOT.trim));
+  shadowLiftTint.copy(palette.color(PALETTE_SLOT.shadow));
+  ambientOcclusionColor.copy(palette.color(PALETTE_SLOT.shadow)).multiplyScalar(.28);
+  pipeline?.setLift(.03, shadowLiftTint);
+  pipeline?.setAmbientOcclusionColor(ambientOcclusionColor);
+}
 if (saved) city.load(saved.cells, day * 24 + timeOfDay);
+water.setCells(city.cells.values());
 let formationOccurrences: readonly FormationOccurrence[] = detectFormations(city.cells);
 const knownFormations = new Set<FormationId>(saved?.formations ?? []);
 for (const id of formationLineage(formationOccurrences.map((formation) => formation.id))) knownFormations.add(id);
@@ -581,8 +717,13 @@ function cancelCameraGesture() {
   controls.reset();
 }
 
+function pointerToNdc(clientX: number, clientY: number) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.set((clientX - rect.left) / rect.width * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+}
+
 function updateHover(clientX: number, clientY: number) {
-  pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  pointerToNdc(clientX, clientY);
   raycaster.setFromCamera(pointer, camera);
   const residentHovered = citizens.pick(raycaster) !== null;
   const absoluteHours = day * 24 + timeOfDay;
@@ -623,19 +764,20 @@ function updateHover(clientX: number, clientY: number) {
 }
 
 function inspectCitizen(clientX: number, clientY: number) {
-  pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  pointerToNdc(clientX, clientY);
   raycaster.setFromCamera(pointer, camera);
   const citizenId = citizens.pick(raycaster);
   if (!citizenId) return false;
   hideMemoryCard();
   selectedCitizenId = citizenId;
+  director.follow(() => citizens.positionOf(citizenId));
   updateCitizenCard();
   hover.visible = false;
   return true;
 }
 
 function inspectTownMemory(clientX: number, clientY: number) {
-  pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  pointerToNdc(clientX, clientY);
   raycaster.setFromCamera(pointer, camera);
   const absoluteHours = day * 24 + timeOfDay;
   const ambienceHit = raycaster.intersectObject(ambience.root, true)
@@ -683,6 +825,12 @@ function updateCitizenCard() {
   if (!selectedCitizenId) return;
   const card = citizens.card(selectedCitizenId);
   if (!card) return false;
+  const label = document.querySelector<HTMLElement>('#follow-label')!;
+  label.replaceChildren();
+  const name = document.createElement('strong');
+  name.textContent = card.name;
+  label.append(name, ` · ${card.activity}`);
+  label.classList.add('show');
   document.querySelector('#citizen-name')!.textContent = card.name;
   document.querySelector('#citizen-role')!.textContent = card.occupation;
   document.querySelector('#citizen-home')!.textContent = card.home;
@@ -695,7 +843,9 @@ function updateCitizenCard() {
 
 function hideCitizenCard() {
   selectedCitizenId = null;
+  director.follow(null);
   document.querySelector('#citizen-card')!.classList.remove('show');
+  document.querySelector('#follow-label')!.classList.remove('show');
 }
 
 function hideMemoryCard() {
@@ -704,12 +854,15 @@ function hideMemoryCard() {
 }
 
 function build(x: number, z: number) {
+  if (photo.active) return;
   if (!city.place(x, z, day * 24 + timeOfDay)) {
     showToast(city.get(x, z) ? 'That tower is tall enough.' : 'The water is too deep to build there.');
     softTone(150, .05);
     return;
   }
+  recordBuildAction(x, z, city.get(x, z)?.height ?? 1);
   citizens.rebuild(city.cells);
+  water.setCells(city.cells.values());
   refreshFormations(true);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
@@ -720,15 +873,18 @@ function build(x: number, z: number) {
   severeOverloadSeconds = 0;
   renderer.shadowMap.needsUpdate = true;
   ignoreNextPerformanceSample = true;
-  popSound();
+  popSound(city.get(x, z)?.height ?? 1);
   persistSoon();
   evaluateDiscoveries();
 }
 
 function demolish(x: number, z: number) {
+  if (photo.active) return;
   if (!city.remove(x, z, day * 24 + timeOfDay)) return;
+  recordBuildAction(x, z, city.get(x, z)?.height ?? 0);
   hideMemoryCard();
   citizens.rebuild(city.cells);
+  water.setCells(city.cells.values());
   refreshFormations(true);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
@@ -740,7 +896,7 @@ function demolish(x: number, z: number) {
   renderer.shadowMap.needsUpdate = true;
   ignoreNextPerformanceSample = true;
   hideCitizenCard();
-  softTone(190, .07);
+  softTone(120 * (1 + (Math.random() * 2 - 1) * .03), .09, 0, .035, 'triangle');
   persistSoon();
   evaluateDiscoveries();
 }
@@ -774,6 +930,8 @@ function currentTownData(): SavedTown {
     harborLanternMode: 'confluence-mastery',
     onboardingDismissed,
     placeIntroductionSeen,
+    palette: palette.id,
+    history: buildHistory.length ? buildHistory : undefined,
   };
 }
 
@@ -789,6 +947,26 @@ function loadTown(): SavedTown | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A `#t=` fragment carries a whole town. Load it, keep it as the local save,
+ * and drop the fragment so a reload does not import it again.
+ */
+async function loadSharedTown(): Promise<SavedTown | null> {
+  const code = shareCodeFromLocation();
+  if (!code || !shareCodeSupported()) return null;
+  const town = await decodeShareCode(code);
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!town) {
+    window.setTimeout(() => showToast('That share link could not be read.'), 600);
+    return null;
+  }
+  const current = loadTown();
+  const replacesTown = current !== null && current.cells.length > 0 && current.seed !== town.seed;
+  if (replacesTown && !confirm(`Open the shared town from Day ${town.day ?? 1}? Your current town will be replaced.`)) return null;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(town));
+  return town;
 }
 
 function showToast(message: string) {
@@ -2025,7 +2203,7 @@ function canvasPng(inscription: string) {
     const markersWereVisible = onboardingMarkers.visible;
     hover.visible = false;
     onboardingMarkers.visible = false;
-    renderer.render(scene, camera);
+    pipeline?.render(0);
     void composePostcard(renderer.domElement, { inscription, date: postcardDate(), day }).then((blob) => {
       hover.visible = hoverWasVisible;
       onboardingMarkers.visible = markersWereVisible;
@@ -2141,22 +2319,40 @@ function applyBusinessUpdate(update: BusinessUpdate, announce: boolean) {
   if (update.opened.length) evaluateDiscoveries();
 }
 
+let masterGain: GainNode | null = null;
+let audioCaptureDestination: MediaStreamAudioDestinationNode | null = null;
+
 function getAudio() {
-  audioContext ??= new AudioContext();
+  if (!audioContext) {
+    audioContext = new AudioContext();
+    masterGain = audioContext.createGain();
+    masterGain.connect(audioContext.destination);
+  }
   return audioContext;
 }
 
-function softTone(frequency: number, duration: number, delay = 0, volume = .055, wave: OscillatorType = 'sine') {
+/** One stream of every synthesized cue, for recorders that capture audio. */
+function captureAudioStream() {
+  if (!audioContext || !masterGain) return null;
+  audioCaptureDestination ??= audioContext.createMediaStreamDestination();
+  masterGain.connect(audioCaptureDestination);
+  return audioCaptureDestination.stream;
+}
+
+function softTone(frequency: number, duration: number, delay = 0, volume = .055, wave: OscillatorType = 'sine', pan = 0) {
   const context = getAudio();
   const oscillator = context.createOscillator();
   const gain = context.createGain();
+  const panner = pan !== 0 && typeof StereoPannerNode === 'function' ? new StereoPannerNode(context, { pan: THREE.MathUtils.clamp(pan, -1, 1) }) : null;
   oscillator.type = wave;
   oscillator.frequency.setValueAtTime(frequency, context.currentTime + delay);
   oscillator.frequency.exponentialRampToValueAtTime(frequency * 1.18, context.currentTime + delay + duration);
   gain.gain.setValueAtTime(.0001, context.currentTime + delay);
   gain.gain.exponentialRampToValueAtTime(volume, context.currentTime + delay + .012);
   gain.gain.exponentialRampToValueAtTime(.0001, context.currentTime + delay + duration);
-  oscillator.connect(gain).connect(context.destination);
+  const output: AudioNode = masterGain ?? context.destination;
+  if (panner) oscillator.connect(gain).connect(panner).connect(output);
+  else oscillator.connect(gain).connect(output);
   oscillator.start(context.currentTime + delay);
   oscillator.stop(context.currentTime + delay + duration + .02);
 }
@@ -2180,7 +2376,15 @@ type SoundCue = 'water' | 'gulls' | 'footsteps' | 'door' | 'chatter' | 'bell' | 
 
 function playCue(cue: SoundCue, daylight = 1) {
   if (audioContext && audioContext.state !== 'running') return;
-  if (cue === 'water') softTone(105 + daylight * 38, .7, 0, .009, 'sine');
+  if (cue === 'water') {
+    // The lap fades as the camera climbs and sits toward the side the harbor lies on.
+    const height = Math.max(0, camera.position.y);
+    const attenuation = THREE.MathUtils.clamp(1.15 - height / 40, .15, 1);
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const toTown = new THREE.Vector3(-camera.position.x, 0, -camera.position.z);
+    const pan = toTown.lengthSq() > 1 ? THREE.MathUtils.clamp(toTown.normalize().dot(right), -.6, .6) : 0;
+    softTone(105 + daylight * 38, .7, 0, .011 * attenuation, 'sine', pan);
+  }
   if (cue === 'gulls') { softTone(1120, .11, .12, .009, 'triangle'); softTone(870, .14, .25, .007, 'triangle'); }
   if (cue === 'footsteps') { softTone(155, .035, 0, .006, 'square'); softTone(145, .035, .16, .005, 'square'); }
   if (cue === 'door') softTone(220, .09, 0, .018, 'triangle');
@@ -2201,17 +2405,32 @@ function playCue(cue: SoundCue, daylight = 1) {
   }
 }
 
-function popSound() {
-  softTone(260, .11);
-  softTone(430, .13, .045);
+/** A soft wooden plop and a chime that rises with the building's height, slightly detuned each time. */
+function popSound(height = 1) {
+  const detune = 1 + (Math.random() * 2 - 1) * .03;
+  softTone(150 * detune, .09, 0, .05, 'triangle');
+  softTone(392 * Math.pow(2, (height - 1) * 3 / 12) * detune, .16, .04, .045, 'sine');
+  softTone(588 * Math.pow(2, (height - 1) * 3 / 12) * detune, .14, .09, .025, 'sine');
 }
+
+let audioLocked = true;
 
 function updateMusicButton() {
   const button = document.querySelector<HTMLButtonElement>('#music-toggle')!;
   button.classList.toggle('muted', musicMuted);
   button.setAttribute('aria-pressed', String(!musicMuted));
   button.setAttribute('aria-label', musicMuted ? 'Turn music on' : 'Turn music off');
-  button.querySelector('.music-state')!.textContent = musicMuted ? '♩' : '♫';
+  // Browsers keep audio silent until the first gesture. Show that state honestly.
+  button.querySelector('.music-state')!.textContent = audioLocked ? '🔇' : musicMuted ? '♩' : '♫';
+  button.title = audioLocked ? 'Sound starts after your first tap or key press' : '';
+}
+
+function unlockAudio() {
+  void startBackgroundMusic();
+  void getAudio().resume().then(() => {
+    audioLocked = false;
+    updateMusicButton();
+  });
 }
 
 async function startBackgroundMusic() {
@@ -2232,14 +2451,8 @@ function toggleBackgroundMusic() {
 }
 
 updateMusicButton();
-window.addEventListener('pointerdown', () => {
-  void startBackgroundMusic();
-  void getAudio().resume();
-}, { capture: true, once: true });
-window.addEventListener('keydown', () => {
-  void startBackgroundMusic();
-  void getAudio().resume();
-}, { capture: true, once: true });
+window.addEventListener('pointerdown', unlockAudio, { capture: true, once: true });
+window.addEventListener('keydown', unlockAudio, { capture: true, once: true });
 
 function centerView() {
   controls.target.set(0, 1.3, 0);
@@ -2248,6 +2461,19 @@ function centerView() {
 }
 
 document.querySelector('#music-toggle')!.addEventListener('click', toggleBackgroundMusic);
+
+function setUiHidden(hidden: boolean) {
+  document.body.classList.toggle('ui-hidden', hidden);
+  document.querySelector('#ui-restore')!.setAttribute('aria-hidden', String(!hidden));
+  if (hidden) setTopActionsOpen(false);
+}
+document.querySelector('#ui-hide')!.addEventListener('click', () => setUiHidden(true));
+document.querySelector('#ui-restore')!.addEventListener('click', () => setUiHidden(false));
+document.querySelector('#palette-cycle')!.addEventListener('click', () => {
+  const next = palette.next();
+  showToast(`Palette: ${next.title}.`);
+  persistSoon();
+});
 document.querySelector('#touch-center')!.addEventListener('click', () => {
   centerView();
   showToast('The harbor drifts back into view.');
@@ -2385,6 +2611,14 @@ document.querySelector('#journal-list')!.addEventListener('click', (event) => {
   const followConfluenceCard = target.closest<HTMLButtonElement>('[data-follow-confluence-id]');
   if (followConfluenceCard?.dataset.followConfluenceId) followConfluence(followConfluenceCard.dataset.followConfluenceId as ConfluenceId);
 });
+const qualitySelect = document.querySelector<HTMLSelectElement>('#quality-select')!;
+qualitySelect.value = tierOverride ?? 'auto';
+qualitySelect.addEventListener('change', () => {
+  const value = qualitySelect.value;
+  storeTierOverride(value === 'low' || value === 'mid' || value === 'high' ? value : null);
+  saveTown();
+  location.reload();
+});
 document.querySelector('#about-open')!.addEventListener('click', () => setAboutOpen(true));
 document.querySelector('#about-close')!.addEventListener('click', () => setAboutOpen(false));
 document.querySelector('#about-scrim')!.addEventListener('click', (event) => {
@@ -2468,9 +2702,44 @@ document.querySelector('#grow-inspector')!.addEventListener('click', (event) => 
   updateGrowInspector();
 });
 
+const shadowBiasInput = document.querySelector<HTMLInputElement>('#shadow-bias')!;
+const shadowNormalBiasInput = document.querySelector<HTMLInputElement>('#shadow-normal-bias')!;
+function readShadowTuning() {
+  shadowSettings.bias = Number(shadowBiasInput.value);
+  shadowSettings.normalBias = Number(shadowNormalBiasInput.value);
+  document.querySelector('#shadow-bias-value')!.textContent = shadowSettings.bias.toFixed(5);
+  document.querySelector('#shadow-normal-bias-value')!.textContent = shadowSettings.normalBias.toFixed(3);
+}
+shadowBiasInput.addEventListener('input', readShadowTuning);
+shadowNormalBiasInput.addEventListener('input', readShadowTuning);
+readShadowTuning();
+const windStrengthInput = document.querySelector<HTMLInputElement>('#wind-strength')!;
+let windStrengthScale = 1;
+windStrengthInput.addEventListener('input', () => {
+  windStrengthScale = Number(windStrengthInput.value);
+  document.querySelector('#wind-strength-value')!.textContent = windStrengthScale.toFixed(2);
+});
+
+/** One coherent wind: a slow heading drift with gusts. Smoke, cloth, and water all read it. */
+function updateWind(time: number) {
+  const heading = .7 + Math.sin(time * .021) * .55 + Math.sin(time * .0073) * .3;
+  const gust = .55 + .3 * Math.sin(time * .37) + .15 * Math.sin(time * 1.31 + 2);
+  const strength = gust * windStrengthScale;
+  presentationUniforms.uTime.value = time;
+  presentationUniforms.uWind.value.set(Math.cos(heading) * strength, Math.sin(heading) * strength);
+  water.wind.copy(presentationUniforms.uWind.value);
+}
+
 window.addEventListener('keydown', (event) => {
-  if (event.key.toLowerCase() === 'p') document.querySelector('#perf-panel')!.classList.toggle('show');
+  // Browser shortcuts such as Cmd+F or Ctrl+P must never trigger game hotkeys.
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.key.toLowerCase() === 'p') {
+    document.querySelector('#perf-panel')!.classList.toggle('show');
+    document.querySelector('#shadow-tuning')!.classList.toggle('show');
+  }
   if (event.key.toLowerCase() === 'j') setJournalOpen(!document.querySelector('#journal-scrim')!.classList.contains('show'));
+  if (event.key.toLowerCase() === 'h') setUiHidden(!document.body.classList.contains('ui-hidden'));
+  if (event.key.toLowerCase() === 'f' && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) setPhotoMode(!photo.active);
   if (event.key.toLowerCase() === 'i') document.querySelector<HTMLButtonElement>('#observe-toggle')!.click();
   if (event.key.toLowerCase() === 'g') {
     document.querySelector('#grow-inspector')!.classList.toggle('show');
@@ -2478,6 +2747,9 @@ window.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape') {
     cancelCameraGesture();
+    hideCitizenCard();
+    setPhotoMode(false);
+    setUiHidden(false);
     setTopActionsOpen(false);
     setJournalOpen(false);
     setTouchGuideOpen(false);
@@ -2487,6 +2759,9 @@ window.addEventListener('keydown', (event) => {
 });
 
 const ambience = new HarborAmbience(seed, camera, city.cells.values());
+ambience.hideSunDisc();
+ambience.hideLegacyRain();
+ambience.attachWakes(wakes);
 ambience.setDiscoveryState(grow.discoveredIds());
 ambience.setPlaceIdentities(placeIdentityOccurrences);
 ambience.setTown(city.cells.values(), businesses.all(), citizens.residents(), city.matureTreeAnchors(day * 24 + timeOfDay));
@@ -2511,19 +2786,415 @@ function refreshAmbience() {
 }
 
 const clock = new THREE.Clock();
-const daySky = new THREE.Color(0x91c7c1);
-const nightSky = new THREE.Color(0x192b43);
-const dawnSky = new THREE.Color(0xc47f72);
-const dayHemiSky = new THREE.Color(0xffe8bd);
-const nightHemiSky = new THREE.Color(0x9bc5e8);
-const dayHemiGround = new THREE.Color(0x315f63);
-const nightHemiGround = new THREE.Color(0x23475e);
-const currentSky = new THREE.Color();
+pipeline = new PostPipeline(renderer, scene, camera, quality, gpuTimer);
+applyRenderScale();
+applyPaletteColors();
+
+const ASPECT_RATIOS: Record<PhotoAspect, number> = { '9:16': 9 / 16, '4:5': 4 / 5, '16:9': 16 / 9 };
+const EXPORT_SHORT_EDGE = quality.tier === 'low' ? 720 : 1080;
+
+function exportSize(aspect: PhotoAspect) {
+  const ratio = ASPECT_RATIOS[aspect];
+  return ratio < 1
+    ? { width: EXPORT_SHORT_EDGE, height: Math.round(EXPORT_SHORT_EDGE / ratio / 2) * 2 }
+    : { width: Math.round(EXPORT_SHORT_EDGE * ratio / 2) * 2, height: EXPORT_SHORT_EDGE };
+}
+
+function shareLinkBase() {
+  return `${location.origin}${location.pathname}`;
+}
+
+function wordmarkUrl() {
+  return location.host.replace(/^www\./, '') + location.pathname.replace(/\/$/, '');
+}
+
+function photoStatus(message: string) {
+  document.querySelector('#photo-status')!.textContent = message;
+}
+
+function photoProgress(fraction: number | null) {
+  const bar = document.querySelector<HTMLElement>('#photo-progress')!;
+  bar.classList.toggle('show', fraction !== null);
+  document.querySelector<HTMLElement>('#photo-progress-fill')!.style.width = `${Math.round((fraction ?? 0) * 100)}%`;
+}
+
+/** The hour the frame renders with. Photo mode may override the simulation clock. */
+function renderHour() {
+  if (!photo.active) return timeOfDay;
+  if (photo.weather === 'night') return 23;
+  return photo.hour ?? timeOfDay;
+}
+
+function renderRain(simulated: number) {
+  if (!photo.active || photo.weather === 'sim') return simulated;
+  return photo.weather === 'rain' ? .75 : photo.weather === 'overcast' ? .28 : 0;
+}
+
+/** In photo mode the canvas takes the chosen aspect and letterboxes inside the viewport. */
+function layoutSize(): { width: number; height: number; render?: { width: number; height: number } } {
+  const viewport = viewportSize();
+  if (!photo.active) return viewport;
+  const target = exportSize(photo.aspect);
+  const scale = Math.min(viewport.width / target.width, viewport.height / target.height);
+  return { width: Math.round(target.width * scale), height: Math.round(target.height * scale), render: target };
+}
+
+const photoPaletteSelect = document.querySelector<HTMLSelectElement>('#photo-palette')!;
+for (const definition of PALETTES) {
+  const option = document.createElement('option');
+  option.value = definition.id;
+  option.textContent = definition.title;
+  photoPaletteSelect.append(option);
+}
+
+function syncPhotoControls() {
+  const hour = renderHour();
+  document.querySelector<HTMLInputElement>('#photo-hour')!.value = String(photo.hour ?? timeOfDay);
+  document.querySelector('#photo-hour-label')!.textContent = `${String(Math.floor(hour)).padStart(2, '0')}:${String(Math.floor((hour % 1) * 60)).padStart(2, '0')}`;
+  document.querySelector<HTMLSelectElement>('#photo-weather')!.value = photo.weather;
+  const dofSelect = document.querySelector<HTMLSelectElement>('#photo-dof')!;
+  dofSelect.value = pipeline!.depthOfFieldMode;
+  dofSelect.disabled = !pipeline!.depthOfFieldAvailable;
+  document.querySelector<HTMLSelectElement>('#photo-aspect')!.value = photo.aspect;
+  photoPaletteSelect.value = palette.id;
+  document.querySelector<HTMLInputElement>('#photo-wordmark')!.checked = photo.wordmark;
+}
+
+async function startClipRecorder() {
+  photo.recorder?.dispose();
+  photo.recorder = null;
+  if (!webCodecsAvailable()) return;
+  const size = exportSize(photo.aspect);
+  const recorder = new ClipRecorder(size.width, size.height, 15, wordmarkUrl());
+  try {
+    await recorder.start();
+    if (photo.active) photo.recorder = recorder;
+    else recorder.dispose();
+  } catch {
+    recorder.dispose();
+  }
+}
+
+function setPhotoMode(active: boolean) {
+  if (photo.active === active) return;
+  photo.active = active;
+  const panel = document.querySelector<HTMLElement>('#photo-panel')!;
+  document.body.classList.toggle('photo-mode', active);
+  panel.classList.toggle('show', active);
+  panel.setAttribute('aria-hidden', String(!active));
+  if (active) {
+    setJournalOpen(false);
+    setAboutOpen(false);
+    setPostcardOpen(false);
+    setTouchGuideOpen(false);
+    hideCitizenCard();
+    hover.visible = false;
+    photo.paletteBefore = palette.id;
+    photo.depthOfFieldBefore = pipeline!.depthOfFieldMode;
+    photo.hour = null;
+    photo.weather = 'sim';
+    pipeline!.setDepthOfField(pipeline!.depthOfFieldAvailable ? 'cinematic' : 'off');
+    setUiHidden(true);
+    director.beginDrift();
+    photoStatus(webCodecsAvailable() ? 'The last seconds are always ready to save as a clip.' : 'Clips record forward from the moment you press Record.');
+    void startClipRecorder();
+  } else {
+    photo.recorder?.dispose();
+    photo.recorder = null;
+    photo.tailSeconds = null;
+    palette.set(photo.paletteBefore);
+    pipeline!.setDepthOfField(photo.depthOfFieldBefore);
+    setUiHidden(false);
+    photoProgress(null);
+  }
+  applyViewport();
+  syncPhotoControls();
+}
+
+/** Renders one frame into the canvas at an exact pixel size, for stills and offline clips. */
+function renderFrameAt(width: number, height: number) {
+  renderer.setPixelRatio(1);
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  applyCameraFov();
+  csm.updateFrustums();
+  pipeline!.setSize(width, height);
+  water.setSize(width, height);
+  city.setPointScale(height);
+  renderer.shadowMap.needsUpdate = true;
+  const wasHidden = { hover: hover.visible, markers: onboardingMarkers.visible };
+  hover.visible = false;
+  onboardingMarkers.visible = false;
+  updateAtmosphere(clock.elapsedTime, 0);
+  camera.updateMatrixWorld();
+  skyDome.setStarsVisible(false);
+  water.renderReflection(renderer, scene, camera);
+  skyDome.setStarsVisible(true);
+  pipeline!.render(0);
+  hover.visible = wasHidden.hover;
+  onboardingMarkers.visible = wasHidden.markers;
+  return renderer.domElement;
+}
+
+function stillSize() {
+  const target = exportSize(photo.aspect);
+  const scale = quality.tier === 'high' ? 2 : quality.tier === 'mid' ? 1.5 : 1;
+  return { width: Math.round(target.width * scale / 2) * 2, height: Math.round(target.height * scale / 2) * 2 };
+}
+
+async function savePhotoStill() {
+  if (photo.busy) return;
+  photo.busy = true;
+  const button = document.querySelector<HTMLButtonElement>('#photo-still')!;
+  button.disabled = true;
+  photoStatus('Painting the postcard...');
+  try {
+    let size = stillSize();
+    let canvas: HTMLCanvasElement;
+    try {
+      canvas = renderFrameAt(size.width, size.height);
+    } catch {
+      size = exportSize(photo.aspect);
+      canvas = renderFrameAt(size.width, size.height);
+    }
+    const image = await composeStill(canvas, photo.wordmark, wordmarkUrl());
+    applyViewport();
+    saveTown();
+    const postcard = await makeTidePostcard(image, currentTownData());
+    const name = `little-tides-day-${day}.png`;
+    photo.lastStill = { blob: postcard, name };
+    const outcome = await deliverFile(postcard, name, 'A little harbor town.', await shareLink());
+    photoStatus(outcome === 'shared' ? 'Postcard shared.' : outcome === 'downloaded' ? 'Postcard saved. It also holds the town.' : 'Share cancelled. The postcard is still ready.');
+  } catch (error) {
+    applyViewport();
+    photoStatus(error instanceof Error ? error.message : 'The postcard could not be saved.');
+  } finally {
+    button.disabled = false;
+    photo.busy = false;
+  }
+}
+
+async function shareLink() {
+  const code = await encodeShareCode(currentTownData());
+  return shareUrl(code, shareLinkBase());
+}
+
+async function copyShareLink() {
+  try {
+    const url = await shareLink();
+    await navigator.clipboard.writeText(url);
+    const size = url.length;
+    photoStatus(size > SHARE_CODE_COMFORTABLE_BYTES ? `Link copied. It is long (${Math.round(size / 1024)} KB) but works.` : 'Link copied. Anyone who opens it gets this town.');
+  } catch {
+    photoStatus('The link could not be copied.');
+  }
+}
+
+async function shareLatest() {
+  if (photo.busy) return;
+  const latest = photo.lastClip ?? photo.lastStill;
+  if (!latest) {
+    await savePhotoStill();
+    return;
+  }
+  const outcome = await deliverFile(latest.blob, latest.name, 'A little harbor town.', await shareLink());
+  photoStatus(outcome === 'shared' ? 'Shared.' : outcome === 'downloaded' ? 'Saved to your downloads.' : 'Share cancelled.');
+}
+
+function waitForTail(seconds: number) {
+  return new Promise<void>((resolve) => {
+    photo.tailSeconds = seconds;
+    photo.tailResolve = resolve;
+  });
+}
+
+async function recordPhotoClip() {
+  if (photo.busy) return;
+  const seconds = Number(document.querySelector<HTMLSelectElement>('#photo-clip-seconds')!.value);
+  const button = document.querySelector<HTMLButtonElement>('#photo-clip')!;
+  photo.busy = true;
+  button.disabled = true;
+  const countdown = document.querySelector<HTMLElement>('#photo-countdown')!;
+  try {
+    let result: ClipResult;
+    if (photo.recorder?.ready) {
+      const recorded = photo.recorder.recordedSeconds;
+      if (recorded < seconds) {
+        for (let remaining = Math.ceil(seconds - recorded); remaining > 0; remaining -= 1) {
+          countdown.textContent = `Recording · ${remaining}`;
+          countdown.classList.add('show');
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        }
+      }
+      countdown.textContent = 'Wordmark';
+      countdown.classList.add('show');
+      await waitForTail(1);
+      countdown.classList.remove('show');
+      photoStatus('Finishing the clip...');
+      const encodedFrames = photo.recorder.frames;
+      result = await photo.recorder.finish(seconds + 1);
+      if (window.__littleTides) window.__littleTides.lastClipStats = { frames: encodedFrames, seconds: seconds + 1 };
+      void startClipRecorder();
+    } else if (ForwardRecorder.supported()) {
+      const size = exportSize(photo.aspect);
+      const forward = new ForwardRecorder(size.width, size.height, wordmarkUrl(), captureAudioStream());
+      forward.start();
+      forwardRecorder = forward;
+      for (let remaining = seconds; remaining > 0; remaining -= 1) {
+        countdown.textContent = `Recording · ${remaining}`;
+        countdown.classList.add('show');
+        if (remaining === 1) photo.tailSeconds = 1;
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      }
+      countdown.classList.remove('show');
+      forwardRecorder = null;
+      result = await forward.finish();
+      if (result.extension === 'webm') photoStatus('This browser records WebM. Instagram and TikTok accept it after a conversion.');
+    } else {
+      throw new Error('This browser cannot record video.');
+    }
+    const name = `little-tides-clip-day-${day}.${result.extension}`;
+    photo.lastClip = { blob: result.blob, name };
+    const outcome = await deliverFile(result.blob, name, 'A little harbor town.', await shareLink());
+    if (outcome === 'shared') photoStatus('Clip shared.');
+    else if (outcome === 'downloaded') photoStatus(`Clip saved as ${result.extension.toUpperCase()}.`);
+  } catch (error) {
+    photoStatus(error instanceof Error ? error.message : 'The clip could not be recorded.');
+    void startClipRecorder();
+  } finally {
+    countdown.classList.remove('show');
+    photo.tailSeconds = null;
+    button.disabled = false;
+    photo.busy = false;
+  }
+}
+
+let forwardRecorder: ForwardRecorder | null = null;
+
+/** Replays the build history from empty to now into an offline clip. */
+async function recordTimelapse() {
+  if (photo.busy) return;
+  const seconds = Number(document.querySelector<HTMLSelectElement>('#photo-timelapse-seconds')!.value);
+  const button = document.querySelector<HTMLButtonElement>('#photo-timelapse')!;
+  photo.busy = true;
+  button.disabled = true;
+  const wakeLock = await requestWakeLock();
+  const warnHidden = () => { if (document.hidden) showToast('Keep the tab open while the timelapse renders.'); };
+  document.addEventListener('visibilitychange', warnHidden);
+  const size = exportSize(photo.aspect);
+  const encoder = new ClipRecorder(size.width, size.height, null, wordmarkUrl());
+  const stage = new CityRenderer(seed);
+  stage.setPaletteColors(palette.color(PALETTE_SLOT.stone), palette.color(PALETTE_SLOT.stoneDark), palette.color(PALETTE_SLOT.trim));
+  const hiddenRoots = [city.root, citizens.root, ambience.root, wakes.mesh];
+  const savedVisibility = hiddenRoots.map((root) => root.visible);
+  const savedCamera = { position: camera.position.clone(), target: controls.target.clone() };
+  const savedHour = photo.hour;
+  const savedDrift = director.driftEnabled;
+  try {
+    if (!webCodecsAvailable()) throw new Error('Timelapse needs a browser with WebCodecs.');
+    await encoder.start();
+    photo.recorder?.dispose();
+    photo.recorder = null;
+    const history = buildHistory.length ? buildHistory : synthesizedHistory(city.cells.values());
+    if (!history.length) throw new Error('Build something first.');
+    for (const root of hiddenRoots) root.visible = false;
+    scene.add(stage.root);
+    director.driftEnabled = false;
+    let extent = 6;
+    for (const cell of city.cells.values()) extent = Math.max(extent, Math.hypot(cell.x, cell.z) * CityRenderer.cellSize());
+    const radius = Math.max(16, extent * 2.4);
+    const frames = seconds * CLIP_FPS;
+    const holdFrames = Math.round(1.5 * CLIP_FPS);
+    let applied = 0;
+    for (let frame = 0; frame < frames + holdFrames; frame++) {
+      const t = Math.min(1, frame / frames);
+      const targetCount = Math.round(history.length * t);
+      while (applied < targetCount) {
+        const [, x, z, height] = history[applied];
+        const current = stage.get(x, z)?.height ?? 0;
+        for (let level = current; level < height; level++) stage.place(x, z, 0);
+        for (let level = current; level > height; level--) stage.remove(x, z, 0);
+        applied += 1;
+      }
+      if (applied > 0) water.setCells(stage.cells.values());
+      photo.hour = 7 + t * 10.5;
+      const angle = t * Math.PI * .6 + Math.PI * .25;
+      controls.target.set(0, 1.3, 0);
+      camera.position.set(Math.cos(angle) * radius, radius * .78, Math.sin(angle) * radius);
+      camera.lookAt(controls.target);
+      stage.update(frame / CLIP_FPS, day * 24 + photo.hour);
+      stage.setDaylight(daylightAt(photo.hour));
+      const canvas = renderFrameAt(size.width, size.height);
+      const wordmarkAlpha = photo.wordmark ? THREE.MathUtils.clamp((frame - (frames - CLIP_FPS * .5)) / (CLIP_FPS * .5), 0, 1) : 0;
+      encoder.captureFrame(canvas, 0, wordmarkAlpha, true);
+      photoProgress(frame / (frames + holdFrames));
+      photoStatus(`Rendering timelapse · ${Math.round(frame / (frames + holdFrames) * 100)}%`);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+    photoStatus('Finishing the timelapse...');
+    const result = await encoder.finish(null);
+    const name = `little-tides-timelapse-day-${day}.${result.extension}`;
+    photo.lastClip = { blob: result.blob, name };
+    const outcome = await deliverFile(result.blob, name, 'How this little harbor grew.', await shareLink());
+    photoStatus(outcome === 'shared' ? 'Timelapse shared.' : outcome === 'downloaded' ? 'Timelapse saved.' : 'Share cancelled. The timelapse is ready.');
+  } catch (error) {
+    photoStatus(error instanceof Error ? error.message : 'The timelapse could not be rendered.');
+  } finally {
+    scene.remove(stage.root);
+    hiddenRoots.forEach((root, index) => { root.visible = savedVisibility[index]; });
+    water.setCells(city.cells.values());
+    camera.position.copy(savedCamera.position);
+    controls.target.copy(savedCamera.target);
+    photo.hour = savedHour;
+    director.driftEnabled = savedDrift;
+    director.beginDrift();
+    encoder.dispose();
+    document.removeEventListener('visibilitychange', warnHidden);
+    void wakeLock?.release();
+    photoProgress(null);
+    applyViewport();
+    button.disabled = false;
+    photo.busy = false;
+    if (photo.active) void startClipRecorder();
+  }
+}
+
+document.querySelector('#photo-open')!.addEventListener('click', () => setPhotoMode(true));
+document.querySelector('#photo-close')!.addEventListener('click', () => setPhotoMode(false));
+document.querySelector<HTMLInputElement>('#photo-hour')!.addEventListener('input', (event) => {
+  photo.hour = Number((event.currentTarget as HTMLInputElement).value);
+  if (photo.weather === 'night') photo.weather = 'sim';
+  syncPhotoControls();
+});
+document.querySelector<HTMLSelectElement>('#photo-weather')!.addEventListener('change', (event) => {
+  photo.weather = (event.currentTarget as HTMLSelectElement).value as PhotoWeather;
+  syncPhotoControls();
+});
+document.querySelector<HTMLSelectElement>('#photo-dof')!.addEventListener('change', (event) => {
+  pipeline!.setDepthOfField((event.currentTarget as HTMLSelectElement).value as DepthOfFieldPreset);
+  syncPhotoControls();
+});
+document.querySelector<HTMLSelectElement>('#photo-aspect')!.addEventListener('change', (event) => {
+  photo.aspect = (event.currentTarget as HTMLSelectElement).value as PhotoAspect;
+  applyViewport();
+  void startClipRecorder();
+});
+photoPaletteSelect.addEventListener('change', () => palette.set(photoPaletteSelect.value));
+document.querySelector<HTMLInputElement>('#photo-wordmark')!.addEventListener('change', (event) => {
+  photo.wordmark = (event.currentTarget as HTMLInputElement).checked;
+});
+document.querySelector('#photo-still')!.addEventListener('click', () => { void savePhotoStill(); });
+document.querySelector('#photo-clip')!.addEventListener('click', () => { void recordPhotoClip(); });
+document.querySelector('#photo-timelapse')!.addEventListener('click', () => { void recordTimelapse(); });
+document.querySelector('#photo-share-link')!.addEventListener('click', () => { void copyShareLink(); });
+document.querySelector('#photo-share')!.addEventListener('click', () => { void shareLatest(); });
+const previousCameraMatrix = new THREE.Matrix4();
+const previousSunDirection = new THREE.Vector3();
+let shadowIdleSeconds = 0;
 const daylightStartHour = 4;
 const daylightEndHour = 20;
 let clockUpdate = 0;
 let autosaveElapsed = 0;
-let shadowElapsed = 0;
 let frameTimeEma = 16.7;
 let performanceWarmup = 0;
 let performanceCooldown = 0;
@@ -2540,6 +3211,55 @@ let nightMode = false;
 let shadowsActive = true;
 let lastRaining = weatherAt(seed, day * 24 + timeOfDay).raining;
 const performanceCosts = { city: 0, citizens: 0, business: 0, discovery: 0, background: 0, ambience: 0, render: 0 };
+let sessionSeconds = 0;
+const refinementSamples: number[] = [];
+let lastPresentedAt = 0;
+const frameCapMs = highRefreshAllowed ? 0 : 1000 / 60 - 1.5;
+// Clips are 30 fps. Rendering at exactly that rate in photo mode gives the
+// recorder one fresh frame per slot and halves the GPU load while recording.
+const photoFrameCapMs = 1000 / CLIP_FPS - 1;
+
+type PerformanceReport = {
+  fps: number;
+  frameMs: number;
+  /** Shadow maps plus the main scene. */
+  drawCalls: number;
+  /** Every pass of the frame, post-processing included. */
+  drawCallsTotal: number;
+  triangles: number;
+  renderScale: number;
+  tier: QualityTier;
+  shadows: boolean;
+  cpuMs: Record<string, number>;
+  gpuMs: Record<string, number>;
+  gpuTimingSupported: boolean;
+};
+
+declare global {
+  interface Window {
+    __perf?: PerformanceReport;
+    /** Debug handle for the capture test and manual tuning. */
+    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; scene: THREE.Scene; renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; setTimeOfDay(hour: number): void; lastClipStats?: { frames: number; seconds: number } };
+  }
+}
+window.__littleTides = { hemi, atmosphere, palette, scene, renderer, camera, setTimeOfDay(hour: number) { timeOfDay = hour; } };
+
+function publishPerformanceReport() {
+  const info = renderer.info.render;
+  window.__perf = {
+    fps: Math.round(1000 / frameTimeEma),
+    frameMs: Math.round(frameTimeEma * 10) / 10,
+    drawCalls: pipeline?.sceneDrawCalls ?? info.calls,
+    drawCallsTotal: info.calls,
+    triangles: info.triangles,
+    renderScale: Math.round(renderPixelRatio * 100) / 100,
+    tier: qualityTier,
+    shadows: shadowsActive,
+    cpuMs: { ...performanceCosts },
+    gpuMs: { ...gpuTimer.times },
+    gpuTimingSupported: gpuTimer.supported,
+  };
+}
 
 function recordPerformanceCost(name: keyof typeof performanceCosts, startedAt: number) {
   const duration = performance.now() - startedAt;
@@ -2566,17 +3286,106 @@ function updateTimeDisplay() {
   if (memory) showMemoryCard(memory);
 }
 
+/** Feeds the presented frame to whichever recorder is running and drives the wordmark tail. */
+function captureRecorderFrame(deltaSeconds: number) {
+  let wordmarkAlpha = 0;
+  if (photo.tailSeconds !== null) {
+    photo.tailSeconds -= deltaSeconds;
+    wordmarkAlpha = photo.wordmark ? THREE.MathUtils.clamp(1 - photo.tailSeconds, 0, 1) : 0;
+    if (photo.tailSeconds <= 0) {
+      photo.tailSeconds = null;
+      photo.tailResolve?.();
+      photo.tailResolve = null;
+    }
+  }
+  if (photo.recorder?.ready && !photo.busy) photo.recorder.captureFrame(renderer.domElement, deltaSeconds, wordmarkAlpha);
+  else if (photo.recorder?.ready && photo.tailResolve) photo.recorder.captureFrame(renderer.domElement, deltaSeconds, wordmarkAlpha);
+  forwardRecorder?.captureFrame(renderer.domElement, wordmarkAlpha);
+}
+
+/** Lights, sky, fog, and water for the hour and weather the frame shows. */
+function updateAtmosphere(time: number, deltaSeconds: number) {
+  const shownHour = renderHour();
+  const shownRain = renderRain(weatherAt(seed, day * 24 + timeOfDay).intensity);
+  evaluateAtmosphere(shownHour, palette, shownRain, atmosphere);
+  sceneFog.color.copy(atmosphere.fogColor);
+  const cameraDistance = camera.position.distanceTo(controls.target);
+  const distantView = THREE.MathUtils.smoothstep(cameraDistance, 34, 64);
+  sceneFog.density = THREE.MathUtils.lerp(atmosphere.fogDensity, atmosphere.fogDensity * .12, distantView);
+  hemi.color.copy(atmosphere.ambientSky);
+  hemi.groundColor.copy(atmosphere.ambientGround);
+  hemi.intensity = atmosphere.ambientIntensity;
+  const sunUp = atmosphere.sunElevation > 0;
+  csm.lightDirection.copy(atmosphere.sunDirection).negate();
+  for (const light of csm.lights) {
+    light.color.copy(atmosphere.sunColor);
+    light.intensity = sunUp ? atmosphere.sunIntensity : 0;
+    light.shadow.bias = shadowSettings.bias;
+    light.shadow.normalBias = shadowSettings.normalBias;
+    light.shadow.intensity = atmosphere.shadowIntensity;
+  }
+  presentationUniforms.uWetness.value = atmosphere.wetness;
+  pipeline!.setSaturation(atmosphere.saturation);
+  camera.getWorldDirection(cameraForward);
+  rain.update(time, atmosphere.wetness, presentationUniforms.uWind.value, camera.position, cameraForward);
+  csm.update();
+  presentationUniforms.cameraNear.value = camera.near;
+  presentationUniforms.shadowFar.value = Math.min(camera.far, csm.maxFar);
+  for (const [index, cascade] of presentationUniforms.CSM_cascades.value.entries()) {
+    cascade.set(csm.breaks[index - 1] ?? 0, csm.breaks[index] ?? 1);
+  }
+  moon.color.set(0xa9ccf2);
+  moon.intensity = atmosphere.moonIntensity;
+  moon.position.copy(atmosphere.moonDirection).multiplyScalar(40);
+  skyDome.update(atmosphere, camera.position, time);
+  pipeline!.setExposure(atmosphere.exposure);
+  pipeline!.focusOn(controls.target);
+  // Cascades follow the camera, so shadows re-render whenever the view or the
+  // sun moves. A static view refreshes every few seconds for growing trees.
+  shadowIdleSeconds += deltaSeconds;
+  camera.updateMatrixWorld();
+  const viewMoved = !previousCameraMatrix.equals(camera.matrixWorld);
+  const sunMoved = previousSunDirection.distanceToSquared(atmosphere.sunDirection) > 1e-7;
+  if (shadowsActive && (viewMoved || sunMoved || shadowIdleSeconds > 3)) {
+    renderer.shadowMap.needsUpdate = true;
+    previousCameraMatrix.copy(camera.matrixWorld);
+    previousSunDirection.copy(atmosphere.sunDirection);
+    shadowIdleSeconds = 0;
+  }
+  water.update(time, atmosphere, camera, palette.color(PALETTE_SLOT.water), atmosphere.fogColor, sceneFog.density);
+}
+
 function animate() {
   requestAnimationFrame(animate);
+  if (document.hidden) {
+    clock.getDelta();
+    return;
+  }
+  // Battery: hold the loop at 60 fps on 120 Hz displays unless the player opted in.
+  const now = performance.now();
+  const cap = photo.active ? photoFrameCapMs : frameCapMs;
+  if (cap && now - lastPresentedAt < cap) return;
+  lastPresentedAt = now;
   const rawDelta = clock.getDelta();
-  if (document.hidden) return;
   const performancePanel = document.querySelector<HTMLElement>('#perf-panel')!;
   const profileFrame = performancePanel.classList.contains('show');
   let profileStartedAt = profileFrame ? performance.now() : 0;
   const delta = Math.min(rawDelta, .1);
   const time = clock.elapsedTime;
+  sessionSeconds += rawDelta;
   if (ignoreNextPerformanceSample) ignoreNextPerformanceSample = false;
   else frameTimeEma += (rawDelta * 1000 - frameTimeEma) * .035;
+  if (tierNeedsRefinement && sessionSeconds > 2) {
+    refinementSamples.push(rawDelta * 1000);
+    if (sessionSeconds > 4) {
+      tierNeedsRefinement = false;
+      // Shader compiles spike single frames. Judge the steady frames only.
+      const steady = refinementSamples.sort((a, b) => a - b).slice(0, Math.ceil(refinementSamples.length * .7));
+      const refined = refineTier(qualityTier, steady.reduce((sum, value) => sum + value, 0) / Math.max(1, steady.length));
+      if (refined !== qualityTier) applyQualityTier(refined);
+      localStorage.setItem(DETECTED_TIER_KEY, refined);
+    }
+  }
   const performanceDelta = Math.min(rawDelta, .1);
   overloadSeconds = frameTimeEma > 22 ? overloadSeconds + performanceDelta : Math.max(0, overloadSeconds - performanceDelta * 2);
   severeOverloadSeconds = frameTimeEma > 26 ? severeOverloadSeconds + performanceDelta : Math.max(0, severeOverloadSeconds - performanceDelta * 2);
@@ -2588,7 +3397,9 @@ function animate() {
   discoveryCheckElapsed += delta;
   ambientSoundElapsed += rawDelta;
   inspectorElapsed += rawDelta;
-  const deltaHours = delta * simulationSpeed * .05;
+  // Photo mode holds the simulation still while the camera and water keep moving.
+  const simulationRate = photo.active ? 0 : simulationSpeed;
+  const deltaHours = delta * simulationRate * .05;
   timeOfDay += deltaHours;
   if (timeOfDay >= 24) {
     timeOfDay %= 24;
@@ -2606,7 +3417,7 @@ function animate() {
     lastChimedHour = currentHour;
     if (grow.discoveredIds().includes('clock-tower')) playCue('bell');
   }
-  const daylight = daylightAt(timeOfDay);
+  if (palette.update(delta)) applyPaletteColors();
   // Keep two thirds of each cycle in the light. Day runs from 04:00 to 20:00,
   // leaving an eight-hour night without losing the dawn and dusk transitions.
   const nextNightMode = timeOfDay < daylightStartHour || timeOfDay >= daylightEndHour;
@@ -2614,46 +3425,25 @@ function animate() {
     nightMode = nextNightMode;
     document.body.classList.toggle('night', nightMode);
   }
-  const twilight = Math.max(0, 1 - Math.abs(timeOfDay - 19.2) / 2.4, 1 - Math.abs(timeOfDay - 4.8) / 2.1);
-  currentSky.copy(nightSky).lerp(daySky, daylight).lerp(dawnSky, twilight * .28);
-  scene.background = currentSky;
-  sceneFog.color.copy(currentSky);
-  waterUniforms.uSky.value.copy(currentSky);
-  const cameraDistance = camera.position.distanceTo(controls.target);
-  const distantView = THREE.MathUtils.smoothstep(cameraDistance, 34, 64);
-  sceneFog.density = THREE.MathUtils.lerp(.0135, .0012, distantView);
-  const moonlight = Math.pow(1 - daylight, 1.5);
-  hemi.color.copy(nightHemiSky).lerp(dayHemiSky, daylight);
-  hemi.groundColor.copy(nightHemiGround).lerp(dayHemiGround, daylight);
-  hemi.intensity = .72 + daylight * 1.53;
-  sun.intensity = .12 + daylight * 4.58;
-  const sunAngle = (timeOfDay - 6) / 24 * Math.PI * 2;
-  sun.position.set(Math.cos(sunAngle) * 18, 5 + daylight * 20, Math.sin(sunAngle) * 16);
-  const moonAngle = sunAngle + Math.PI;
-  moon.intensity = moonlight * 1.3;
-  moon.position.set(Math.cos(moonAngle) * 20, 14 + moonlight * 8, Math.sin(moonAngle) * 18);
-  shadowElapsed += rawDelta;
-  // The town is mostly static. Coarse solar steps keep the shadows alive
-  // without periodically rerendering every caster during ordinary motion.
-  if (shadowsActive && shadowElapsed > 12) {
-    renderer.shadowMap.needsUpdate = true;
-    // The next delta includes the deliberately scheduled shadow render. Do not
-    // mistake that isolated maintenance frame for sustained GPU pressure.
-    ignoreNextPerformanceSample = true;
-    shadowElapsed = 0;
-  }
-  renderer.toneMappingExposure = .88 + daylight * .2;
-  waterUniforms.uTime.value = time;
-  waterUniforms.uDay.value = daylight;
-  waterUniforms.uRain.value = weather.intensity;
-  city.setWeather(weather.intensity);
+  const shownHour = renderHour();
+  const shownRain = renderRain(weather.intensity);
+  const daylight = daylightAt(shownHour);
+  updateWind(time);
+  updateAtmosphere(time, rawDelta);
+  // Windows switch on across forty in-game minutes around dusk and off around dawn.
+  const duskOn = THREE.MathUtils.smoothstep(shownHour, 18.3, 19);
+  const dawnOff = 1 - THREE.MathUtils.smoothstep(shownHour, 5.6, 6.3);
+  presentationUniforms.uLightsOn.value = shownHour >= 12 ? duskOn : dawnOff;
+  updateLanternLights(atmosphere.night, palette.color(PALETTE_SLOT.trim));
+  wakes.update();
+  city.setWeather(shownRain);
   city.update(time, absoluteHours);
   city.setDaylight(daylight);
   if (profileFrame) {
     recordPerformanceCost('city', profileStartedAt);
     profileStartedAt = performance.now();
   }
-  citizens.update(delta * simulationSpeed, timeOfDay, absoluteHours, time);
+  citizens.update(delta * simulationRate, timeOfDay, absoluteHours, time);
   if (profileFrame) {
     recordPerformanceCost('citizens', profileStartedAt);
     profileStartedAt = performance.now();
@@ -2706,7 +3496,7 @@ function animate() {
     recordPerformanceCost('background', profileStartedAt);
     profileStartedAt = performance.now();
   }
-  const harborUpdate = ambience.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, weather.intensity);
+  const harborUpdate = ambience.update(time, daylight, shownHour, absoluteHours, catColonyFoundedAt, shownRain);
   if (harborUpdate.fireworkBurst && audioContext?.state === 'running') playCue('firework', harborUpdate.fireworkBurst);
   if (harborUpdate.prosperityMarketOpened) {
     citizens.gatherAt(
@@ -2742,7 +3532,7 @@ function animate() {
   }
   if (performanceWarmup > 3 && performanceCooldown > 3 && overloadSeconds > 1.5 && renderPixelRatio > 1) {
     renderPixelRatio = Math.max(1, renderPixelRatio - (frameTimeEma > 30 ? .3 : .2));
-    renderer.setPixelRatio(renderPixelRatio);
+    applyRenderScale();
     performanceCooldown = 0;
     overloadSeconds = 0;
   } else if (performanceWarmup > 8 && performanceCooldown > 4 && severeOverloadSeconds > 2 && renderPixelRatio <= 1 && shadowsActive) {
@@ -2753,39 +3543,72 @@ function animate() {
     severeOverloadSeconds = 0;
   } else if (performanceWarmup > 12 && performanceCooldown > 4 && severeOverloadSeconds > 2 && renderPixelRatio > .75) {
     renderPixelRatio = Math.max(.75, renderPixelRatio - .1);
-    renderer.setPixelRatio(renderPixelRatio);
+    applyRenderScale();
     performanceCooldown = 0;
     severeOverloadSeconds = 0;
   } else if (performanceWarmup > 20 && performanceCooldown > 15 && recoverySeconds > 8 && renderPixelRatio < maximumPixelRatio) {
     renderPixelRatio = Math.min(maximumPixelRatio, renderPixelRatio + .1);
-    renderer.setPixelRatio(renderPixelRatio);
+    applyRenderScale();
     performanceCooldown = 0;
     recoverySeconds = 0;
   }
+  director.update(rawDelta);
+  // Cinematic depth of field belongs to the drifting camera; play stays sharp.
+  if (!photo.active && pipeline!.depthOfFieldAvailable) {
+    const wanted = director.drifting ? 'cinematic' : 'off';
+    if (pipeline!.depthOfFieldMode !== wanted) pipeline!.setDepthOfField(wanted);
+  }
   controls.update();
-  // Center the finite mesh beneath the camera so its hidden rim can never enter
-  // the view when panning or orbiting far away from the town.
-  water.position.x = camera.position.x;
-  water.position.z = camera.position.z;
-  waterUniforms.uHorizonCenter.value.set(camera.position.x, camera.position.z);
+  camera.updateMatrixWorld();
+  renderer.info.reset();
+  gpuTimer.begin('reflection');
+  skyDome.setStarsVisible(false);
+  water.renderReflection(renderer, scene, camera);
+  skyDome.setStarsVisible(true);
+  gpuTimer.end();
   // WebGL's drawing buffer is not preserved by default. Keep presenting the
   // scene while a journal view is open so overlay recompositing cannot reveal
   // the page background in place of the town.
-  renderer.render(scene, camera);
+  pipeline!.render(delta);
+  gpuTimer.collect();
+  captureRecorderFrame(rawDelta);
   if (profileFrame) recordPerformanceCost('render', profileStartedAt);
   if (performanceUpdate > .75) {
     const info = renderer.info.render;
     const cpu = Object.values(performanceCosts).reduce((sum, duration) => sum + duration, 0);
-    performancePanel.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'} · ${cpu.toFixed(1)}ms CPU (city ${performanceCosts.city.toFixed(1)} · people ${performanceCosts.citizens.toFixed(1)} · shops ${performanceCosts.business.toFixed(1)} · GROW ${performanceCosts.discovery.toFixed(1)} · ui ${performanceCosts.background.toFixed(1)} · life ${performanceCosts.ambience.toFixed(1)} · render ${performanceCosts.render.toFixed(1)})`;
+    const gpu = gpuTimer.supported
+      ? ` · GPU ${Object.entries(gpuTimer.times).map(([name, duration]) => `${name} ${duration.toFixed(1)}`).join(' · ')}`
+      : '';
+    performancePanel.textContent = `${Math.round(1000 / frameTimeEma)} fps · ${pipeline!.sceneDrawCalls}+${info.calls - pipeline!.sceneDrawCalls} draws · ${Math.round(info.triangles / 1000)}k tris · ${businesses.all().length} shops · ${qualityTier} · ${renderPixelRatio.toFixed(1)}×${shadowsActive ? '' : ' · lite'} · ${cpu.toFixed(1)}ms CPU (city ${performanceCosts.city.toFixed(1)} · people ${performanceCosts.citizens.toFixed(1)} · shops ${performanceCosts.business.toFixed(1)} · GROW ${performanceCosts.discovery.toFixed(1)} · ui ${performanceCosts.background.toFixed(1)} · life ${performanceCosts.ambience.toFixed(1)} · render ${performanceCosts.render.toFixed(1)})${gpu}`;
+    publishPerformanceReport();
     performanceUpdate = 0;
   }
 }
 updateTimeDisplay();
 animate();
 
-window.addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(renderPixelRatio);
-});
+function applyViewport() {
+  const layout = layoutSize();
+  camera.aspect = layout.width / layout.height;
+  applyCameraFov();
+  csm.updateFrustums();
+  if (layout.render) {
+    // Photo mode renders at the export size and lets CSS letterbox the canvas.
+    renderer.setPixelRatio(1);
+    renderer.setSize(layout.render.width, layout.render.height, false);
+    renderer.domElement.style.width = `${layout.width}px`;
+    renderer.domElement.style.height = `${layout.height}px`;
+    pipeline?.setSize(layout.render.width, layout.render.height);
+    water.setSize(layout.render.width, layout.render.height);
+    city.setPointScale(layout.render.height);
+    return;
+  }
+  renderer.domElement.style.width = '';
+  renderer.domElement.style.height = '';
+  renderer.setSize(layout.width, layout.height);
+  applyRenderScale();
+}
+applyViewport();
+window.addEventListener('resize', applyViewport);
+window.addEventListener('orientationchange', applyViewport);
+window.visualViewport?.addEventListener('resize', applyViewport);

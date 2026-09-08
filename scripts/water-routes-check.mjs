@@ -5,6 +5,7 @@ import { createServer } from 'vite';
 const gradient = { addColorStop() {} };
 const context = {
   createRadialGradient() { return gradient; },
+  createLinearGradient() { return gradient; },
   fillRect() {}, strokeRect() {}, fillText() {}, clearRect() {}, save() {}, restore() {},
   beginPath() {}, moveTo() {}, lineTo() {}, closePath() {}, stroke() {}, fill() {}, arc() {}, ellipse() {},
   set fillStyle(_value) {}, set strokeStyle(_value) {}, set lineWidth(_value) {},

@@ -46,6 +46,7 @@ import {
   type ConfluenceOccurrence,
 } from './confluences';
 import { HARBOR_LANTERNS, harborLanternStates, harborLanternsCompletedByEdit } from './lanterns';
+import { decodeShareCode, shareCodeFromLocation, shareCodeSupported } from './share-code';
 import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, storedTierOverride, type QualityTier } from './quality';
 import './style.css';
 
@@ -226,7 +227,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `;
 
-const saved = loadTown();
+const saved = (await loadSharedTown()) ?? loadTown();
 const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
 let timeOfDay = saved?.timeOfDay ?? 7.5;
 let day = saved?.day ?? 1;
@@ -832,6 +833,26 @@ function loadTown(): SavedTown | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A `#t=` fragment carries a whole town. Load it, keep it as the local save,
+ * and drop the fragment so a reload does not import it again.
+ */
+async function loadSharedTown(): Promise<SavedTown | null> {
+  const code = shareCodeFromLocation();
+  if (!code || !shareCodeSupported()) return null;
+  const town = await decodeShareCode(code);
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!town) {
+    window.setTimeout(() => showToast('That share link could not be read.'), 600);
+    return null;
+  }
+  const current = loadTown();
+  const replacesTown = current !== null && current.cells.length > 0 && current.seed !== town.seed;
+  if (replacesTown && !confirm(`Open the shared town from Day ${town.day ?? 1}? Your current town will be replaced.`)) return null;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(town));
+  return town;
 }
 
 function showToast(message: string) {

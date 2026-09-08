@@ -1,0 +1,14 @@
+{
+  "id": "monsoon",
+  "title": "Monsoon",
+  "order": 4,
+  "walls": ["#8a9a8c", "#a3ad9d", "#6f7f74", "#b7bdb0", "#4c4038", "#5a5148", "#7d8a86", "#9aa49a"],
+  "roofs": ["#3f4a48", "#4d3f3a"],
+  "trim": "#c9c2b3",
+  "stone": "#7f8580",
+  "water": "#8c9c98",
+  "sky": { "zenith": "#7d8b91", "horizon": "#b9c1c0" },
+  "shadow": "#4f5f6e",
+  "haze": "#aab5b4",
+  "rain": true
+}

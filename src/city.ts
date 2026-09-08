@@ -3,6 +3,8 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type HarborLanternId, type PlaceIdentityId, keyOf } from './types';
 import { hash, pick } from './random';
+import { PALETTE_SLOT, PALETTES, paletteSlotColors } from './palette';
+import { paletteSlotColor, usePaletteLookup } from './shading';
 import { ageInHours, describeAge, TREE_MATURE_HOURS, treeGrowthAt } from './memory';
 import { facadeDirectionAt, plazaAnchorAt, type CardinalDirection as Direction } from './topology';
 import { hasDock, hasWaterStairs } from './water';
@@ -42,8 +44,8 @@ import {
 const CELL = CELL_SIZE;
 const FLOOR = FLOOR_HEIGHT;
 const BASE_Y = 0.05;
-const WALL_COLORS = [0xd88966, 0xd9b967, 0xbc6c5c, 0x73a69a, 0x7390a1, 0xb9828d, 0xd8c99f, 0x9f9a7e];
-const ROOF_COLORS = [0x733e38, 0xa6533c, 0x315f5b, 0x3f5260, 0x5b4748, 0x354747];
+const DEFAULT_SLOT_COLORS = paletteSlotColors(PALETTES[0]);
+const WALL_SLOT_COUNT = PALETTE_SLOT.wallCount;
 
 type FacadeLayer = 'opening' | 'composition' | 'equipment';
 type FacadeBounds = Readonly<{ sideMin: number; sideMax: number; yMin: number; yMax: number }>;
@@ -327,8 +329,10 @@ export class CityRenderer {
   private readonly plasterTexture = createSurfaceTexture('plaster');
   private readonly roofTexture = createSurfaceTexture('roof');
   private readonly stoneTexture = createSurfaceTexture('stone');
-  private readonly wallVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.plasterTexture, bumpMap: this.plasterTexture, bumpScale: .028, roughness: .92, roughnessMap: this.plasterTexture });
-  private readonly roofVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.roofTexture, bumpMap: this.roofTexture, bumpScale: .035, roughness: .82, roughnessMap: this.roofTexture });
+  private readonly wallVertexMaterial = usePaletteLookup(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.plasterTexture, bumpMap: this.plasterTexture, bumpScale: .028, roughness: .92, roughnessMap: this.plasterTexture }));
+  private readonly roofVertexMaterial = usePaletteLookup(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.roofTexture, bumpMap: this.roofTexture, bumpScale: .035, roughness: .82, roughnessMap: this.roofTexture }));
+  private readonly stoneBase = DEFAULT_SLOT_COLORS[PALETTE_SLOT.stone].clone();
+  private readonly stoneDarkBase = DEFAULT_SLOT_COLORS[PALETTE_SLOT.stoneDark].clone();
   private readonly accentVertexMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .92, side: THREE.DoubleSide });
   private readonly seed: number;
   private rainIntensity = -1;
@@ -336,8 +340,8 @@ export class CityRenderer {
   private readonly wetTint = new THREE.Color(0x355c5b);
   private discoveryGlow: { mesh: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>; startedAt: number } | null = null;
   private readonly cream = new THREE.MeshStandardMaterial({ color: 0xe8d7ad, roughness: .94 });
-  private readonly stone = new THREE.MeshStandardMaterial({ color: 0xb9ad91, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .045, roughness: 1, roughnessMap: this.stoneTexture });
-  private readonly stoneDark = new THREE.MeshStandardMaterial({ color: 0x786f63, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
+  private readonly stone = new THREE.MeshStandardMaterial({ color: this.stoneBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .045, roughness: 1, roughnessMap: this.stoneTexture });
+  private readonly stoneDark = new THREE.MeshStandardMaterial({ color: this.stoneDarkBase, map: this.stoneTexture, bumpMap: this.stoneTexture, bumpScale: .04, roughness: 1, roughnessMap: this.stoneTexture });
   private readonly window = new THREE.MeshStandardMaterial({ color: 0x294b52, roughness: .35, emissive: 0xffa347, emissiveIntensity: .08 });
   private readonly dark = new THREE.MeshStandardMaterial({ color: 0x443633, roughness: .9 });
   private readonly green = new THREE.MeshStandardMaterial({ color: 0x4f855d, roughness: 1 });
@@ -345,7 +349,7 @@ export class CityRenderer {
   private readonly wood = new THREE.MeshStandardMaterial({ color: 0x774b38, roughness: 1 });
   private readonly metal = new THREE.MeshStandardMaterial({ color: 0x3c5657, roughness: .8 });
   private readonly warmLight = new THREE.MeshStandardMaterial({ color: 0xffcf72, emissive: 0xff9d3d, emissiveIntensity: 1.25 });
-  private readonly flagMaterial = new THREE.MeshStandardMaterial({ color: 0xf3cc62, side: THREE.DoubleSide, roughness: .9 });
+  private readonly flagMaterial = new THREE.MeshStandardMaterial({ color: DEFAULT_SLOT_COLORS[PALETTE_SLOT.trim], side: THREE.DoubleSide, roughness: .9 });
   private readonly featureWaterMaterial = new THREE.MeshStandardMaterial({ color: 0x69a7a3, roughness: .35 });
   private readonly blossom = new THREE.MeshStandardMaterial({ color: 0xe9a0a6, roughness: 1 });
   private readonly silverLeaf = new THREE.MeshStandardMaterial({ color: 0x9ab7a1, roughness: .82, emissive: 0x315b51, emissiveIntensity: .12 });
@@ -605,7 +609,7 @@ export class CityRenderer {
     } else {
       this.cells.set(key, {
         x, z, height: 1,
-        color: Math.floor(hash(this.seed, x, z, 91) * WALL_COLORS.length),
+        color: this.wallColorFor(x, z),
         placedAt: performance.now(),
         foundedAt: absoluteHours,
         renovatedAt: absoluteHours,
@@ -615,6 +619,17 @@ export class CityRenderer {
     this.syncHarborLanterns();
     this.syncNightLights();
     return true;
+  }
+
+  /** Picks a wall colour that no cardinal neighbour already uses. */
+  private wallColorFor(x: number, z: number) {
+    const preferred = Math.floor(hash(this.seed, x, z, 91) * WALL_SLOT_COUNT);
+    const taken = new Set(CARDINALS.map(([dx, dz]) => this.get(x + dx, z + dz)?.color ?? -1));
+    for (let offset = 0; offset < WALL_SLOT_COUNT; offset++) {
+      const candidate = (preferred + offset) % WALL_SLOT_COUNT;
+      if (!taken.has(candidate)) return candidate;
+    }
+    return preferred;
   }
 
   remove(x: number, z: number, absoluteHours = 0) {
@@ -747,20 +762,24 @@ export class CityRenderer {
     this.rainIntensity = nextRainIntensity;
     this.stone.roughness = 1 - this.rainIntensity * .48;
     this.stoneDark.roughness = 1 - this.rainIntensity * .42;
-    this.stone.color.setHex(0xb9ad91).lerp(this.wetTint, this.rainIntensity * .18);
-    this.stoneDark.color.setHex(0x786f63).lerp(this.wetTint, this.rainIntensity * .16);
-    for (const [color, material] of this.wallMaterials) {
-      material.roughness = .92 - this.rainIntensity * .3;
-      material.color.setHex(color).lerp(this.wetTint, this.rainIntensity * .14);
-    }
-    for (const [color, material] of this.roofMaterials) {
-      material.roughness = .82 - this.rainIntensity * .34;
-      material.color.setHex(color).lerp(this.wetTint, this.rainIntensity * .2);
-    }
+    this.applyStoneColors();
     this.wallVertexMaterial.roughness = .92 - this.rainIntensity * .3;
     this.wallVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .14);
     this.roofVertexMaterial.roughness = .82 - this.rainIntensity * .34;
     this.roofVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .2);
+  }
+
+  /** Palette colours for the quay stone and trim. Walls and roofs read the palette texture directly. */
+  setPaletteColors(stone: THREE.Color, stoneDark: THREE.Color, trim: THREE.Color) {
+    this.stoneBase.copy(stone);
+    this.stoneDarkBase.copy(stoneDark);
+    this.flagMaterial.color.copy(trim);
+    this.applyStoneColors();
+  }
+
+  private applyStoneColors() {
+    this.stone.color.copy(this.stoneBase).lerp(this.wetTint, this.rainIntensity * .18);
+    this.stoneDark.color.copy(this.stoneDarkBase).lerp(this.wetTint, this.rainIntensity * .16);
   }
 
   setMaterialDetail(enabled: boolean) {
@@ -1013,8 +1032,9 @@ export class CityRenderer {
     const source = mesh.material as THREE.Material;
     const target = source.userData.vertexBatchMaterial as THREE.MeshStandardMaterial | undefined;
     const colorValue = source.userData.vertexBatchColor as number | undefined;
-    if (!target || colorValue === undefined) return;
-    const color = new THREE.Color(colorValue);
+    const slot = source.userData.vertexBatchSlot as number | undefined;
+    if (!target || (colorValue === undefined && slot === undefined)) return;
+    const color = slot === undefined ? new THREE.Color(colorValue) : paletteSlotColor(slot);
     const position = mesh.geometry.getAttribute('position');
     const colors = new Float32Array(position.count * 3);
     for (let index = 0; index < position.count; index++) {
@@ -1131,10 +1151,8 @@ export class CityRenderer {
       .map(([dx, dz]) => this.get(cell.x + dx, cell.z + dz)?.height ?? 0);
     const count = neighborHeights.filter((height) => height > 0).length;
     const diagonalCount = diagonalHeights.filter((height) => height > 0).length;
-    const wallColor = WALL_COLORS[cell.color % WALL_COLORS.length];
-    const walls = this.cachedMaterial(this.wallMaterials, wallColor, .92);
-    const roofColor = pick(ROOF_COLORS, hash(this.seed, cell.x, cell.z, 13));
-    const roof = this.cachedMaterial(this.roofMaterials, roofColor, .82);
+    const walls = this.cachedMaterial(this.wallMaterials, PALETTE_SLOT.wall + cell.color % WALL_SLOT_COUNT, .92);
+    const roof = this.cachedMaterial(this.roofMaterials, PALETTE_SLOT.roof + (hash(this.seed, cell.x, cell.z, 13) < .5 ? 0 : 1), .82);
     const courtAnchor = roofCourtAnchor(cell, this.cells);
     const courtFeature = roofCourtFeature(cell, this.cells);
     const terrace = walkableSteppedTerrace(cell, this.cells);
@@ -2092,25 +2110,32 @@ export class CityRenderer {
     return [dx * distance, dz * distance];
   }
 
-  private cachedMaterial(cache: Map<number, THREE.MeshStandardMaterial>, color: number, roughness: number) {
-    let material = cache.get(color);
+  /**
+   * Wall and roof caches are keyed by palette slot; the accent cache by hex colour.
+   * The returned material is a stand-in: batching moves each mesh onto the shared
+   * vertex-colour material and encodes the slot or colour per vertex.
+   */
+  private cachedMaterial(cache: Map<number, THREE.MeshStandardMaterial>, key: number, roughness: number) {
+    let material = cache.get(key);
     if (!material) {
+      const paletteSlot = cache === this.wallMaterials || cache === this.roofMaterials;
       const texture = cache === this.wallMaterials ? this.plasterTexture : cache === this.roofMaterials ? this.roofTexture : null;
       material = new THREE.MeshStandardMaterial({
-        color,
+        color: paletteSlot ? DEFAULT_SLOT_COLORS[key] : key,
         roughness,
         map: texture,
         roughnessMap: this.materialDetail ? texture : null,
         bumpMap: this.materialDetail ? texture : null,
         bumpScale: cache === this.wallMaterials ? .028 : cache === this.roofMaterials ? .035 : 0,
       });
-      material.userData.vertexBatchColor = color;
+      if (paletteSlot) material.userData.vertexBatchSlot = key;
+      else material.userData.vertexBatchColor = key;
       material.userData.vertexBatchMaterial = cache === this.wallMaterials
         ? this.wallVertexMaterial
         : cache === this.roofMaterials
           ? this.roofVertexMaterial
           : this.accentVertexMaterial;
-      cache.set(color, material);
+      cache.set(key, material);
     }
     return material;
   }
@@ -2284,7 +2309,7 @@ export class CityRenderer {
     const window = shadow(new THREE.Mesh(new THREE.PlaneGeometry(.72, .34), this.window), false);
     window.position.set(center, y + .78, center + .545);
     group.add(back, window);
-    const roof = shadow(new THREE.Mesh(new THREE.ConeGeometry(1.18, .58, 4), this.cachedMaterial(this.roofMaterials, 0x733e38, .82)));
+    const roof = shadow(new THREE.Mesh(new THREE.ConeGeometry(1.18, .58, 4), this.cachedMaterial(this.roofMaterials, PALETTE_SLOT.roof, .82)));
     roof.position.set(center, y + 1.52, center);
     roof.rotation.y = Math.PI / 4;
     roof.scale.z = .78;
@@ -2736,8 +2761,8 @@ export class CityRenderer {
   }
 
   private addHarborArchive(group: THREE.Group, y: number) {
-    const blue = this.cachedMaterial(this.roofMaterials, 0x3f5260, .82);
-    const plaster = this.cachedMaterial(this.wallMaterials, 0xd8c99f, .92);
+    const blue = this.cachedMaterial(this.roofMaterials, PALETTE_SLOT.roof + 1, .82);
+    const plaster = this.cachedMaterial(this.wallMaterials, PALETTE_SLOT.wall + 1, .92);
     const deck = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.9, .9, .18, 8), this.stoneDark));
     deck.position.y = y + .09;
     deck.rotation.y = Math.PI / 8;
@@ -3907,7 +3932,7 @@ export class CityRenderer {
     const covered = feature === 'covered skybridge' || feature === 'lantern gate';
     const grand = feature === 'lantern gate';
     const y = high ? HIGH_CROSSING_SPAN_Y : FLOOR * 1.42;
-    const walls = this.cachedMaterial(this.wallMaterials, pick(WALL_COLORS, hash(this.seed, x, z, 500)), .9);
+    const walls = this.cachedMaterial(this.wallMaterials, PALETTE_SLOT.wall + Math.floor(hash(this.seed, x, z, 500) * WALL_SLOT_COUNT), .9);
     const span = shadow(new THREE.Mesh(new RoundedBoxGeometry(northSouth ? 1.25 : CELL * 1.08, .58, northSouth ? CELL * 1.08 : 1.25, 1, .16), walls));
     span.position.y = y;
     group.add(span);

@@ -47,8 +47,12 @@ import {
 } from './confluences';
 import { HARBOR_LANTERNS, harborLanternStates, harborLanternsCompletedByEdit } from './lanterns';
 import { decodeShareCode, shareCodeFromLocation, shareCodeSupported } from './share-code';
+import { PALETTE_SLOT, PaletteSystem } from './palette';
+import { installPresentationShading, presentationUniforms } from './shading';
 import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, storedTierOverride, type QualityTier } from './quality';
 import './style.css';
+
+installPresentationShading();
 
 const STORAGE_KEY = 'little-tides-town-v1';
 const MUSIC_MUTED_KEY = 'little-tides-music-muted';
@@ -74,6 +78,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="top-actions-menu" id="top-actions-menu">
           <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
           <button id="music-toggle" aria-label="Turn music off" aria-pressed="true"><span>Music</span><span class="music-state" aria-hidden="true">♫</span></button>
+          <button id="palette-cycle" aria-label="Change the town palette"><span class="desktop-palette-label">Palette</span><span class="mobile-palette-label" aria-hidden="true">◐</span></button>
           <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
           <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
           <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
@@ -248,6 +253,9 @@ const litHarborLanternIds = new Set<HarborLanternId>(
 );
 let festivalInvitationPending = false;
 
+const palette = new PaletteSystem(saved?.palette);
+presentationUniforms.uPalette.value = palette.texture;
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x91c7c1);
 const sceneFog = new THREE.FogExp2(0x91c7c1, .0135);
@@ -388,6 +396,7 @@ const waterUniforms = {
   uRain: { value: 0 },
   uNoise: { value: createWaterNoiseTexture() },
   uSky: { value: new THREE.Color(0x91c7c1) },
+  uWaterTint: { value: new THREE.Color(0x2f8a86) },
   uHorizonCenter: { value: new THREE.Vector2() },
 };
 const waterMaterial = new THREE.ShaderMaterial({
@@ -407,6 +416,7 @@ const waterMaterial = new THREE.ShaderMaterial({
     uniform float uRain;
     uniform sampler2D uNoise;
     uniform vec3 uSky;
+    uniform vec3 uWaterTint;
     uniform vec2 uHorizonCenter;
     varying vec3 vWorld;
     void main() {
@@ -415,8 +425,8 @@ const waterMaterial = new THREE.ShaderMaterial({
       vec3 second = texture2D(uNoise, baseUv * 1.73 + vec2(-uTime * .004, uTime * .006)).rgb;
       float wave = (first.r + second.g - 1.0) * (.12 + uRain * .08);
       float ribbons = first.b * .55 + second.r * .45;
-      vec3 deep = vec3(.075, .34, .37);
-      vec3 pale = vec3(.24, .61, .58);
+      vec3 deep = uWaterTint * .62;
+      vec3 pale = min(vec3(1.0), uWaterTint * 1.55 + .04);
       vec3 color = mix(deep, pale, .50 + wave * 1.75 + ribbons * .055);
       color += vec3(.055, .035, .008) * ribbons;
       color *= mix(.34, 1.0, uDay);
@@ -434,6 +444,12 @@ scene.add(water);
 
 const city = new CityRenderer(seed);
 scene.add(city.root);
+
+function applyPaletteColors() {
+  city.setPaletteColors(palette.color(PALETTE_SLOT.stone), palette.color(PALETTE_SLOT.stoneDark), palette.color(PALETTE_SLOT.trim));
+  waterUniforms.uWaterTint.value.copy(palette.color(PALETTE_SLOT.water)).convertLinearToSRGB();
+  daySky.copy(palette.color(PALETTE_SLOT.skyHorizon)).lerp(palette.color(PALETTE_SLOT.skyZenith), .45);
+}
 if (saved) city.load(saved.cells, day * 24 + timeOfDay);
 let formationOccurrences: readonly FormationOccurrence[] = detectFormations(city.cells);
 const knownFormations = new Set<FormationId>(saved?.formations ?? []);
@@ -818,6 +834,7 @@ function currentTownData(): SavedTown {
     harborLanternMode: 'confluence-mastery',
     onboardingDismissed,
     placeIntroductionSeen,
+    palette: palette.id,
   };
 }
 
@@ -2312,6 +2329,11 @@ function centerView() {
 }
 
 document.querySelector('#music-toggle')!.addEventListener('click', toggleBackgroundMusic);
+document.querySelector('#palette-cycle')!.addEventListener('click', () => {
+  const next = palette.next();
+  showToast(`Palette: ${next.title}.`);
+  persistSoon();
+});
 document.querySelector('#touch-center')!.addEventListener('click', () => {
   centerView();
   showToast('The harbor drifts back into view.');
@@ -2584,6 +2606,7 @@ function refreshAmbience() {
 
 const clock = new THREE.Clock();
 const daySky = new THREE.Color(0x91c7c1);
+applyPaletteColors();
 const nightSky = new THREE.Color(0x192b43);
 const dawnSky = new THREE.Color(0xc47f72);
 const dayHemiSky = new THREE.Color(0xffe8bd);
@@ -2734,6 +2757,7 @@ function animate() {
     lastChimedHour = currentHour;
     if (grow.discoveredIds().includes('clock-tower')) playCue('bell');
   }
+  if (palette.update(delta)) applyPaletteColors();
   const daylight = daylightAt(timeOfDay);
   // Keep two thirds of each cycle in the light. Day runs from 04:00 to 20:00,
   // leaving an eight-hour night without losing the dawn and dusk transitions.

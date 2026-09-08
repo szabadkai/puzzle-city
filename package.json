@@ -14,7 +14,8 @@
     "test:formations": "node --experimental-strip-types scripts/formations-check.mjs",
     "test:water-routes": "node scripts/water-routes-check.mjs",
     "test:render-structure": "node scripts/render-structure-check.mjs",
-    "capture-test": "node scripts/capture-test.mjs"
+    "capture-test": "node scripts/capture-test.mjs",
+    "test:palettes": "node scripts/palette-check.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

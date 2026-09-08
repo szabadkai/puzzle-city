@@ -1,0 +1,13 @@
+{
+  "id": "dusk-pastel",
+  "title": "Dusk Pastel",
+  "order": 2,
+  "walls": ["#e3b7b3", "#a7bfa3", "#f2e7d5", "#c6b3d6", "#f0c9a8", "#b7d9cf", "#efe0a3", "#d9a6a0"],
+  "roofs": ["#8c6b7e", "#6e8a80"],
+  "trim": "#f6f0e4",
+  "stone": "#d3c4b5",
+  "water": "#8f7bb3",
+  "sky": { "zenith": "#8f9dd6", "horizon": "#f5cfc0" },
+  "shadow": "#a5478a",
+  "haze": "#e4cbd8"
+}

@@ -345,6 +345,7 @@ canvas.dragging { cursor: grabbing; }
 .mobile-about-label { display: none; }
 .mobile-observe-label { display: none; }
 .mobile-postcard-label { display: none; }
+.mobile-palette-label { display: none; }
 .mobile-journal-label,
 .mobile-reset-label,
 .mobile-clock { display: none; }

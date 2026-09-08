@@ -42,6 +42,8 @@ export type SavedTown = {
   placeIntroductionSeen?: boolean;
   /** Existing towns and players who skip the guide should not see it again. */
   onboardingDismissed?: boolean;
+  /** Active colour palette id. Missing means the default palette. */
+  palette?: string;
 };
 
 export type FormationId =

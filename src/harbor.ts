@@ -228,6 +228,7 @@ type BoatActor = {
   phase: number;
   speed: number;
   bobSpeed: number;
+  hullLength: number;
   eligible: boolean;
 };
 
@@ -285,6 +286,7 @@ export class HarborAmbience {
   private readonly festivalCombinedMatrix = new THREE.Matrix4();
   private readonly rain: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly importYard: THREE.Group;
+  private readonly sternPoint = new THREE.Vector3();
   private wakes: { trail(id: string, position: THREE.Vector3, deltaSeconds: number): void; release(id: string): void } | null = null;
   private legacyRainHidden = false;
   private readonly cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
@@ -667,8 +669,12 @@ export class HarborAmbience {
       if (boat.kind === 'fishing boat') this.updateFishingWork(boat, time, timeOfDay);
     }
     for (const boat of this.fleet) {
-      if (boat.model.visible) this.wakes?.trail(boat.kind, boat.model.position, deltaSeconds);
-      else this.wakes?.release(boat.kind);
+      if (!boat.model.visible) {
+        this.wakes?.release(boat.kind);
+        continue;
+      }
+      const stern = this.sternPoint.set(-boat.hullLength * .5, 0, 0).applyEuler(boat.model.rotation).add(boat.model.position);
+      this.wakes?.trail(boat.kind, stern, deltaSeconds);
     }
     this.updateImportYard(time, timeOfDay);
     this.fauna.update(time, daylight, timeOfDay, absoluteHours, catColonyFoundedAt, rainIntensity);
@@ -856,11 +862,11 @@ export class HarborAmbience {
     const signalBoat = this.createSignalBoat();
     const ferry = this.createFerry();
     this.fleet.push(
-      { kind: 'rowboat', model: rowboat, route: emptyRoute, phase: .08, speed: .012, bobSpeed: 1.15, eligible: false },
-      { kind: 'fishing boat', model: fishingBoat, route: emptyRoute, phase: .42, speed: .009, bobSpeed: 1.4, eligible: false },
-      { kind: 'merchant boat', model: merchantBoat, route: emptyRoute, phase: 0, speed: .014, bobSpeed: 1.05, eligible: false },
-      { kind: 'signal boat', model: signalBoat, route: emptyRoute, phase: .79, speed: .01, bobSpeed: 1.22, eligible: false },
-      { kind: 'ferry', model: ferry, route: emptyRoute, phase: .87, speed: .0075, bobSpeed: .92, eligible: false },
+      { kind: 'rowboat', model: rowboat, route: emptyRoute, phase: .08, speed: .012, bobSpeed: 1.15, hullLength: 1.12, eligible: false },
+      { kind: 'fishing boat', model: fishingBoat, route: emptyRoute, phase: .42, speed: .009, bobSpeed: 1.4, hullLength: 1.52, eligible: false },
+      { kind: 'merchant boat', model: merchantBoat, route: emptyRoute, phase: 0, speed: .014, bobSpeed: 1.05, hullLength: 1.8, eligible: false },
+      { kind: 'signal boat', model: signalBoat, route: emptyRoute, phase: .79, speed: .01, bobSpeed: 1.22, hullLength: 1.03, eligible: false },
+      { kind: 'ferry', model: ferry, route: emptyRoute, phase: .87, speed: .0075, bobSpeed: .92, hullLength: 2, eligible: false },
     );
     for (const boat of this.fleet) {
       boat.model.name = boat.kind.replaceAll(' ', '-');

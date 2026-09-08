@@ -25,24 +25,69 @@ const BRIDGE_Y = HIGH_CROSSING_WALK_Y;
 const NAMES = ['Mei', 'Ren', 'Aiko', 'Hana', 'Jun', 'Mina', 'Sora', 'Tomo', 'Yuna', 'Bo', 'Kiko', 'Nori', 'Aya', 'Kenji', 'Momo', 'Lin', 'Haru', 'Emi'];
 const TRAITS = ['sociable', 'quiet', 'ambitious', 'curious', 'artistic', 'industrious', 'dreamy', 'patient', 'adventurous'];
 const OCCUPATIONS = ['Baker', 'Fisher', 'Gardener', 'Teacher', 'Bookbinder', 'Caretaker', 'Cartographer', 'Cook'];
-// Four clothing batches leave room for parcel cargo and a one-draw market stall
-// while retaining distinct warm and cool citizen colors.
-const CLOTHES = [0xc9564d, 0xd99a42, 0x457b78, 0x536c92];
+/** Tunic colours. `CitizenSave.color` indexes this list, so only append to it. */
+const TUNICS = [0xc9564d, 0xd99a42, 0x457b78, 0x536c92, 0x8a5a8f, 0xa8b36a, 0xe0c9a3, 0x3d4a5c, 0xcf7a5a, 0x6e9e8e];
+const TROUSERS = [0x3f3432, 0x2e3440, 0x5a4a3a, 0x6b6f77, 0x8c7b64];
+const SKINS = [0xf1cfae, 0xd9a47c, 0xc48a5f, 0xa66b45, 0x7d4a2e];
+const HAIRS = [0x2a2321, 0x3f3432, 0x5a3a26, 0x8a5a3c];
+const ELDER_HAIRS = [0x9a9a96, 0xe8e2d6];
 const MAX_RENDERED_CITIZENS = 512;
 
-/** Skin, hair, and straw-hat colours shared by every human figure in the town. */
+/** Skin, hair, and straw-hat colours for figures that do not carry their own look. */
 export const FIGURE_SKIN = 0xd9a47c;
 export const FIGURE_DARK = 0x3f3432;
 export const FIGURE_HAT = 0xc79d58;
+const FIGURE_SHOE = 0x2a2321;
+const FIGURE_CAP = 0xece6d8;
+const FIGURE_WOOD = 0x6b4a2e;
+const FIGURE_UMBRELLA = 0xb8463f;
 /** Standing height of a figure at scale 1, feet to hair. */
 export const FIGURE_HEIGHT = .61;
-const BODY_GEOMETRY = new THREE.CapsuleGeometry(.09, .16, 3, 7);
-const HEAD_GEOMETRY = new THREE.SphereGeometry(.09, 9, 7);
-const HAIR_GEOMETRY = new THREE.SphereGeometry(.094, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
+const TUNIC_GEOMETRY = new THREE.CapsuleGeometry(.09, .16, 3, 7);
+const HEAD_GEOMETRY = new THREE.SphereGeometry(.09, 10, 8);
 const LEG_GEOMETRY = new THREE.CylinderGeometry(.022, .027, .17, 6);
-const ARM_GEOMETRY = new THREE.CylinderGeometry(.019, .023, .19, 6);
+const SHOE_GEOMETRY = new THREE.BoxGeometry(.05, .03, .08);
+const SLEEVE_GEOMETRY = new THREE.CylinderGeometry(.021, .025, .14, 6);
+const HAND_GEOMETRY = new THREE.SphereGeometry(.024, 6, 5);
 const HAT_GEOMETRY = new THREE.ConeGeometry(.145, .065, 12);
-const FIGURE_OFFSETS = { body: .285, head: .5, hair: .515, legY: .085, legX: .047, armY: .31, armX: .115, armLean: .08, hat: .61 } as const;
+const CAP_GEOMETRY = new THREE.CylinderGeometry(.078, .088, .05, 10);
+const APRON_GEOMETRY = new THREE.BoxGeometry(.13, .17, .02);
+const PACK_GEOMETRY = new THREE.BoxGeometry(.09, .1, .06);
+const STICK_GEOMETRY = new THREE.CylinderGeometry(.008, .011, .4, 5);
+const LANTERN_GEOMETRY = new THREE.BoxGeometry(.05, .07, .05);
+const UMBRELLA_GEOMETRY = new THREE.ConeGeometry(.17, .07, 9, 1, true);
+const CARGO_GEOMETRY = new THREE.BoxGeometry(.2, .16, .18);
+const SHADOW_GEOMETRY = new THREE.CircleGeometry(.17, 14);
+
+function capHair() {
+  return new THREE.SphereGeometry(.094, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
+}
+
+function cropHair() {
+  return new THREE.SphereGeometry(.092, 9, 5, 0, Math.PI * 2, 0, Math.PI * .4);
+}
+
+/** A cap with a curtain over the back half of the head. The sphere's back half is phi from pi to two pi. */
+function bobHair() {
+  const curtain = new THREE.SphereGeometry(.097, 9, 5, Math.PI, Math.PI, Math.PI * .4, Math.PI * .3);
+  return mergeGeometries([capHair(), curtain], false)!;
+}
+
+function bunHair() {
+  const bun = new THREE.SphereGeometry(.036, 7, 6);
+  bun.translate(0, .06, -.08);
+  return mergeGeometries([capHair(), bun], false)!;
+}
+
+const HAIR_GEOMETRIES = [capHair(), cropHair(), bobHair(), bunHair()];
+
+/** Rest-pose part positions. Legs and arms pivot at the hip and shoulder; hair and hats hang from the head. */
+const FIGURE_OFFSETS = {
+  tunic: .285, head: .5, hair: .015, hat: .11, cap: .085,
+  legY: .17, legDrop: -.085, shoeDrop: -.16, shoeForward: .012, legX: .047,
+  shoulderY: .4, armX: .115, armLean: .08, sleeveDrop: -.07, handDrop: -.155,
+  apron: [0, .23, .09], pack: [-.135, .25, -.01],
+} as const;
 
 /** One vertex-coloured material for merged figures, so a whole crew is one draw call. */
 export const FIGURE_MATERIAL = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .95 });
@@ -57,37 +102,200 @@ export function colorGeometry(geometry: THREE.BufferGeometry, hex: number) {
   return geometry;
 }
 
-/** A citizen-sized arm, for figures that pose their own arms. */
-export function figureArmGeometry(hex: number) {
-  return colorGeometry(ARM_GEOMETRY.clone(), hex);
+/** A citizen-sized sleeve and hand centred on the origin, for figures that pose their own arms. */
+export function figureArmGeometry(hex: number, skin = FIGURE_SKIN) {
+  const sleeve = colorGeometry(SLEEVE_GEOMETRY.clone(), hex).translate(0, .025, 0);
+  const hand = colorGeometry(HAND_GEOMETRY.clone(), skin).translate(0, -.06, 0);
+  const merged = mergeGeometries([sleeve, hand], false)!;
+  sleeve.dispose();
+  hand.dispose();
+  return merged;
 }
 
-export type FigureOptions = { clothes: number; skin?: number; hat?: boolean; arms?: boolean; scale?: number };
+export type FigureOptions = {
+  clothes: number; skin?: number; hat?: boolean; arms?: boolean; scale?: number; trousers?: number; hair?: number; hairStyle?: number;
+};
 
 /**
- * One merged mesh with citizen proportions: legs, torso, arms, head, hair,
- * and an optional straw hat. Boats and stalls use it so every person in the
- * town is built to the same scale.
+ * One merged mesh with citizen proportions: shoes, legs, tunic, sleeves,
+ * hands, head, hair, and an optional straw hat. Boats and stalls use it so
+ * every person in the town is built to the same scale.
  */
-export function buildFigureGeometry({ clothes, skin = FIGURE_SKIN, hat = false, arms = true, scale = 1 }: FigureOptions) {
+export function buildFigureGeometry({
+  clothes, skin = FIGURE_SKIN, hat = false, arms = true, scale = 1, trousers = FIGURE_DARK, hair = FIGURE_DARK, hairStyle = 0,
+}: FigureOptions) {
   const parts: THREE.BufferGeometry[] = [];
-  const place = (geometry: THREE.BufferGeometry, hex: number, x: number, y: number, rotationZ = 0) => {
+  const place = (geometry: THREE.BufferGeometry, hex: number, x: number, y: number, z = 0, rotationZ = 0) => {
     const part = colorGeometry(geometry.clone(), hex);
     if (rotationZ) part.rotateZ(rotationZ);
-    part.translate(x, y, 0);
+    part.translate(x, y, z);
     parts.push(part);
   };
-  for (const side of [-1, 1]) place(LEG_GEOMETRY, FIGURE_DARK, side * FIGURE_OFFSETS.legX, FIGURE_OFFSETS.legY);
-  place(BODY_GEOMETRY, clothes, 0, FIGURE_OFFSETS.body);
-  if (arms) for (const side of [-1, 1]) place(ARM_GEOMETRY, skin, side * FIGURE_OFFSETS.armX, FIGURE_OFFSETS.armY, -side * FIGURE_OFFSETS.armLean);
-  place(HEAD_GEOMETRY, skin, 0, FIGURE_OFFSETS.head);
-  place(HAIR_GEOMETRY, FIGURE_DARK, 0, FIGURE_OFFSETS.hair);
-  if (hat) place(HAT_GEOMETRY, FIGURE_HAT, 0, FIGURE_OFFSETS.hat);
+  const at = FIGURE_OFFSETS;
+  for (const side of [-1, 1]) {
+    place(LEG_GEOMETRY, trousers, side * at.legX, at.legY + at.legDrop);
+    place(SHOE_GEOMETRY, FIGURE_SHOE, side * at.legX, at.legY + at.shoeDrop, at.shoeForward);
+  }
+  place(TUNIC_GEOMETRY, clothes, 0, at.tunic);
+  if (arms) for (const side of [-1, 1]) {
+    place(SLEEVE_GEOMETRY, clothes, side * at.armX, at.shoulderY + at.sleeveDrop, 0, side * at.armLean);
+    place(HAND_GEOMETRY, skin, side * (at.armX + .012), at.shoulderY + at.handDrop);
+  }
+  place(HEAD_GEOMETRY, skin, 0, at.head);
+  place(HAIR_GEOMETRIES[hairStyle % HAIR_GEOMETRIES.length], hair, 0, at.head + at.hair);
+  if (hat) place(HAT_GEOMETRY, FIGURE_HAT, 0, at.head + at.hat);
   const merged = mergeGeometries(parts, false)!;
   for (const part of parts) part.dispose();
   if (scale !== 1) merged.scale(scale, scale, scale);
   return merged;
 }
+
+export type FigureLook = {
+  tunic: number;
+  trousers: number;
+  skin: number;
+  hair: number;
+  hairStyle: number;
+  hat: 'none' | 'straw' | 'cap';
+  apron: number | null;
+  pack: number | null;
+  stick: boolean;
+};
+
+const APRONS: Record<string, number> = { Cook: 0xe8dfcc, Baker: 0xf0ebe0, Restaurateur: 0xe8dfcc, Potter: 0xb9a48a, Weaver: 0x6d7fa3, Artisan: 0x7a5a3c, Shipwright: 0x7a5a3c, Fishmonger: 0x9fb4b8 };
+const PACKS: Record<string, number> = { Cartographer: 0x6b4a2e, Fisher: 0xb08d4a, Bookbinder: 0x5a3a26, Bookseller: 0x5a3a26, Traveler: 0x8a6a48, Miller: 0xd9cdb0 };
+const STRAW_HATS = new Set(['Fisher', 'Gardener', 'Traveler', 'Miller']);
+const CAPS = new Set(['Baker', 'Cook', 'Restaurateur']);
+
+function citizenIndex(id: string) {
+  const index = Number(id.split('-').at(-1));
+  return Number.isFinite(index) ? index : 0;
+}
+
+/** Everything about a citizen's appearance follows from the save fields, so old saves gain a look without migration. */
+export function deriveLook(data: CitizenSave, seed: number): FigureLook {
+  const cell = parseCellKey(data.homeKey);
+  const index = citizenIndex(data.id);
+  const roll = (salt: number) => hash(seed, cell.x * 31 + index, cell.z, salt);
+  const elder = data.ageGroup === 'elder';
+  const hat = STRAW_HATS.has(data.occupation) ? 'straw' : CAPS.has(data.occupation) ? 'cap' : 'none';
+  // A bun would poke through a hat, so covered heads keep to the flat styles.
+  const hairStyle = Math.floor(roll(914) * HAIR_GEOMETRIES.length);
+  return {
+    tunic: TUNICS[data.color % TUNICS.length],
+    trousers: pick(TROUSERS, roll(911)),
+    skin: pick(SKINS, roll(912)),
+    hair: elder ? pick(ELDER_HAIRS, roll(913)) : pick(HAIRS, roll(913)),
+    hairStyle: hat === 'none' ? hairStyle : hairStyle % 2,
+    hat,
+    apron: APRONS[data.occupation] ?? null,
+    pack: PACKS[data.occupation] ?? null,
+    stick: elder && roll(916) < .6,
+  };
+}
+
+/** What a figure does with its body while it stands somewhere. Walking is layered on top from the path. */
+export type ActivityKind = 'stand' | 'watch' | 'sit' | 'chat' | 'dance' | 'wave' | 'sweep' | 'knead' | 'hammer' | 'cast' | 'sleep';
+
+/** Free text arrives from discoveries and landmarks; this maps the few phrases that imply a body pose. */
+function kindFromText(activity: string): ActivityKind {
+  if (/dancing|festival|procession|all the lanterns/i.test(activity)) return 'dance';
+  if (/sitting|resting|sharing a meal|supper table/i.test(activity)) return 'sit';
+  if (/waving|greeting|welcoming|cheering/i.test(activity)) return 'wave';
+  if (/watching|looking|remembering|listening/i.test(activity)) return 'watch';
+  return 'stand';
+}
+
+const OWNER_KINDS: Record<BusinessType, ActivityKind> = {
+  bakery: 'knead', cafe: 'sweep', 'flower-shop': 'knead', workshop: 'hammer', bookstore: 'watch', fishmonger: 'knead',
+  restaurant: 'sweep', 'tea-house': 'sweep', inn: 'wave', pottery: 'knead', mill: 'hammer', smokehouse: 'knead', weaver: 'knead', shipyard: 'hammer',
+};
+
+type Pose = {
+  bob: number; lean: number; roll: number; twist: number; headYaw: number; headPitch: number;
+  armLX: number; armLZ: number; armRX: number; armRZ: number; legL: number; legR: number; crouch: number;
+};
+
+const REST_POSE: Readonly<Pose> = {
+  bob: 0, lean: 0, roll: 0, twist: 0, headYaw: 0, headPitch: 0,
+  armLX: 0, armLZ: -FIGURE_OFFSETS.armLean, armRX: 0, armRZ: FIGURE_OFFSETS.armLean, legL: 0, legR: 0, crouch: 0,
+};
+const POSE_KEYS = Object.keys(REST_POSE) as (keyof Pose)[];
+
+type FigureParts = {
+  legs: THREE.Object3D[];
+  tunic: THREE.Object3D;
+  apron: THREE.Object3D;
+  pack: THREE.Object3D;
+  arms: THREE.Object3D[];
+  head: THREE.Object3D;
+};
+
+function faceTexture() {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d')!;
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, size, size);
+  // Sphere UVs put the forward direction (+z) at u = .25, and v counts up from the chin.
+  context.fillStyle = '#2a2321';
+  for (const offset of [-.055, .055]) {
+    context.beginPath();
+    context.ellipse((.25 + offset) * size, (1 - .545) * size, 1.7, 2.3, 0, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.fillStyle = '#a8564a';
+  context.beginPath();
+  context.ellipse(.25 * size, (1 - .455) * size, 1.6, .8, 0, 0, Math.PI * 2);
+  context.fill();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** One instanced batch per body part. Tinted batches take their colour per citizen through `instanceColor`. */
+function createFigureBatches() {
+  const tinted = (map?: THREE.Texture) => new THREE.MeshStandardMaterial(map ? { roughness: .95, map } : { roughness: .95 });
+  const fixed = (color: number) => new THREE.MeshStandardMaterial({ color, roughness: 1 });
+  const batch = (geometry: THREE.BufferGeometry, material: THREE.Material, name: string, perCitizen = 1, tint = false) => {
+    const mesh = new THREE.InstancedMesh(geometry, material, MAX_RENDERED_CITIZENS * perCitizen);
+    mesh.name = name;
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    if (tint) {
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(mesh.instanceMatrix.count * 3).fill(1), 3);
+      mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    }
+    // Picking measures distance to each citizen instead of raycasting body parts.
+    mesh.raycast = () => {};
+    return mesh;
+  };
+  return {
+    shadows: batch(SHADOW_GEOMETRY, new THREE.MeshBasicMaterial({ color: 0x14101c, transparent: true, opacity: .5, depthWrite: false }), 'citizen-shadows'),
+    shoes: batch(SHOE_GEOMETRY, fixed(FIGURE_SHOE), 'citizen-shoes', 2),
+    legs: batch(LEG_GEOMETRY, tinted(), 'citizen-legs', 2, true),
+    tunics: batch(TUNIC_GEOMETRY, tinted(), 'citizen-tunics', 1, true),
+    aprons: batch(APRON_GEOMETRY, tinted(), 'citizen-aprons', 1, true),
+    packs: batch(PACK_GEOMETRY, tinted(), 'citizen-packs', 1, true),
+    sleeves: batch(SLEEVE_GEOMETRY, tinted(), 'citizen-sleeves', 2, true),
+    hands: batch(HAND_GEOMETRY, tinted(), 'citizen-hands', 2, true),
+    heads: batch(HEAD_GEOMETRY, tinted(faceTexture()), 'citizen-heads', 1, true),
+    hair: HAIR_GEOMETRIES.map((geometry, index) => batch(geometry, tinted(), `citizen-hair-${index}`, 1, true)),
+    straw: batch(HAT_GEOMETRY, fixed(FIGURE_HAT), 'citizen-straw-hats'),
+    caps: batch(CAP_GEOMETRY, fixed(FIGURE_CAP), 'citizen-caps'),
+    sticks: batch(STICK_GEOMETRY, fixed(FIGURE_WOOD), 'citizen-sticks', 2),
+    lanterns: batch(LANTERN_GEOMETRY, new THREE.MeshStandardMaterial({ color: 0xffc46b, emissive: 0xff9a3c, emissiveIntensity: 1.4, roughness: .6 }), 'citizen-lanterns'),
+    umbrellas: batch(UMBRELLA_GEOMETRY, new THREE.MeshStandardMaterial({ color: FIGURE_UMBRELLA, roughness: .8, side: THREE.DoubleSide }), 'citizen-umbrellas'),
+    cargo: batch(CARGO_GEOMETRY, fixed(0xc49a58), 'citizen-cargo'),
+  };
+}
+
+const IDLE_VARIANTS = 3;
+const WALK_SPEED = .58;
+const STRIDE_RATE = 8;
 
 type NavNode = {
   key: string;
@@ -97,14 +305,19 @@ type NavNode = {
 
 type Citizen = CitizenSave & {
   model: THREE.Group;
-  leftLeg: THREE.Object3D;
-  rightLeg: THREE.Object3D;
-  leftArm: THREE.Object3D;
-  rightArm: THREE.Object3D;
-  body: THREE.Object3D;
-  head: THREE.Object3D;
-  hair: THREE.Object3D;
-  hat: THREE.Object3D | null;
+  parts: FigureParts;
+  look: FigureLook;
+  pose: Pose;
+  kind: ActivityKind;
+  idleVariant: number;
+  walkWeight: number;
+  danceWeight: number;
+  heading: number;
+  facePoint: THREE.Vector3 | null;
+  lane: number;
+  loiterAt: number;
+  loiterHome: THREE.Vector3 | null;
+  chatLead: boolean;
   path: THREE.Vector3[];
   targetKey: string | null;
   nextDecisionAt: number;
@@ -140,6 +353,7 @@ function parseCellKey(key: string) {
 export class NavGraph {
   readonly nodes = new Map<string, NavNode>();
   readonly entrances = new Map<string, string>();
+  readonly entranceCells = new Map<string, string>();
   readonly plazas: string[] = [];
   readonly docks: string[] = [];
   readonly rooftops = new Map<string, string>();
@@ -340,7 +554,9 @@ export class NavGraph {
       const doorDir = this.doorDirection(cell, open);
       if (doorDir >= 0) {
         const [dx, dz] = CARDINALS[doorDir];
-        this.entrances.set(keyOf(cell.x, cell.z), this.addNode(cell.x * CELL + dx * WALK_OUT, cell.z * CELL + dz * WALK_OUT));
+        const entranceKey = this.addNode(cell.x * CELL + dx * WALK_OUT, cell.z * CELL + dz * WALK_OUT);
+        this.entrances.set(keyOf(cell.x, cell.z), entranceKey);
+        this.entranceCells.set(entranceKey, keyOf(cell.x, cell.z));
       }
     }
 
@@ -685,29 +901,34 @@ export class CitizenSystem {
   private discoveries = new Set<string>();
   private pendingBusinessVisits: BusinessVisit[] = [];
   private readonly walkDirection = new THREE.Vector3();
+  private readonly laneOffset = new THREE.Vector3();
+  private readonly laneTarget = new THREE.Vector3();
   private readonly pickCenter = new THREE.Vector3();
   private readonly pickClosest = new THREE.Vector3();
-  private readonly skinMaterial = new THREE.MeshStandardMaterial({ color: FIGURE_SKIN, roughness: .9 });
-  private readonly darkMaterial = new THREE.MeshStandardMaterial({ color: FIGURE_DARK, roughness: 1 });
-  private readonly hatMaterial = new THREE.MeshStandardMaterial({ color: FIGURE_HAT, roughness: 1 });
-  private readonly clothesMaterials = CLOTHES.map((color) => new THREE.MeshStandardMaterial({ color, roughness: .95 }));
-  private readonly bodyGeometry = BODY_GEOMETRY;
-  private readonly headGeometry = HEAD_GEOMETRY;
-  private readonly hairGeometry = HAIR_GEOMETRY;
-  private readonly legGeometry = LEG_GEOMETRY;
-  private readonly armGeometry = ARM_GEOMETRY;
-  private readonly hatGeometry = HAT_GEOMETRY;
-  private readonly cargoGeometry = new THREE.BoxGeometry(.2, .16, .18);
-  private readonly cargoMaterial = new THREE.MeshStandardMaterial({ color: 0xc49a58, roughness: 1 });
-  private readonly bodyInstances: THREE.InstancedMesh[];
-  private readonly headInstances: THREE.InstancedMesh;
-  private readonly hairInstances: THREE.InstancedMesh;
-  private readonly legInstances: THREE.InstancedMesh;
-  private readonly armInstances: THREE.InstancedMesh;
-  private readonly hatInstances: THREE.InstancedMesh;
-  private readonly cargoInstances: THREE.InstancedMesh;
+  private readonly batches = createFigureBatches();
+  private readonly batchList = Object.values(this.batches).flat();
   private readonly renderMatrix = new THREE.Matrix4();
-  private readonly cargoTransform = new THREE.Object3D();
+  private readonly limbMatrix = new THREE.Matrix4();
+  private readonly tint = new THREE.Color();
+  private readonly poseTarget: Pose = { ...REST_POSE };
+  // Quay slabs sit a little above the walk height, so the disc floats to clear them.
+  private readonly shadowOffset = new THREE.Matrix4().makeRotationX(-Math.PI / 2).setPosition(0, .05, 0);
+  private readonly legOffset = new THREE.Matrix4().makeTranslation(0, FIGURE_OFFSETS.legDrop, 0);
+  private readonly shoeOffset = new THREE.Matrix4().makeTranslation(0, FIGURE_OFFSETS.shoeDrop, FIGURE_OFFSETS.shoeForward);
+  private readonly sleeveOffset = new THREE.Matrix4().makeTranslation(0, FIGURE_OFFSETS.sleeveDrop, 0);
+  private readonly handOffset = new THREE.Matrix4().makeTranslation(0, FIGURE_OFFSETS.handDrop, 0);
+  private readonly hairOffset = new THREE.Matrix4().makeTranslation(0, FIGURE_OFFSETS.hair, 0);
+  private readonly hatOffset = new THREE.Matrix4().makeTranslation(0, FIGURE_OFFSETS.hat, 0);
+  private readonly capOffset = new THREE.Matrix4().makeTranslation(0, FIGURE_OFFSETS.cap, 0);
+  private readonly stickOffset = new THREE.Matrix4().makeRotationX(.18).setPosition(.03, -.26, .05);
+  private readonly broomOffset = new THREE.Matrix4().makeRotationX(-.9).setPosition(0, -.3, .12);
+  private readonly rodOffset = new THREE.Matrix4().makeRotationX(-1.15).setPosition(.02, -.12, .2);
+  private readonly umbrellaHandleOffset = new THREE.Matrix4().makeTranslation(0, .05, .02);
+  private readonly umbrellaOffset = new THREE.Matrix4().makeTranslation(0, .27, .02);
+  private readonly lanternOffset = new THREE.Matrix4().makeTranslation(0, -.2, .02);
+  private readonly cargoOffset = new THREE.Matrix4().makeTranslation(.05, -.19, .06);
+  private rainIntensity = 0;
+  private night = false;
 
   constructor(seed: number, cells: Map<string, Cell>, saved: CitizenSave[]) {
     this.seed = seed;
@@ -715,38 +936,20 @@ export class CitizenSystem {
     this.graph = new NavGraph(cells, seed);
     this.root.name = 'citizens';
     this.renderRoot.name = 'citizen-instance-batches';
-    this.bodyInstances = this.clothesMaterials.map((material, index) => this.createInstanceBatch(this.bodyGeometry, material, `citizen-bodies-${index}`));
-    this.headInstances = this.createInstanceBatch(this.headGeometry, this.skinMaterial, 'citizen-heads');
-    this.hairInstances = this.createInstanceBatch(this.hairGeometry, this.darkMaterial, 'citizen-hair');
-    this.legInstances = this.createInstanceBatch(this.legGeometry, this.darkMaterial, 'citizen-legs');
-    this.armInstances = this.createInstanceBatch(this.armGeometry, this.skinMaterial, 'citizen-arms');
-    this.hatInstances = this.createInstanceBatch(this.hatGeometry, this.hatMaterial, 'citizen-hats');
-    this.cargoInstances = this.createInstanceBatch(this.cargoGeometry, this.cargoMaterial, 'citizen-cargo');
-    this.cargoTransform.position.set(.14, .35, 0);
-    this.renderRoot.add(...this.bodyInstances, this.headInstances, this.hairInstances, this.legInstances, this.armInstances, this.hatInstances, this.cargoInstances);
+    this.renderRoot.add(...this.batchList);
     this.debugRoot.name = 'citizen-navigation';
     this.debugRoot.visible = false;
     this.root.add(this.renderRoot, this.debugRoot);
     for (const data of saved) this.restoreCitizen(data);
-    this.nextCitizen = this.citizens.reduce((largest, citizen) => {
-      const index = Number(citizen.id.split('-').at(-1));
-      return Number.isFinite(index) ? Math.max(largest, index) : largest;
-    }, -1) + 1;
+    this.nextCitizen = this.citizens.reduce((largest, citizen) => Math.max(largest, citizenIndex(citizen.id)), -1) + 1;
     this.reconcileHomes();
     this.rebuildDebugGraph();
     this.updateRenderInstances();
   }
 
-  private createInstanceBatch(geometry: THREE.BufferGeometry, material: THREE.Material, name: string) {
-    const mesh = new THREE.InstancedMesh(geometry, material, MAX_RENDERED_CITIZENS * (name === 'citizen-legs' ? 2 : 1));
-    mesh.name = name;
-    mesh.count = 0;
-    mesh.frustumCulled = false;
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    // Picking uses the original invisible parts so an instance ID never has to
-    // be translated back through color-specific body batches.
-    mesh.raycast = () => {};
-    return mesh;
+  /** Rain above a quarter opens umbrellas and hurries walkers home. */
+  setWeather(rainIntensity: number) {
+    this.rainIntensity = rainIntensity;
   }
 
   rebuild(cells: Map<string, Cell>) {
@@ -869,7 +1072,7 @@ export class CitizenSystem {
       occupation: ageGroup === 'child' ? 'Student' : ageGroup === 'elder' ? 'Retired' : pick(OCCUPATIONS, hash(this.seed, cell.x, cell.z, 904)),
       traits: [traitA, traitB],
       relationships: [],
-      color: Math.floor(hash(this.seed, cell.x, cell.z, 905) * CLOTHES.length),
+      color: Math.floor(hash(this.seed, cell.x, cell.z, 905) * TUNICS.length),
       ageGroup,
       householdId: `household-${homeKey}`,
       businessVisits: {},
@@ -886,7 +1089,7 @@ export class CitizenSystem {
       businessVisits: { ...(data.businessVisits ?? {}) },
       residentKind: data.residentKind ?? 'resident',
     };
-    const model = this.createModel(normalized);
+    const { group: model, parts } = this.createModel(normalized);
     model.position.set(data.position[0], data.elevation ?? WALK_Y, data.position[1]);
     // Routes are not persisted. Snap restored residents back to the rebuilt
     // graph so saves made with older surface heights do not leave them afloat.
@@ -894,19 +1097,27 @@ export class CitizenSystem {
     if (restoredNode) model.position.copy(restoredNode.position);
     if (movingIn) model.scale.setScalar(.01);
     this.root.add(model);
+    const index = citizenIndex(normalized.id);
+    const heading = hash(this.seed, index, 1, 919) * Math.PI * 2;
+    model.rotation.y = heading;
     this.citizens.push({
       ...normalized,
       traits: [...normalized.traits],
       relationships: [...normalized.relationships],
       model,
-      leftLeg: model.userData.leftLeg as THREE.Object3D,
-      rightLeg: model.userData.rightLeg as THREE.Object3D,
-      leftArm: model.userData.leftArm as THREE.Object3D,
-      rightArm: model.userData.rightArm as THREE.Object3D,
-      body: model.userData.body as THREE.Object3D,
-      head: model.userData.head as THREE.Object3D,
-      hair: model.userData.hair as THREE.Object3D,
-      hat: model.userData.hat as THREE.Object3D | null,
+      parts,
+      look: deriveLook(normalized, this.seed),
+      pose: { ...REST_POSE },
+      kind: 'stand',
+      idleVariant: index % IDLE_VARIANTS,
+      walkWeight: 0,
+      danceWeight: 0,
+      heading,
+      facePoint: null,
+      lane: (hash(this.seed, index, 2, 920) - .5) * .24,
+      loiterAt: 0,
+      loiterHome: model.position.clone(),
+      chatLead: false,
       path: [],
       targetKey: null,
       nextDecisionAt: 0,
@@ -926,59 +1137,32 @@ export class CitizenSystem {
   private createModel(data: CitizenSave) {
     const group = new THREE.Group();
     group.userData.citizenId = data.id;
-    const clothes = this.clothesMaterials[data.color % this.clothesMaterials.length];
-    const body = new THREE.Mesh(this.bodyGeometry, clothes);
-    body.name = 'citizen-body';
-    body.position.y = .285;
-    const head = new THREE.Mesh(this.headGeometry, this.skinMaterial);
-    head.name = 'citizen-head';
-    head.position.y = .5;
-    const hair = new THREE.Mesh(this.hairGeometry, this.darkMaterial);
-    hair.name = 'citizen-hair';
-    hair.position.y = .515;
-    const legs: THREE.Mesh[] = [];
-    for (const side of [-1, 1]) {
-      const leg = new THREE.Mesh(this.legGeometry, this.darkMaterial);
-      leg.position.set(side * .047, .085, 0);
-      leg.name = side < 0 ? 'leg-left' : 'leg-right';
-      legs.push(leg);
-      group.add(leg);
-    }
-    const arms: THREE.Mesh[] = [];
-    for (const side of [-1, 1]) {
-      const arm = new THREE.Mesh(this.armGeometry, this.skinMaterial);
-      arm.position.set(side * .115, .31, 0);
-      arm.rotation.z = -side * .08;
-      arm.name = side < 0 ? 'arm-left' : 'arm-right';
-      arms.push(arm);
-      group.add(arm);
-    }
-    let hat: THREE.Mesh | null = null;
-    if (data.occupation === 'Fisher' || data.occupation === 'Gardener') {
-      hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
-      hat.name = 'occupation-hat';
-      hat.position.y = .61;
-      group.add(hat);
-    }
-    group.add(body, head, hair);
-    group.userData.leftLeg = legs[0];
-    group.userData.rightLeg = legs[1];
-    group.userData.leftArm = arms[0];
-    group.userData.rightArm = arms[1];
-    group.userData.body = body;
-    group.userData.head = head;
-    group.userData.hair = hair;
-    group.userData.hat = hat;
-    const targetScale = data.ageGroup === 'child' ? .76 : data.ageGroup === 'elder' ? .94 : 1;
-    group.userData.targetScale = targetScale;
-    group.scale.setScalar(targetScale);
-    group.traverse((object) => { object.userData.citizenId = data.id; });
-    for (const child of group.children) child.visible = false;
-    return group;
+    const node = (parent: THREE.Object3D, x: number, y: number, z = 0) => {
+      const object = new THREE.Object3D();
+      object.position.set(x, y, z);
+      parent.add(object);
+      return object;
+    };
+    const at = FIGURE_OFFSETS;
+    const tunic = node(group, 0, at.tunic);
+    const parts: FigureParts = {
+      legs: [-1, 1].map((side) => node(group, side * at.legX, at.legY)),
+      tunic,
+      apron: node(tunic, at.apron[0], at.apron[1] - at.tunic, at.apron[2]),
+      pack: node(tunic, at.pack[0], at.pack[1] - at.tunic, at.pack[2]),
+      arms: [-1, 1].map((side) => node(group, side * at.armX, at.shoulderY)),
+      head: node(group, 0, at.head),
+    };
+    const child = data.ageGroup === 'child';
+    if (child) parts.head.scale.setScalar(1.15);
+    group.userData.targetScale = child ? .74 : data.ageGroup === 'elder' ? .94 : 1;
+    group.scale.setScalar(group.userData.targetScale as number);
+    return { group, parts };
   }
 
   update(deltaSeconds: number, timeOfDay: number, absoluteHours: number, realTime: number) {
     this.currentHours = absoluteHours;
+    this.night = timeOfDay >= 19.5 || timeOfDay < 5.5;
     for (const citizen of this.citizens) {
       const targetScale = citizen.model.userData.targetScale as number ?? 1;
       if (citizen.model.scale.x < targetScale - .01) {
@@ -986,7 +1170,9 @@ export class CitizenSystem {
         citizen.model.scale.setScalar(scale);
       }
       if (!citizen.path.length && absoluteHours >= citizen.nextDecisionAt) this.chooseRoutine(citizen, timeOfDay, absoluteHours);
-      this.walk(citizen, deltaSeconds, realTime);
+      if (!citizen.path.length) this.loiter(citizen, realTime);
+      this.walk(citizen, deltaSeconds);
+      this.animate(citizen, deltaSeconds, realTime);
     }
     this.relationshipAccumulator += deltaSeconds;
     if (this.relationshipAccumulator >= 1) {
@@ -996,41 +1182,79 @@ export class CitizenSystem {
     this.updateRenderInstances();
   }
 
-  private setActorPart(batch: THREE.InstancedMesh, index: number, model: THREE.Group, part: THREE.Object3D) {
-    part.updateMatrix();
-    batch.setMatrixAt(index, this.renderMatrix.multiplyMatrices(model.matrix, part.matrix));
+  /** Asleep residents are indoors, so they leave the street empty instead of standing at the door all night. */
+  private indoors(citizen: Citizen) {
+    return citizen.kind === 'sleep' && citizen.path.length === 0;
+  }
+
+  private place(batch: THREE.InstancedMesh, matrix: THREE.Matrix4, color?: number) {
+    const index = batch.count++;
+    batch.setMatrixAt(index, matrix);
+    if (color !== undefined) batch.setColorAt(index, this.tint.setHex(color));
   }
 
   private updateRenderInstances() {
-    const bodyCounts = this.bodyInstances.map(() => 0);
-    let heads = 0;
-    let hairs = 0;
-    let legs = 0;
-    let arms = 0;
-    let hats = 0;
-    let cargo = 0;
+    for (const batch of this.batchList) batch.count = 0;
     const renderedCount = Math.min(this.citizens.length, MAX_RENDERED_CITIZENS);
+    const matrix = this.renderMatrix;
+    const limb = this.limbMatrix;
+    const batches = this.batches;
     for (let index = 0; index < renderedCount; index++) {
       const citizen = this.citizens[index];
-      citizen.model.updateMatrix();
-      const color = citizen.color % this.bodyInstances.length;
-      this.setActorPart(this.bodyInstances[color], bodyCounts[color]++, citizen.model, citizen.body);
-      this.setActorPart(this.headInstances, heads++, citizen.model, citizen.head);
-      this.setActorPart(this.hairInstances, hairs++, citizen.model, citizen.hair);
-      this.setActorPart(this.legInstances, legs++, citizen.model, citizen.leftLeg);
-      this.setActorPart(this.legInstances, legs++, citizen.model, citizen.rightLeg);
-      this.setActorPart(this.armInstances, arms++, citizen.model, citizen.leftArm);
-      this.setActorPart(this.armInstances, arms++, citizen.model, citizen.rightArm);
-      if (citizen.hat) this.setActorPart(this.hatInstances, hats++, citizen.model, citizen.hat);
-      if (citizen.carryingGood || citizen.carryingParcel) this.setActorPart(this.cargoInstances, cargo++, citizen.model, this.cargoTransform);
+      if (this.indoors(citizen)) continue;
+      const { model, parts, look } = citizen;
+      const walking = citizen.path.length > 0;
+      const umbrella = this.rainIntensity > .25;
+      model.updateMatrix();
+      const base = model.matrix;
+      this.place(batches.shadows, matrix.multiplyMatrices(base, this.shadowOffset));
+      for (const leg of parts.legs) {
+        leg.updateMatrix();
+        limb.multiplyMatrices(base, leg.matrix);
+        this.place(batches.legs, matrix.multiplyMatrices(limb, this.legOffset), look.trousers);
+        this.place(batches.shoes, matrix.multiplyMatrices(limb, this.shoeOffset));
+      }
+      parts.tunic.updateMatrix();
+      limb.multiplyMatrices(base, parts.tunic.matrix);
+      this.place(batches.tunics, limb, look.tunic);
+      if (look.apron !== null) {
+        parts.apron.updateMatrix();
+        this.place(batches.aprons, matrix.multiplyMatrices(limb, parts.apron.matrix), look.apron);
+      }
+      if (look.pack !== null) {
+        parts.pack.updateMatrix();
+        this.place(batches.packs, matrix.multiplyMatrices(limb, parts.pack.matrix), look.pack);
+      }
+      for (const [side, arm] of parts.arms.entries()) {
+        arm.updateMatrix();
+        limb.multiplyMatrices(base, arm.matrix);
+        this.place(batches.sleeves, matrix.multiplyMatrices(limb, this.sleeveOffset), look.tunic);
+        this.place(batches.hands, matrix.multiplyMatrices(limb, this.handOffset), look.skin);
+        if (side === 0) {
+          if (umbrella) {
+            this.place(batches.sticks, matrix.multiplyMatrices(limb, this.umbrellaHandleOffset));
+            this.place(batches.umbrellas, matrix.multiplyMatrices(limb, this.umbrellaOffset));
+          } else if (this.night && walking) {
+            this.place(batches.lanterns, matrix.multiplyMatrices(limb, this.lanternOffset));
+          }
+        } else {
+          if (citizen.carryingGood || citizen.carryingParcel) this.place(batches.cargo, matrix.multiplyMatrices(limb, this.cargoOffset));
+          else if (citizen.kind === 'sweep' && !walking) this.place(batches.sticks, matrix.multiplyMatrices(limb, this.broomOffset));
+          else if (citizen.kind === 'cast' && !walking) this.place(batches.sticks, matrix.multiplyMatrices(limb, this.rodOffset));
+          else if (look.stick) this.place(batches.sticks, matrix.multiplyMatrices(limb, this.stickOffset));
+        }
+      }
+      parts.head.updateMatrix();
+      limb.multiplyMatrices(base, parts.head.matrix);
+      this.place(batches.heads, limb, look.skin);
+      this.place(batches.hair[look.hairStyle], matrix.multiplyMatrices(limb, this.hairOffset), look.hair);
+      if (look.hat === 'straw') this.place(batches.straw, matrix.multiplyMatrices(limb, this.hatOffset));
+      else if (look.hat === 'cap') this.place(batches.caps, matrix.multiplyMatrices(limb, this.capOffset));
     }
-    this.bodyInstances.forEach((batch, index) => {
-      batch.count = bodyCounts[index];
-      if (batch.count) batch.instanceMatrix.needsUpdate = true;
-    });
-    for (const [batch, count] of [[this.headInstances, heads], [this.hairInstances, hairs], [this.legInstances, legs], [this.armInstances, arms], [this.hatInstances, hats], [this.cargoInstances, cargo]] as const) {
-      batch.count = count;
-      if (count) batch.instanceMatrix.needsUpdate = true;
+    for (const batch of this.batchList) {
+      if (!batch.count) continue;
+      batch.instanceMatrix.needsUpdate = true;
+      if (batch.instanceColor) batch.instanceColor.needsUpdate = true;
     }
   }
 
@@ -1040,6 +1264,9 @@ export class CitizenSystem {
     if (!from) return;
     let target = home;
     const choice = hash(this.seed, Math.floor(absoluteHours * 4), this.citizens.indexOf(citizen), 1001);
+    citizen.kind = 'stand';
+    citizen.facePoint = null;
+    citizen.idleVariant = Math.floor(choice * IDLE_VARIANTS);
     const businessVisit = this.chooseBusinessVisit(citizen, hour, choice, from.key);
     const lanternTheatre = hour >= 18 && hour < 21.75 && choice < .84
       ? this.graph.identityNodeFor('lantern-square', (choice * 4.17 + this.citizens.indexOf(citizen) * .137) % 1, from.key, true)
@@ -1074,11 +1301,13 @@ export class CitizenSystem {
       target = home;
     } else if (hour < 4.5 || (hour < 6 && citizen.occupation !== 'Fisher') || hour >= 22) {
       citizen.activity = 'sleeping at home';
+      citizen.kind = 'sleep';
     } else if (rooftopPartyTarget && !businessVisit?.owned) {
       citizen.activity = citizen.ageGroup === 'child'
         ? 'dancing beneath the rooftop lanterns'
         : 'joining the parties across the flat rooftops';
       target = rooftopPartyTarget;
+      citizen.kind = 'dance';
     } else if (lanternPartyTarget && !businessVisit?.owned) {
       citizen.activity = citizen.ageGroup === 'child'
         ? 'dancing through the lantern light in the square'
@@ -1086,18 +1315,24 @@ export class CitizenSystem {
           ? 'sharing festival food beside the lantern theatre'
           : 'dancing with neighbors beneath the lanterns';
       target = lanternPartyTarget;
+      citizen.kind = 'dance';
     } else if (businessVisit?.owned) {
       citizen.activity = this.ownerActivity(businessVisit.business.type);
+      citizen.kind = OWNER_KINDS[businessVisit.business.type];
       target = businessVisit.target;
     } else if (citizen.ageGroup === 'child' && hour < 15) {
+      const guardian = hour < 9 ? this.householdGuardian(citizen, from.key) : null;
       const plaza = this.discoveries.has('birds-nest') ? this.graph.plazaNode(choice, from.key) : undefined;
-      citizen.activity = plaza ? 'feeding the birds in the plaza after lessons' : this.discoveries.has('birds-nest') ? 'looking up at the tower nest after lessons' : 'walking to lessons with a neighbor';
-      target = plaza ?? this.graph.randomNode(choice, from.key);
+      citizen.activity = guardian
+        ? `heading out with ${guardian.citizen.name}`
+        : plaza ? 'feeding the birds in the plaza after lessons' : this.discoveries.has('birds-nest') ? 'looking up at the tower nest after lessons' : 'walking to lessons with a neighbor';
+      target = guardian?.target ?? plaza ?? this.graph.randomNode(choice, from.key);
     } else if (rooftop) {
       citizen.activity = this.rooftopActivity(citizen, this.graph.rooftopLabel(rooftop.key));
       target = rooftop;
     } else if (citizen.ageGroup === 'elder' && hour >= 14 && hour < 18) {
       citizen.activity = 'resting by the water and greeting passersby';
+      citizen.kind = 'sit';
       target = this.graph.randomNode(choice, from.key, (node) => Math.hypot(node.position.x, node.position.z) > 3);
     } else if (hour < 9) {
       if (businessVisit) {
@@ -1106,6 +1341,7 @@ export class CitizenSystem {
       } else {
         const morningWork = this.professionRoutine(citizen, hour, choice, from.key);
         citizen.activity = morningWork?.activity ?? 'taking an early walk';
+        citizen.kind = morningWork?.kind ?? 'stand';
         target = morningWork?.target ?? this.graph.randomNode(choice, from.key, (node) => Math.hypot(node.position.x, node.position.z) > 2);
       }
     } else if (hour < 12) {
@@ -1122,6 +1358,7 @@ export class CitizenSystem {
           ? formationGatheringActivity(formationPlace.id, citizen.ageGroup, citizen.occupation)
           : `working as a ${citizen.occupation.toLowerCase()}`);
         target = work?.target ?? confluencePlace?.node ?? identityPlace?.node ?? formationPlace?.node ?? this.graph.randomNode(choice, from.key);
+        citizen.kind = work?.kind ?? 'stand';
       }
     } else if (hour < 14) {
       const plaza = choice < .34 ? this.graph.plazaNode(choice * 2.7, from.key) : undefined;
@@ -1135,6 +1372,7 @@ export class CitizenSystem {
           ? formationGatheringActivity(formationPlace.id, citizen.ageGroup, citizen.occupation)
           : plaza ? 'sitting in the plaza' : 'looking for lunch';
       target = businessVisit?.target ?? confluencePlace?.node ?? identityPlace?.node ?? formationPlace?.node ?? plaza ?? this.graph.randomNode(choice, from.key);
+      if (plaza && target === plaza) citizen.kind = 'sit';
     } else if (hour < 18) {
       if (businessVisit && choice > .55) {
         citizen.activity = this.visitorActivity(businessVisit.business.type);
@@ -1176,6 +1414,8 @@ export class CitizenSystem {
       citizen.activity = 'walking home beneath the lanterns';
     }
     if (!target) return;
+    if (citizen.kind === 'stand') citizen.kind = kindFromText(citizen.activity);
+    citizen.facePoint = this.facingFor(citizen, target);
     if (businessVisit && !businessVisit.owned && target.key === businessVisit.target.key) this.recordBusinessVisit(citizen, businessVisit.business);
     citizen.targetKey = target.key;
     citizen.path = this.graph.path(from.key, target.key);
@@ -1205,40 +1445,42 @@ export class CitizenSystem {
   private professionRoutine(citizen: Citizen, hour: number, choice: number, from: string) {
     if (citizen.occupation === 'Fisher') {
       const target = this.graph.dockNode(choice, from) ?? this.graph.randomNode(choice, from);
+      const casting = hour >= 9 && choice < .5;
       const activity = hour < 6
         ? 'carrying the nets down to the morning boat'
         : hour < 9
           ? this.discoveries.has('silver-shoal') ? 'watching the boat cast its net over the silver shoal' : 'sorting the morning catch beside the boat'
-          : 'mending nets along the quay';
-      return target ? { target, activity } : null;
+          : casting ? 'casting a line off the quay' : 'mending nets along the quay';
+      const kind: ActivityKind = hour < 6 ? 'stand' : casting ? 'cast' : hour < 9 && this.discoveries.has('silver-shoal') ? 'watch' : 'knead';
+      return target ? { target, activity, kind } : null;
     }
     if (citizen.occupation === 'Gardener') {
       const target = this.graph.rooftopNode(choice, from) ?? this.graph.plazaNode(choice, from) ?? this.graph.randomNode(choice, from);
-      return target ? { target, activity: this.graph.rooftopLabel(target.key) ? 'watering the rooftop planters' : 'tending the public flowers' } : null;
+      return target ? { target, activity: this.graph.rooftopLabel(target.key) ? 'watering the rooftop planters' : 'tending the public flowers', kind: 'knead' as ActivityKind } : null;
     }
     if (citizen.occupation === 'Teacher') {
       const target = this.graph.plazaNode(choice, from) ?? this.graph.randomNode(choice, from);
-      return target ? { target, activity: hour < 9 ? 'walking to lessons with the children' : 'holding a small lesson in the open air' } : null;
+      return target ? { target, activity: hour < 9 ? 'walking to lessons with the children' : 'holding a small lesson in the open air', kind: 'chat' as ActivityKind } : null;
     }
     if (citizen.occupation === 'Cartographer') {
       const target = this.graph.rooftopNode(choice, from) ?? this.graph.dockNode(choice, from) ?? this.graph.randomNode(choice, from);
-      return target ? { target, activity: this.graph.rooftopLabel(target.key) ? 'sketching the harbor from above' : 'measuring the tide against the quay' } : null;
+      return target ? { target, activity: this.graph.rooftopLabel(target.key) ? 'sketching the harbor from above' : 'measuring the tide against the quay', kind: 'watch' as ActivityKind } : null;
     }
     if (citizen.occupation === 'Bookbinder') {
       const bookstore = this.businesses.find((business) => business.type === 'bookstore');
       const entrance = bookstore ? this.graph.entrance(bookstore.cellKey) : undefined;
       const target = entrance && this.graph.canReach(from, entrance.key) ? entrance : this.graph.randomNode(choice, from);
-      return target ? { target, activity: bookstore ? 'delivering a newly bound book' : 'carrying a parcel of stitched pages' } : null;
+      return target ? { target, activity: bookstore ? 'delivering a newly bound book' : 'carrying a parcel of stitched pages', kind: 'stand' as ActivityKind } : null;
     }
     if (citizen.occupation === 'Caretaker') {
       const target = this.graph.randomNode(choice, from);
-      return target ? { target, activity: hour < 9 ? 'opening shutters along the lane' : 'checking the lamps and doorways' } : null;
+      return target ? { target, activity: hour < 9 ? 'opening shutters along the lane' : 'checking the lamps and doorways', kind: 'watch' as ActivityKind } : null;
     }
     if (citizen.occupation === 'Cook') {
       const market = this.businesses.find((business) => business.type === 'fishmonger' || business.type === 'flower-shop');
       const entrance = market ? this.graph.entrance(market.cellKey) : undefined;
       const target = entrance && this.graph.canReach(from, entrance.key) ? entrance : this.graph.randomNode(choice, from);
-      return target ? { target, activity: market ? 'choosing ingredients for the midday kitchen' : 'bringing a basket back to the kitchen' } : null;
+      return target ? { target, activity: market ? 'choosing ingredients for the midday kitchen' : 'bringing a basket back to the kitchen', kind: 'stand' as ActivityKind } : null;
     }
     return null;
   }
@@ -1354,83 +1596,218 @@ export class CitizenSystem {
     }[type] ?? `visiting the ${businessLabel(type)}`;
   }
 
-  private walk(citizen: Citizen, deltaSeconds: number, realTime: number) {
+  private speedFactor(citizen: Citizen) {
+    const age = citizen.ageGroup === 'child' ? 1.15 : citizen.ageGroup === 'elder' ? .72 : 1;
+    return age * (this.rainIntensity > .25 ? 1.25 : 1);
+  }
+
+  private walk(citizen: Citizen, deltaSeconds: number) {
     const target = citizen.path[0];
-    const left = citizen.leftLeg;
-    const right = citizen.rightLeg;
-    const partying = /dancing|festival|procession|all the lanterns/i.test(citizen.activity);
-    const poseParty = (walking: boolean) => {
-      const beat = realTime * (walking ? 5.2 : 4.2) + citizen.stepPhase;
-      const bounce = Math.max(0, Math.sin(beat)) * (walking ? .025 : .065);
-      citizen.body.position.y = .285 + bounce;
-      citizen.head.position.y = .5 + bounce;
-      citizen.hair.position.y = .515 + bounce;
-      if (citizen.hat) citizen.hat.position.y = .61 + bounce;
-      citizen.body.rotation.z = Math.sin(beat * .5) * .13;
-      citizen.leftArm.rotation.z = .92 + Math.sin(beat) * .38;
-      citizen.rightArm.rotation.z = -.92 - Math.cos(beat) * .38;
-      citizen.leftArm.rotation.x = Math.sin(beat * .5) * .35;
-      citizen.rightArm.rotation.x = -Math.cos(beat * .5) * .35;
-    };
-    const resetPose = () => {
-      citizen.body.position.y = .285;
-      citizen.head.position.y = .5;
-      citizen.hair.position.y = .515;
-      if (citizen.hat) citizen.hat.position.y = .61;
-      citizen.body.rotation.z = 0;
-      citizen.leftArm.rotation.set(0, 0, .08);
-      citizen.rightArm.rotation.set(0, 0, -.08);
-    };
-    if (!target) {
-      citizen.model.rotation.z = partying
-        ? Math.sin(realTime * 2.1 + citizen.stepPhase) * .055
-        : Math.sin(realTime * 1.4 + citizen.stepPhase) * .006;
-      if (left && right) left.rotation.x = right.rotation.x = 0;
-      if (partying) poseParty(false);
-      else resetPose();
-      return;
-    }
-    if (partying) poseParty(true);
-    else resetPose();
+    if (!target) return;
     const direction = this.walkDirection.copy(target).sub(citizen.model.position);
+    const perpendicular = this.laneOffset.set(direction.z, 0, -direction.x);
+    if (perpendicular.lengthSq() > 1e-6) direction.addScaledVector(perpendicular.normalize(), citizen.lane);
     const distance = direction.length();
-    const step = Math.min(distance, deltaSeconds * .58);
+    const factor = this.speedFactor(citizen);
+    const step = Math.min(distance, deltaSeconds * WALK_SPEED * factor);
     if (distance > .001) {
       direction.normalize();
       citizen.model.position.addScaledVector(direction, step);
-      citizen.model.rotation.y = Math.atan2(direction.x, direction.z);
+      this.turnToward(citizen, Math.atan2(direction.x, direction.z), deltaSeconds * 9);
     }
-    citizen.stepPhase += deltaSeconds * 8;
-    citizen.model.rotation.z = Math.sin(citizen.stepPhase) * .025;
-    if (left && right) {
-      left.rotation.x = Math.sin(citizen.stepPhase) * .5;
-      right.rotation.x = -Math.sin(citizen.stepPhase) * .5;
+    citizen.stepPhase += deltaSeconds * STRIDE_RATE * factor;
+    const arrivalRadius = citizen.path.length > 1 ? .16 : .06;
+    if (distance >= arrivalRadius) return;
+    if (citizen.path.length === 1) {
+      const aside = this.standingRoom(citizen, target, perpendicular);
+      citizen.model.position.set(target.x + perpendicular.x * aside, target.y, target.z + perpendicular.z * aside);
     }
-    if (distance < .055) {
-      citizen.model.position.x = target.x;
-      citizen.model.position.y = target.y;
-      citizen.model.position.z = target.z;
-      citizen.path.shift();
-      if (!citizen.path.length && citizen.carryingGood) {
-        citizen.activity = `delivered the ${citizen.carryingGood.replace('-', ' ')}`;
-        citizen.carryingGood = null;
+    citizen.path.shift();
+    if (citizen.path.length) return;
+    citizen.loiterHome = citizen.model.position.clone();
+    if (citizen.carryingGood) {
+      citizen.activity = `delivered the ${citizen.carryingGood.replace('-', ' ')}`;
+      citizen.carryingGood = null;
+      citizen.nextDecisionAt = Math.max(citizen.nextDecisionAt, this.currentHours + .12);
+    } else if (citizen.pendingParcelBusinessId) {
+      const shop = this.businesses.find((business) => business.id === citizen.pendingParcelBusinessId);
+      const shopEntrance = shop ? this.graph.entrance(shop.cellKey) : undefined;
+      const homeEntrance = this.graph.entrance(citizen.homeKey);
+      if (!citizen.carryingParcel && shopEntrance?.key === citizen.targetKey) {
+        citizen.carryingParcel = true;
+        citizen.activity = `collecting a parcel from ${shop?.name ?? 'the shop'}`;
+        citizen.nextDecisionAt = Math.min(citizen.nextDecisionAt, this.currentHours + .08);
+      } else if (citizen.carryingParcel && homeEntrance?.key === citizen.targetKey) {
+        citizen.carryingParcel = false;
+        citizen.pendingParcelBusinessId = null;
+        citizen.activity = 'putting away a parcel from the shops';
         citizen.nextDecisionAt = Math.max(citizen.nextDecisionAt, this.currentHours + .12);
-      } else if (!citizen.path.length && citizen.pendingParcelBusinessId) {
-        const shop = this.businesses.find((business) => business.id === citizen.pendingParcelBusinessId);
-        const shopEntrance = shop ? this.graph.entrance(shop.cellKey) : undefined;
-        const homeEntrance = this.graph.entrance(citizen.homeKey);
-        if (!citizen.carryingParcel && shopEntrance?.key === citizen.targetKey) {
-          citizen.carryingParcel = true;
-          citizen.activity = `collecting a parcel from ${shop?.name ?? 'the shop'}`;
-          citizen.nextDecisionAt = Math.min(citizen.nextDecisionAt, this.currentHours + .08);
-        } else if (citizen.carryingParcel && homeEntrance?.key === citizen.targetKey) {
-          citizen.carryingParcel = false;
-          citizen.pendingParcelBusinessId = null;
-          citizen.activity = 'putting away a parcel from the shops';
-          citizen.nextDecisionAt = Math.max(citizen.nextDecisionAt, this.currentHours + .12);
-        }
       }
     }
+  }
+
+  /** Two people who arrive at one doorstep stand shoulder to shoulder instead of inside each other. */
+  private standingRoom(citizen: Citizen, target: THREE.Vector3, perpendicular: THREE.Vector3) {
+    const spot = this.laneTarget;
+    for (const aside of [citizen.lane, citizen.lane + .17, citizen.lane - .17, citizen.lane + .34]) {
+      spot.set(target.x + perpendicular.x * aside, target.y, target.z + perpendicular.z * aside);
+      const taken = this.citizens.some((other) => other !== citizen && !other.path.length && !this.indoors(other) && other.model.position.distanceToSquared(spot) < .14 * .14);
+      if (!taken) return aside;
+    }
+    return citizen.lane;
+  }
+
+  private turnToward(citizen: Citizen, heading: number, amount: number) {
+    let difference = heading - citizen.heading;
+    difference = Math.atan2(Math.sin(difference), Math.cos(difference));
+    citizen.heading += difference * Math.min(1, amount);
+    citizen.model.rotation.y = citizen.heading;
+  }
+
+  /** A short step to a neighbouring spot and back, so nobody stands frozen through a long wait. */
+  private loiter(citizen: Citizen, realTime: number) {
+    if (realTime < citizen.loiterAt) return;
+    const restless = citizen.kind === 'stand' || citizen.kind === 'watch';
+    citizen.loiterAt = realTime + 9 + hash(this.seed, Math.floor(realTime), citizenIndex(citizen.id), 917) * 14;
+    if (!restless || !citizen.loiterHome) return;
+    const here = this.graph.closest(citizen.model.position);
+    if (!here) return;
+    const away = citizen.model.position.distanceToSquared(citizen.loiterHome) > .04;
+    if (away) {
+      citizen.path = [citizen.loiterHome.clone()];
+      return;
+    }
+    const links = [...here.links].map((key) => this.graph.nodes.get(key)).filter((node): node is NavNode => Boolean(node));
+    const next = links[Math.floor(hash(this.seed, Math.floor(realTime), citizenIndex(citizen.id), 918) * links.length)];
+    if (!next || Math.abs(next.position.y - here.position.y) > .01) return;
+    citizen.path = [this.walkDirection.copy(next.position).sub(here.position).multiplyScalar(.5).add(here.position).clone()];
+  }
+
+  private animate(citizen: Citizen, deltaSeconds: number, realTime: number) {
+    const walking = citizen.path.length > 0;
+    const kind = citizen.kind;
+    const dancing = kind === 'dance';
+    const beat = realTime * 4.6 + citizen.stepPhase * .1;
+    const time = realTime + citizenIndex(citizen.id) * 1.7;
+    const target = this.poseTarget;
+    Object.assign(target, REST_POSE);
+    if (citizen.ageGroup === 'elder') target.lean = .1;
+    if (!walking) {
+      switch (kind) {
+        case 'stand':
+        case 'watch':
+          if (citizen.idleVariant === 0) target.roll = Math.sin(time * 1.1) * .02;
+          else if (citizen.idleVariant === 1 || kind === 'watch') target.headYaw = Math.sin(time * .6) * .5 + Math.sin(time * .23) * .3;
+          else target.roll = Math.sin(time * .35) > 0 ? .03 : -.03;
+          break;
+        case 'sit':
+          target.crouch = .16;
+          target.legL = target.legR = -Math.PI / 2 + .1;
+          target.armLX = target.armRX = -.55;
+          target.lean = .12;
+          target.headYaw = Math.sin(time * .4) * .25;
+          break;
+        case 'chat':
+          target.headPitch = Math.sin(time * 3.1) * .05;
+          if (citizen.chatLead) target.armRX = -.45 + Math.sin(time * 2.3) * .25;
+          target.roll = Math.sin(time * .9) * .015;
+          break;
+        case 'wave':
+          target.armRZ = 2.5 + Math.sin(time * 6) * .25;
+          target.armRX = -.2;
+          break;
+        case 'sweep':
+          target.armLX = target.armRX = -.95;
+          target.lean = .18;
+          target.twist = Math.sin(time * 2.4) * .4;
+          break;
+        case 'knead':
+          target.armLX = target.armRX = -1.05 + Math.sin(time * 3.4) * .12;
+          target.lean = .2;
+          target.bob = -Math.abs(Math.sin(time * 3.4)) * .012;
+          break;
+        case 'hammer':
+          target.armLX = -.9;
+          target.armRX = -.5 - Math.abs(Math.sin(time * 4.2)) * .95;
+          target.lean = .12;
+          break;
+        case 'cast':
+          target.armRX = -1.35 + Math.sin(time * 1.1) * .2;
+          target.armLX = -.7;
+          target.lean = .05;
+          break;
+        default:
+          break;
+      }
+    }
+    if (citizen.carryingGood || citizen.carryingParcel) {
+      target.armRX = -.75;
+      target.armRZ = .3;
+    }
+    if (this.rainIntensity > .25) {
+      target.armLX = -1.5;
+      target.armLZ = -.25;
+    } else if (this.night && walking) {
+      target.armLX = -.55;
+    }
+    if (citizen.look.stick && !walking && kind !== 'sit') target.armRX = -.35;
+    const damping = 1 - Math.exp(-deltaSeconds * 10);
+    const pose = citizen.pose;
+    for (const key of POSE_KEYS) pose[key] += (target[key] - pose[key]) * damping;
+    citizen.walkWeight += ((walking ? 1 : 0) - citizen.walkWeight) * Math.min(1, deltaSeconds * 8);
+    citizen.danceWeight += ((dancing ? 1 : 0) - citizen.danceWeight) * Math.min(1, deltaSeconds * 4);
+
+    const walk = citizen.walkWeight;
+    const dance = citizen.danceWeight;
+    const child = citizen.ageGroup === 'child';
+    const swing = Math.sin(citizen.stepPhase) * .55 * walk;
+    const stickHand = citizen.look.stick ? 0 : 1;
+    const bounce = Math.max(0, Math.sin(beat)) * (walking ? .025 : .065) * dance;
+    const bob = pose.bob + Math.abs(Math.sin(citizen.stepPhase)) * (child ? .02 : .01) * walk + bounce - pose.crouch;
+    const { parts, model } = citizen;
+    const at = FIGURE_OFFSETS;
+    parts.legs[0].rotation.x = pose.legL + swing;
+    parts.legs[1].rotation.x = pose.legR - swing;
+    parts.tunic.position.y = at.tunic + bob;
+    parts.tunic.rotation.set(pose.lean + walk * .05, pose.twist, pose.roll + Math.sin(beat * .5) * .13 * dance);
+    parts.head.position.set(0, at.head + bob, Math.sin(pose.lean) * .18);
+    parts.head.rotation.set(pose.headPitch - pose.lean * .4, pose.headYaw, 0);
+    parts.arms[0].position.y = at.shoulderY + bob;
+    parts.arms[1].position.y = at.shoulderY + bob;
+    parts.arms[0].rotation.set(pose.armLX - swing * .6 + Math.sin(beat * .5) * .35 * dance, 0, pose.armLZ - (.92 + Math.sin(beat) * .38) * dance);
+    parts.arms[1].rotation.set(pose.armRX + swing * .6 * stickHand - Math.cos(beat * .5) * .35 * dance, 0, pose.armRZ + (.92 + Math.cos(beat) * .38) * dance);
+    model.rotation.z = Math.sin(citizen.stepPhase) * .025 * walk + Math.sin(realTime * 2.1 + citizen.stepPhase) * .055 * dance;
+    if (!walking && citizen.facePoint) {
+      const toFace = this.walkDirection.copy(citizen.facePoint).sub(model.position);
+      if (toFace.lengthSq() > .0004) this.turnToward(citizen, Math.atan2(toFace.x, toFace.z), deltaSeconds * 4);
+    }
+  }
+
+  /** In the morning a child tags along with a household adult who is already on the way somewhere. */
+  private householdGuardian(child: Citizen, from: string) {
+    const guardian = this.citizens.find((other) => other !== child && other.householdId === child.householdId && other.ageGroup !== 'child' && other.path.length > 0 && other.targetKey);
+    const target = guardian?.targetKey ? this.graph.nodes.get(guardian.targetKey) : undefined;
+    if (!guardian || !target || !this.graph.canReach(from, target.key)) return null;
+    return { citizen: guardian, target };
+  }
+
+  /** Doorstep visitors face the door; people who sit down face the open water. */
+  private facingFor(citizen: Citizen, target: NavNode) {
+    const cellKey = this.graph.entranceCells.get(target.key);
+    if (cellKey) {
+      const cell = parseCellKey(cellKey);
+      return new THREE.Vector3(cell.x * CELL, target.position.y, cell.z * CELL);
+    }
+    if (citizen.kind === 'sit' || citizen.kind === 'watch') return target.position.clone().multiplyScalar(2);
+    return null;
+  }
+
+  private faceEachOther(first: Citizen, second: Citizen) {
+    first.kind = second.kind = 'chat';
+    first.facePoint = second.model.position;
+    second.facePoint = first.model.position;
+    first.chatLead = true;
+    second.chatLead = false;
   }
 
   beginDelivery(fromCellKey: string, toCellKey: string, good: CraftGood) {
@@ -1483,6 +1860,7 @@ export class CitizenSystem {
             second.relationships.push(first.id);
             first.activity = `chatting with ${second.name}`;
             second.activity = `chatting with ${first.name}`;
+            this.faceEachOther(first, second);
             this.nextSharedMoment.set(key, absoluteHours + .5);
           } else if (first.relationships.includes(second.id) && absoluteHours >= (this.nextSharedMoment.get(key) ?? 0)) {
             const activity = hour < 10 ? 'sharing breakfast with' : hour < 17 ? 'trading harbor news with' : hour < 21 ? 'sharing the evening with' : 'walking home beside';
@@ -1490,6 +1868,7 @@ export class CitizenSystem {
             second.activity = `${activity} ${first.name}`;
             first.path = [];
             second.path = [];
+            this.faceEachOther(first, second);
             first.nextDecisionAt = absoluteHours + .14;
             second.nextDecisionAt = absoluteHours + .14;
             this.nextSharedMoment.set(key, absoluteHours + 1.25);
@@ -1515,6 +1894,7 @@ export class CitizenSystem {
     const renderedCount = Math.min(this.citizens.length, MAX_RENDERED_CITIZENS);
     for (let index = 0; index < renderedCount; index++) {
       const citizen = this.citizens[index];
+      if (this.indoors(citizen)) continue;
       const scale = citizen.model.scale.x;
       this.pickCenter.copy(citizen.model.position);
       this.pickCenter.y += .3 * scale;
@@ -1531,6 +1911,7 @@ export class CitizenSystem {
   noticeDiscovery(activity: string) {
     for (const citizen of this.citizens.slice(0, 3)) {
       citizen.activity = activity;
+      citizen.kind = kindFromText(activity);
       citizen.path = [];
       citizen.nextDecisionAt = this.currentHours + .12;
     }
@@ -1547,6 +1928,7 @@ export class CitizenSystem {
     );
     for (const citizen of participants.slice(0, 5)) {
       citizen.activity = activity;
+      citizen.kind = kindFromText(activity);
       citizen.nextDecisionAt = Math.max(citizen.nextDecisionAt, this.currentHours + .4);
     }
     return participants.length;
@@ -1575,16 +1957,7 @@ export class CitizenSystem {
     if (!citizen) return null;
     citizen.occupation = occupation;
     citizen.activity = `preparing to work as a ${occupation.toLowerCase()}`;
-    if ((occupation === 'Fisher' || occupation === 'Gardener') && !citizen.model.getObjectByName('occupation-hat')) {
-      const hat = new THREE.Mesh(this.hatGeometry, this.hatMaterial);
-      hat.name = 'occupation-hat';
-      hat.position.y = .61;
-      hat.userData.citizenId = citizen.id;
-      hat.visible = false;
-      citizen.model.add(hat);
-      citizen.model.userData.hat = hat;
-      citizen.hat = hat;
-    }
+    citizen.look = deriveLook(citizen, this.seed);
     return citizen.id;
   }
 
@@ -1608,7 +1981,7 @@ export class CitizenSystem {
       occupation,
       traits: ['adventurous', 'curious'],
       relationships: [],
-      color: Math.floor(hash(this.seed, index, 0, 1480) * CLOTHES.length),
+      color: Math.floor(hash(this.seed, index, 0, 1480) * TUNICS.length),
       ageGroup: 'adult',
       householdId: `visitor-${index}`,
       businessVisits: {},
@@ -1629,6 +2002,8 @@ export class CitizenSystem {
       citizen.path = this.graph.path(from.key, target.key);
       citizen.targetKey = target.key;
       citizen.activity = activity;
+      citizen.kind = kindFromText(activity);
+      citizen.facePoint = center.position;
       citizen.nextDecisionAt = this.currentHours + 1.2;
     });
   }

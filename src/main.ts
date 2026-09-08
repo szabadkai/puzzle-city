@@ -3263,10 +3263,10 @@ declare global {
   interface Window {
     __perf?: PerformanceReport;
     /** Debug handle for the capture test and manual tuning. */
-    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; scene: THREE.Scene; renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; uniforms: typeof presentationUniforms; setTimeOfDay(hour: number): void; lastClipStats?: { frames: number; seconds: number } };
+    __littleTides?: { hemi: THREE.HemisphereLight; atmosphere: typeof atmosphere; palette: PaletteSystem; citizens: CitizenSystem; scene: THREE.Scene; renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; uniforms: typeof presentationUniforms; setTimeOfDay(hour: number): void; lastClipStats?: { frames: number; seconds: number } };
   }
 }
-window.__littleTides = { hemi, atmosphere, palette, scene, renderer, camera, uniforms: presentationUniforms, setTimeOfDay(hour: number) { timeOfDay = hour; } };
+window.__littleTides = { hemi, atmosphere, palette, citizens, scene, renderer, camera, uniforms: presentationUniforms, setTimeOfDay(hour: number) { timeOfDay = hour; } };
 
 function publishPerformanceReport() {
   const info = renderer.info.render;
@@ -3462,6 +3462,7 @@ function animate() {
   updateLanternLights(atmosphere.night, palette.color(PALETTE_SLOT.trim));
   wakes.update();
   city.setWeather(shownRain);
+  citizens.setWeather(shownRain);
   city.update(time, absoluteHours);
   city.setDaylight(daylight);
   if (profileFrame) {

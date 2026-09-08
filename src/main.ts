@@ -873,7 +873,7 @@ function build(x: number, z: number) {
   severeOverloadSeconds = 0;
   renderer.shadowMap.needsUpdate = true;
   ignoreNextPerformanceSample = true;
-  popSound();
+  popSound(city.get(x, z)?.height ?? 1);
   persistSoon();
   evaluateDiscoveries();
 }
@@ -896,7 +896,7 @@ function demolish(x: number, z: number) {
   renderer.shadowMap.needsUpdate = true;
   ignoreNextPerformanceSample = true;
   hideCitizenCard();
-  softTone(190, .07);
+  softTone(120 * (1 + (Math.random() * 2 - 1) * .03), .09, 0, .035, 'triangle');
   persistSoon();
   evaluateDiscoveries();
 }
@@ -2339,17 +2339,20 @@ function captureAudioStream() {
   return audioCaptureDestination.stream;
 }
 
-function softTone(frequency: number, duration: number, delay = 0, volume = .055, wave: OscillatorType = 'sine') {
+function softTone(frequency: number, duration: number, delay = 0, volume = .055, wave: OscillatorType = 'sine', pan = 0) {
   const context = getAudio();
   const oscillator = context.createOscillator();
   const gain = context.createGain();
+  const panner = pan !== 0 && typeof StereoPannerNode === 'function' ? new StereoPannerNode(context, { pan: THREE.MathUtils.clamp(pan, -1, 1) }) : null;
   oscillator.type = wave;
   oscillator.frequency.setValueAtTime(frequency, context.currentTime + delay);
   oscillator.frequency.exponentialRampToValueAtTime(frequency * 1.18, context.currentTime + delay + duration);
   gain.gain.setValueAtTime(.0001, context.currentTime + delay);
   gain.gain.exponentialRampToValueAtTime(volume, context.currentTime + delay + .012);
   gain.gain.exponentialRampToValueAtTime(.0001, context.currentTime + delay + duration);
-  oscillator.connect(gain).connect(masterGain ?? context.destination);
+  const output: AudioNode = masterGain ?? context.destination;
+  if (panner) oscillator.connect(gain).connect(panner).connect(output);
+  else oscillator.connect(gain).connect(output);
   oscillator.start(context.currentTime + delay);
   oscillator.stop(context.currentTime + delay + duration + .02);
 }
@@ -2373,7 +2376,15 @@ type SoundCue = 'water' | 'gulls' | 'footsteps' | 'door' | 'chatter' | 'bell' | 
 
 function playCue(cue: SoundCue, daylight = 1) {
   if (audioContext && audioContext.state !== 'running') return;
-  if (cue === 'water') softTone(105 + daylight * 38, .7, 0, .009, 'sine');
+  if (cue === 'water') {
+    // The lap fades as the camera climbs and sits toward the side the harbor lies on.
+    const height = Math.max(0, camera.position.y);
+    const attenuation = THREE.MathUtils.clamp(1.15 - height / 40, .15, 1);
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const toTown = new THREE.Vector3(-camera.position.x, 0, -camera.position.z);
+    const pan = toTown.lengthSq() > 1 ? THREE.MathUtils.clamp(toTown.normalize().dot(right), -.6, .6) : 0;
+    softTone(105 + daylight * 38, .7, 0, .011 * attenuation, 'sine', pan);
+  }
   if (cue === 'gulls') { softTone(1120, .11, .12, .009, 'triangle'); softTone(870, .14, .25, .007, 'triangle'); }
   if (cue === 'footsteps') { softTone(155, .035, 0, .006, 'square'); softTone(145, .035, .16, .005, 'square'); }
   if (cue === 'door') softTone(220, .09, 0, .018, 'triangle');
@@ -2394,17 +2405,32 @@ function playCue(cue: SoundCue, daylight = 1) {
   }
 }
 
-function popSound() {
-  softTone(260, .11);
-  softTone(430, .13, .045);
+/** A soft wooden plop and a chime that rises with the building's height, slightly detuned each time. */
+function popSound(height = 1) {
+  const detune = 1 + (Math.random() * 2 - 1) * .03;
+  softTone(150 * detune, .09, 0, .05, 'triangle');
+  softTone(392 * Math.pow(2, (height - 1) * 3 / 12) * detune, .16, .04, .045, 'sine');
+  softTone(588 * Math.pow(2, (height - 1) * 3 / 12) * detune, .14, .09, .025, 'sine');
 }
+
+let audioLocked = true;
 
 function updateMusicButton() {
   const button = document.querySelector<HTMLButtonElement>('#music-toggle')!;
   button.classList.toggle('muted', musicMuted);
   button.setAttribute('aria-pressed', String(!musicMuted));
   button.setAttribute('aria-label', musicMuted ? 'Turn music on' : 'Turn music off');
-  button.querySelector('.music-state')!.textContent = musicMuted ? '♩' : '♫';
+  // Browsers keep audio silent until the first gesture. Show that state honestly.
+  button.querySelector('.music-state')!.textContent = audioLocked ? '🔇' : musicMuted ? '♩' : '♫';
+  button.title = audioLocked ? 'Sound starts after your first tap or key press' : '';
+}
+
+function unlockAudio() {
+  void startBackgroundMusic();
+  void getAudio().resume().then(() => {
+    audioLocked = false;
+    updateMusicButton();
+  });
 }
 
 async function startBackgroundMusic() {
@@ -2425,14 +2451,8 @@ function toggleBackgroundMusic() {
 }
 
 updateMusicButton();
-window.addEventListener('pointerdown', () => {
-  void startBackgroundMusic();
-  void getAudio().resume();
-}, { capture: true, once: true });
-window.addEventListener('keydown', () => {
-  void startBackgroundMusic();
-  void getAudio().resume();
-}, { capture: true, once: true });
+window.addEventListener('pointerdown', unlockAudio, { capture: true, once: true });
+window.addEventListener('keydown', unlockAudio, { capture: true, once: true });
 
 function centerView() {
   controls.target.set(0, 1.3, 0);
@@ -3525,6 +3545,11 @@ function animate() {
     recoverySeconds = 0;
   }
   director.update(rawDelta);
+  // Cinematic depth of field belongs to the drifting camera; play stays sharp.
+  if (!photo.active && pipeline!.depthOfFieldAvailable) {
+    const wanted = director.drifting ? 'cinematic' : 'off';
+    if (pipeline!.depthOfFieldMode !== wanted) pipeline!.setDepthOfField(wanted);
+  }
   controls.update();
   camera.updateMatrixWorld();
   renderer.info.reset();

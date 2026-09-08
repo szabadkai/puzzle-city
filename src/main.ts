@@ -56,6 +56,7 @@ import { PostPipeline } from './postfx';
 import { CameraDirector } from './camera-director';
 import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER, WaterSurface } from './water-surface';
 import { WakeSystem } from './wakes';
+import { RainSystem } from './rain';
 import { CLIP_FPS, ClipRecorder, composeStill, deliverFile, ForwardRecorder, requestWakeLock, webCodecsAvailable, type ClipResult } from './capture';
 import { encodeShareCode, SHARE_CODE_COMFORTABLE_BYTES, shareUrl } from './share-code';
 import type { DepthOfFieldPreset } from './postfx';
@@ -504,6 +505,9 @@ const water = new WaterSurface(quality);
 scene.add(water.mesh);
 const wakes = new WakeSystem(6, quality.particleScale);
 scene.add(wakes.mesh);
+const rain = new RainSystem(Math.round(3000 * quality.particleScale));
+scene.add(rain.mesh);
+const cameraForward = new THREE.Vector3();
 skyDome.mesh.layers.enable(REFLECTION_LAYER);
 skyDome.mesh.layers.enable(EMISSIVE_REFLECTION_LAYER);
 
@@ -2734,6 +2738,7 @@ window.addEventListener('keydown', (event) => {
 
 const ambience = new HarborAmbience(seed, camera, city.cells.values());
 ambience.hideSunDisc();
+ambience.hideLegacyRain();
 ambience.attachWakes(wakes);
 ambience.setDiscoveryState(grow.discoveredIds());
 ambience.setPlaceIdentities(placeIdentityOccurrences);
@@ -3290,7 +3295,12 @@ function updateAtmosphere(time: number, deltaSeconds: number) {
     light.intensity = sunUp ? atmosphere.sunIntensity : 0;
     light.shadow.bias = shadowSettings.bias;
     light.shadow.normalBias = shadowSettings.normalBias;
+    light.shadow.intensity = atmosphere.shadowIntensity;
   }
+  presentationUniforms.uWetness.value = atmosphere.wetness;
+  pipeline!.setSaturation(atmosphere.saturation);
+  camera.getWorldDirection(cameraForward);
+  rain.update(time, atmosphere.wetness, presentationUniforms.uWind.value, camera.position, cameraForward);
   csm.update();
   presentationUniforms.cameraNear.value = camera.near;
   presentationUniforms.shadowFar.value = Math.min(camera.far, csm.maxFar);

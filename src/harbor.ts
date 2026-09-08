@@ -286,6 +286,7 @@ export class HarborAmbience {
   private readonly rain: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly importYard: THREE.Group;
   private wakes: { trail(id: string, position: THREE.Vector3, deltaSeconds: number): void; release(id: string): void } | null = null;
+  private legacyRainHidden = false;
   private readonly cloudMaterial = new THREE.MeshStandardMaterial({ color: 0xffe2bc, transparent: true, opacity: .42, roughness: 1, depthWrite: false });
   private readonly starMaterial = new THREE.PointsMaterial({ color: 0xffe4a3, size: .13, transparent: true, opacity: 0, depthWrite: false });
   private readonly sunDisc: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
@@ -375,6 +376,12 @@ export class HarborAmbience {
   /** The sky dome draws the sun now. */
   hideSunDisc() {
     this.sunDisc.visible = false;
+  }
+
+  /** The instanced rain system replaces the old rain points. */
+  hideLegacyRain() {
+    this.legacyRainHidden = true;
+    this.rain.visible = false;
   }
 
   /** Moving boats report their positions to the wake system every frame. */
@@ -698,6 +705,7 @@ export class HarborAmbience {
   }
 
   private updateRain(time: number, intensity: number) {
+    if (this.legacyRainHidden) return;
     this.rain.visible = intensity > .025;
     this.rain.material.opacity = intensity * .62;
     if (!this.rain.visible) return;

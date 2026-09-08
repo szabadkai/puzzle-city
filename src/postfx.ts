@@ -32,19 +32,25 @@ class ExposureEffect extends Effect {
   set exposure(value: number) { this.uniforms.get('exposure')!.value = value; }
 }
 
-/** Lifts blacks after tone mapping so shadows never reach pure black. */
+/** Lifts blacks after tone mapping so shadows never reach pure black, and grades saturation. */
 class LiftEffect extends Effect {
   constructor() {
     super('LiftEffect', /* glsl */`
       uniform float lift;
       uniform vec3 liftTint;
+      uniform float saturation;
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
         vec3 lifted = liftTint * lift + inputColor.rgb * (1.0 - lift);
-        outputColor = vec4(lifted, inputColor.a);
+        float luma = dot(lifted, vec3(0.2126, 0.7152, 0.0722));
+        outputColor = vec4(mix(vec3(luma), lifted, saturation), inputColor.a);
       }
     `, {
       blendFunction: BlendFunction.SET,
-      uniforms: new Map<string, THREE.Uniform>([['lift', new THREE.Uniform(.035)], ['liftTint', new THREE.Uniform(new THREE.Color(.5, .45, .6))]]),
+      uniforms: new Map<string, THREE.Uniform>([
+        ['lift', new THREE.Uniform(.035)],
+        ['liftTint', new THREE.Uniform(new THREE.Color(.5, .45, .6))],
+        ['saturation', new THREE.Uniform(1)],
+      ]),
     });
   }
 
@@ -52,6 +58,8 @@ class LiftEffect extends Effect {
     this.uniforms.get('lift')!.value = amount;
     (this.uniforms.get('liftTint')!.value as THREE.Color).copy(tint);
   }
+
+  set saturation(value: number) { this.uniforms.get('saturation')!.value = value; }
 }
 
 /**
@@ -155,6 +163,10 @@ export class PostPipeline {
 
   setLift(amount: number, tint: THREE.Color) {
     this.lift.setLift(amount, tint);
+  }
+
+  setSaturation(value: number) {
+    this.lift.saturation = value;
   }
 
   setAmbientOcclusionColor(color: THREE.Color) {

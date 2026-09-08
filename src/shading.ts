@@ -23,6 +23,8 @@ export const presentationUniforms = {
   uSimHours: { value: 0 },
   /** Fraction of homes that have switched their windows on, 0 by day and 1 at night. */
   uLightsOn: { value: 0 },
+  /** 0 dry, 1 soaked. Upward faces darken and turn glossy. */
+  uWetness: { value: 0 },
 };
 
 /** Hours a planted tree takes to reach full size. Mirrors `TREE_MATURE_HOURS`. */
@@ -160,7 +162,19 @@ uniform float uFogHeightFalloff;
 uniform float uFogDesaturate;
 uniform float uTime;
 uniform float uLightsOn;
+uniform float uWetness;
 varying float vLtLightOffset;
+`;
+
+// Rain settles on roofs, quays, and decks: darker albedo, lower roughness.
+const WET_SURFACES = /* glsl */`
+#include <normal_fragment_maps>
+{
+  float ltUp = clamp( dot( normal, normalize( viewMatrix[ 1 ].xyz ) ), 0.0, 1.0 );
+  float ltWet = uWetness * ltUp;
+  roughnessFactor *= 1.0 - ltWet * 0.55;
+  diffuseColor.rgb *= 1.0 - ltWet * 0.28;
+}
 `;
 
 const WINDOW_STAGGER = /* glsl */`
@@ -206,6 +220,7 @@ function injectPresentation(this: THREE.Material, shader: Shader) {
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <fog_pars_fragment>', FOG_PARS_FRAGMENT)
     .replace('#include <fog_fragment>', FOG_FRAGMENT);
+  shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', WET_SURFACES);
   if (this.userData.windowStagger) shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', WINDOW_STAGGER);
   const flicker = this.userData.flicker as number | undefined;
   if (flicker) {

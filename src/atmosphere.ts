@@ -26,6 +26,10 @@ export type AtmosphereState = {
   /** 0 in full day, 1 in full night. */
   night: number;
   wetness: number;
+  /** 0 clear, 1 fully overcast: shadows fade and colours calm down. */
+  overcast: number;
+  shadowIntensity: number;
+  saturation: number;
 };
 
 type Keyframe = Readonly<{ hour: number; kelvin: number; sun: number; exposure: number; ambient: number; fog: number; night: number }>;
@@ -98,6 +102,9 @@ export function createAtmosphereState(): AtmosphereState {
     exposure: 1,
     night: 0,
     wetness: 0,
+    overcast: 0,
+    shadowIntensity: 1,
+    saturation: 1,
   };
 }
 
@@ -128,10 +135,14 @@ export function evaluateAtmosphere(hour: number, palette: PaletteSystem, rainInt
   target.moonDirection.set(Math.cos(moonAzimuth) * Math.cos(moonElevation), Math.sin(moonElevation), Math.sin(moonAzimuth) * Math.cos(moonElevation));
   target.night = keys.night;
   target.wetness = rain;
+  // Cloud builds before the first drop: the ramp up to 0.3 is overcast, above it rain.
+  target.overcast = THREE.MathUtils.clamp(rain / .3, 0, 1);
+  target.shadowIntensity = 1 - target.overcast * .75;
+  target.saturation = 1 - target.overcast * .14 - THREE.MathUtils.clamp((rain - .3) / .7, 0, 1) * .1;
 
   kelvinToColor(keys.kelvin, target.sunColor);
   target.sunColor.lerp(NIGHT_SUN_FLOOR, keys.night * .5);
-  target.sunIntensity = keys.sun * (1 - rain * .72);
+  target.sunIntensity = keys.sun * (1 - target.overcast * .45 - THREE.MathUtils.clamp((rain - .3) / .7, 0, 1) * .3);
   target.moonIntensity = Math.pow(keys.night, 1.4) * 1.1 * (1 - rain * .6);
 
   const paletteZenith = palette.color(PALETTE_SLOT.skyZenith);
@@ -152,7 +163,7 @@ export function evaluateAtmosphere(hour: number, palette: PaletteSystem, rainInt
   // Ambient carries the palette shadow tint so shadows keep a hue.
   target.ambientSky.copy(shadow).lerp(target.skyZenith, .12).lerp(MOON_COLOR, keys.night * .35);
   target.ambientGround.copy(shadow).lerp(water, .18);
-  target.ambientIntensity = keys.ambient * (3.8 + rain * 1);
+  target.ambientIntensity = keys.ambient * (3.8 + target.overcast * .9 + rain * .5);
   target.exposure = keys.exposure + rain * .1;
   return target;
 }

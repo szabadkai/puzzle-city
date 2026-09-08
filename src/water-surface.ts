@@ -202,7 +202,7 @@ const FRAGMENT_SHADER = /* glsl */`
   uniform float uFogDensity;
   uniform vec3 uCameraPosition;
   uniform vec2 uHorizonCenter;
-  uniform vec2 uWind;
+  uniform vec2 uWindOffset;
   uniform float uTime;
   uniform float uRain;
   uniform float uNight;
@@ -234,7 +234,7 @@ const FRAGMENT_SHADER = /* glsl */`
 
   void main() {
     vec2 uv = vWorld.xz;
-    vec2 wind = uWind * uTime;
+    vec2 wind = uWindOffset;
     vec3 a = waveLayer(uv, 0.036, wind * 0.04 + vec2(uTime * 0.006, 0.0), 0.3);
     vec3 b = waveLayer(uv, 0.09, wind * 0.08 + vec2(-uTime * 0.011, uTime * 0.008), 0.16);
     vec2 rotated = vec2(uv.x * 0.7986 - uv.y * 0.6018, uv.x * 0.6018 + uv.y * 0.7986);
@@ -305,6 +305,8 @@ export class WaterSurface {
   readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   readonly field = new ShorelineField();
   readonly wind = new THREE.Vector2(.6, .25);
+  private readonly windOffset = new THREE.Vector2();
+  private lastTime = 0;
   private readonly reflectionTarget: THREE.WebGLRenderTarget;
   private readonly reflectionScale: number;
   private readonly reflectionCamera = new THREE.PerspectiveCamera();
@@ -329,7 +331,7 @@ export class WaterSurface {
     uFogDensity: { value: .01 },
     uCameraPosition: { value: new THREE.Vector3() },
     uHorizonCenter: { value: new THREE.Vector2() },
-    uWind: { value: this.wind },
+    uWindOffset: { value: this.windOffset },
     uTime: { value: 0 },
     uRain: { value: 0 },
     uNight: { value: 0 },
@@ -364,6 +366,10 @@ export class WaterSurface {
   update(time: number, atmosphere: AtmosphereState, camera: THREE.Camera, waterColor: THREE.Color, fogColor: THREE.Color, fogDensity: number) {
     const uniforms = this.uniforms;
     uniforms.uTime.value = time;
+    // Waves travel the distance the wind has pushed them so far. Scaling the
+    // current wind by absolute time would slide the whole pattern on every gust.
+    this.windOffset.addScaledVector(this.wind, THREE.MathUtils.clamp(time - this.lastTime, 0, .1));
+    this.lastTime = time;
     uniforms.uRain.value = atmosphere.wetness;
     uniforms.uNight.value = atmosphere.night;
     uniforms.uWaterColor.value.copy(waterColor);

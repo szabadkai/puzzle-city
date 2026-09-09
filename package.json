@@ -11,12 +11,17 @@
     "test:prosperity": "node --experimental-strip-types scripts/prosperity-check.mjs",
     "test:memory": "node --experimental-strip-types scripts/memory-check.mjs",
     "test:lanterns": "node --experimental-strip-types scripts/lanterns-check.mjs",
+    "test:harbor-spaces": "node --experimental-strip-types scripts/harbor-spaces-check.mjs",
+    "test:harbor-spaces-ui": "node --experimental-strip-types scripts/harbor-spaces-ui-check.mjs",
     "test:formations": "node --experimental-strip-types scripts/formations-check.mjs",
     "test:water-routes": "node scripts/water-routes-check.mjs",
     "test:render-structure": "node scripts/render-structure-check.mjs",
     "capture-test": "node scripts/capture-test.mjs",
     "menu-capture": "node scripts/menu-capture.mjs",
-    "test:palettes": "node scripts/palette-check.mjs"
+    "test:palettes": "node scripts/palette-check.mjs",
+    "test:campaign": "node --experimental-strip-types scripts/campaign-check.mjs",
+    "test:campaign-ui": "node --experimental-strip-types scripts/campaign-ui-check.mjs",
+    "test:campaign-guidance": "node --experimental-strip-types scripts/campaign-guidance-check.mjs"
   },
   "dependencies": {
     "mp4-muxer": "^5.2.2",

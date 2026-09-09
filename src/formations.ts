@@ -1,3 +1,4 @@
+import { analyzeHarborSpaces } from './harbor-spaces.ts';
 import {
   arcadeFeature,
   courtyardFeature,
@@ -8,7 +9,7 @@ import {
 import { findPlazaAnchors } from './topology.ts';
 import { CARDINALS, type BusinessType, type Cell, type FormationId, keyOf } from './types.ts';
 
-export type FormationFamily = 'water' | 'street' | 'terrace' | 'rooftop' | 'courtyard' | 'landmark';
+export type FormationFamily = 'water' | 'street' | 'terrace' | 'rooftop' | 'courtyard' | 'landmark' | 'basin' | 'lane';
 
 export type FormationDefinition = Readonly<{
   id: FormationId;
@@ -25,6 +26,8 @@ export type FormationOccurrence = Readonly<{
   id: FormationId;
   x: number;
   z: number;
+  /** Larger footprint-based forms support every part of their route or basin. */
+  footprint?: readonly Readonly<{ x: number; z: number }>[];
 }>;
 
 export const FORMATION_CATALOG: readonly FormationDefinition[] = [
@@ -46,11 +49,19 @@ export const FORMATION_CATALOG: readonly FormationDefinition[] = [
   { id: 'courtyard-pavilion', title: 'Courtyard Pavilion', family: 'courtyard', tier: 3, mark: '✥', description: 'A pavilion rises over the enclosed garden.', socialEffect: 'Neighbors meet below the pavilion at the center of the block.', hint: 'Raise the surrounding walls of a cloister garden to three storeys.' },
   { id: 'harbor-plaza', title: 'Harbor Plaza', family: 'landmark', tier: 1, mark: '⊞', description: 'Six or more homes enclose a square with a fountain and shade trees.', socialEffect: 'Residents cross paths by the fountain and sit under the trees.', hint: 'Leave a two-by-two opening inside a ring of at least six homes.' },
   { id: 'lookout-tower', title: 'Lookout Tower', family: 'landmark', tier: 1, mark: '△', description: 'A tall home with few neighbors has a clear view of the horizon.', socialEffect: 'Residents climb the tower to watch boats arrive.', hint: 'Raise an isolated or lightly connected home to three storeys.' },
+  { id: 'sheltered-basin', title: 'Sheltered Basin', family: 'basin', tier: 1, mark: '∪', description: 'Pale tide steps and a roofed gallery turn a quiet inlet into a civic landing.', socialEffect: 'Fishers pause along the banks to check their moorings.', hint: 'Enclose a water rectangle two spaces wide and three deep on both sides and at the back. Leave its full mouth open to the sea.' },
+  { id: 'working-basin', title: 'Working Basin', family: 'basin', tier: 2, mark: '≋', description: 'Twin derricks, cargo lighters, and heavy quays fill a larger working inlet.', socialEffect: 'Neighbors watch baskets and fishing gear being sorted beside the basin.', hint: 'Expand a sheltered basin to at least nine water spaces: three wide by three deep, or two wide by five deep. Keep its full mouth open.' },
+  { id: 'boat-haven', title: 'Boat Haven', family: 'basin', tier: 3, mark: '⚓', description: 'Beacon posts and a buoy boom shelter a crowded harbor of canopy boats.', socialEffect: 'Boat crews meet beside the sheltered moorings to tend their gear.', hint: 'Add homes across the mouth of a basin, leaving just one water space connected to the sea. Keep the interior two to four wide and three to five deep.' },
+  { id: 'pocket-lane', title: 'Pocket Lane', family: 'lane', tier: 1, mark: '⌞', description: 'A short stone passage connects two sheltered courts or plazas.', socialEffect: 'Neighbors stop by the stools beneath the lane’s hanging laundry.', hint: 'Leave two or three connected empty spaces between homes, joining a courtyard or plaza at each end. Enclose the sides so the passage has no opening onto water.' },
+  { id: 'through-lane', title: 'Through Lane', family: 'lane', tier: 2, mark: '↔', description: 'A longer passage threads through the block between open courts.', socialEffect: 'Residents follow the passage as a shortcut through the neighborhood.', hint: 'Extend a pocket lane to four or more empty spaces between its dry courts or plazas. The passage can turn corners.' },
+  { id: 'market-lanes', title: 'Market Lanes', family: 'lane', tier: 3, mark: '⋈', description: 'Branching passages meet beneath small awnings inside the block.', socialEffect: 'Shopgoers meet at the lane junction to browse goods and exchange news.', hint: 'Branch the enclosed lane to reach at least three courts or plazas. Leave one empty junction where three or four passages meet.' },
 ] as const;
 
 export const FORMATION_BY_ID = new Map(FORMATION_CATALOG.map((formation) => [formation.id, formation]));
 
 const BUSINESS_FAMILIES: Record<FormationFamily, readonly BusinessType[]> = {
+  basin: ['fishmonger', 'shipyard', 'smokehouse', 'workshop'],
+  lane: ['cafe', 'bookstore', 'weaver', 'restaurant'],
   water: ['fishmonger', 'mill', 'smokehouse', 'shipyard', 'inn'],
   street: ['cafe', 'workshop', 'bookstore', 'weaver'],
   terrace: ['flower-shop', 'cafe', 'tea-house', 'bookstore'],
@@ -76,7 +87,8 @@ export function formationBusinessAffinity(
   for (const occurrence of occurrences) {
     const formation = FORMATION_BY_ID.get(occurrence.id);
     if (!formation || !BUSINESS_FAMILIES[formation.family].includes(type)) continue;
-    const distance = Math.abs(location.x - occurrence.x) + Math.abs(location.z - occurrence.z);
+    const distance = Math.min(...(occurrence.footprint ?? [occurrence]).map((point) =>
+      Math.abs(location.x - point.x) + Math.abs(location.z - point.z)));
     if (distance > 3) continue;
     const score = Math.max(0, 6 - distance * 1.5 + (formation.tier - 1) * .6);
     if (score > best.score) best = { score, formation };
@@ -122,6 +134,14 @@ export function formationInfluenceSummary(formation: FormationDefinition) {
 export function formationGatheringActivity(id: FormationId, ageGroup?: string, occupation?: string) {
   const formation = FORMATION_BY_ID.get(id);
   if (!formation) return 'spending time in a familiar place';
+  if (formation?.family === 'basin' || formation?.family === 'lane') return ({
+    'sheltered-basin': 'watching the moorings in the sheltered basin',
+    'working-basin': 'sorting fishing gear beside the working basin',
+    'boat-haven': 'meeting boat crews beside the haven',
+    'pocket-lane': 'resting on a stool beneath the lane laundry',
+    'through-lane': 'taking a shortcut through the block',
+    'market-lanes': 'browsing goods at the lane junction',
+  } as Partial<Record<FormationId, string>>)[id]!;
   if (id === 'narrow-canal') return occupation === 'Fisher' ? 'checking the current in the narrow canal' : 'watching boats thread the narrow canal';
   if (id === 'sea-arch') return occupation === 'Fisher' ? 'reading the tide beneath the sea arch' : 'lingering beneath the sea arch';
   if (id === 'high-bridge') return ageGroup === 'child' ? 'waving to boats from the high bridge' : 'crossing the high bridge for the open view';
@@ -174,6 +194,10 @@ const COURTYARD_IDS: Record<NonNullable<ReturnType<typeof courtyardFeature>>, Fo
 };
 
 const LINEAGE: Partial<Record<FormationId, readonly FormationId[]>> = {
+  'working-basin': ['sheltered-basin'],
+  'boat-haven': ['sheltered-basin'],
+  'through-lane': ['pocket-lane'],
+  'market-lanes': ['pocket-lane'],
   'sea-arch': ['narrow-canal'],
   'high-bridge': ['narrow-canal', 'sea-arch'],
   'covered-skybridge': ['narrow-canal', 'sea-arch', 'high-bridge'],
@@ -208,9 +232,11 @@ export function detectFormations(cells: ReadonlyMap<string, Cell>): readonly For
   const occurrences = new Map<string, FormationOccurrence>();
   const emptyCandidates = new Set<string>();
   const plazaInterior = new Set<string>();
-  const add = (id: FormationId, x: number, z: number) => {
-    occurrences.set(`${id}:${x},${z}`, Object.freeze({ id, x, z }));
+  const add = (id: FormationId, x: number, z: number, footprint?: FormationOccurrence['footprint']) => {
+    occurrences.set(`${id}:${x},${z}`, Object.freeze({ id, x, z, ...(footprint ? { footprint } : {}) }));
   };
+
+  for (const space of analyzeHarborSpaces(cells).spaces) add(space.id, space.anchor.x, space.anchor.z, space.tiles);
 
   for (const anchor of findPlazaAnchors(cells)) {
     add('harbor-plaza', anchor.x, anchor.z);

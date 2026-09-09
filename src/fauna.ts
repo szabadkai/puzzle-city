@@ -1,3 +1,4 @@
+import { analyzeHarborSpaces } from './harbor-spaces';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { hash } from './random';
@@ -251,9 +252,10 @@ export class FaunaSystem {
     this.towerAnchors = this.cells
       .filter((cell) => cell.height >= 3 && CARDINALS.filter(([dx, dz]) => occupied.has(keyOf(cell.x + dx, cell.z + dz))).length <= 1)
       .map((cell) => new THREE.Vector3(cell.x * CELL, cell.height * FLOOR_HEIGHT + 1.25, cell.z * CELL));
+    const harborSpaces = analyzeHarborSpaces(occupied);
     const courtyardAnchors: THREE.Vector3[] = [];
     for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
-      if (occupied.has(keyOf(x, z))) continue;
+      if (occupied.has(keyOf(x, z)) || harborSpaces.byTile.has(keyOf(x, z))) continue;
       if (CARDINALS.filter(([dx, dz]) => occupied.has(keyOf(x + dx, z + dz))).length >= 3) courtyardAnchors.push(new THREE.Vector3(x * CELL, .75, z * CELL));
     }
     const plazaAnchors = findPlazaAnchors(occupied).map((anchor) => new THREE.Vector3((anchor.x + .5) * CELL, .45, (anchor.z + .5) * CELL));

@@ -1,6 +1,6 @@
 # Little Tides
 
-Little Tides is a harbor-building sandbox set in a tiny fictional city unmistakably shaped by Hong Kong. Steep green hills hold a crowded harbor of pale tong-lau-inspired blocks, tiled shopfronts, rooftop life, ferries, working boats, and rain-dark stone. Click the water to raise a home. Add floors or build next door, and the town redraws balconies, roofs, paths, and waterfront details around your changes.
+Little Tides is a harbor-building game set in a tiny fictional city unmistakably shaped by Hong Kong. Steep green hills hold a crowded harbor of pale tong-lau-inspired blocks, tiled shopfronts, rooftop life, ferries, working boats, and rain-dark stone. Click the water to raise a home. Add floors or build next door, and the town redraws balconies, roofs, paths, and waterfront details around your changes.
 
 **[Play Little Tides](https://szabadkai.github.io/puzzle-city/)**
 
@@ -8,9 +8,15 @@ There is no budget to balance and no failure state. You shape the harbor, then w
 
 ## How the town grows
 
-Buildings react to their neighbors. Leave a strip of water between two homes and you can turn it into a canal, sea arch, high bridge, covered skybridge, or lantern gate. Rows become arcades. Uneven roofs become stepped gardens. Dense blocks open into courtyards, shared roof courts, and plazas. A short First Tide guide teaches the basic moves without showing the hidden grid.
+Buildings react to their neighbors. Leave a strip of water between two homes and you can turn it into a canal, sea arch, high bridge, covered skybridge, or lantern gate. Rows become arcades. Uneven roofs become stepped gardens. Dense blocks open into courtyards, shared roof courts, and plazas. New players begin Formation Voyage: an 18-lesson campaign across six chapters. A compact welcome sheet introduces building. Each lesson then offers live floor counts, a top-down plan, and up to four world markers for building, raising, lowering, or keeping water open. The guide finds nearby partial shapes and opens its recovery plan after three edits without progress. Build the exact shape, explore it, then choose the next lesson. There are no timers or simulation chores. The same harbor grows throughout the campaign, and completed lessons remain earned if you reshape it.
 
-The Formation Atlas records 18 forms as you find them. These forms affect the simulation. Residents visit them, suitable trades open nearby with fewer residents, and nearby workshops make larger batches. The Atlas remembers a form after you rebuild the spot where it stood.
+Completing all 18 lessons permanently unlocks free sandbox for the current harbor and future new tides. Formation Voyage in the town menu opens a six-stop chapter chart and named formation stamps. Restart Formation Voyage in the same menu reopens the welcome and begins the lessons again in the current harbor, keeping earned stamps and permanent sandbox access. There is no dedicated Voyage or sandbox button on the top bar. Chapter endings offer a mastery beat and an explicit Continue; the final formation opens a non-modal sandbox finale. Sandbox players can begin, resume, or replay the Voyage without losing permanent access or earlier completion. Card and plan expansion survive reloads. During the Voyage, future Atlas plans remain rumors, including discoveries made ahead of the guided order; those shapes must be made again when their lesson begins. Progress travels with saves, postcards, and share links. Legacy towns without Voyage state are ignored and open as a fresh harbor.
+
+The Formation Atlas records 24 forms as you find them. These forms affect the simulation. Residents visit them, suitable trades open nearby with fewer residents, and nearby workshops make larger batches. The Atlas remembers a form after you rebuild the spot where it stood.
+
+Six additional forms reward shaping the footprint: Sheltered Basin, Working Basin, Boat Haven, Pocket Lane, Through Lane, and Market Lanes. A basin keeps a two-to-four-space-wide, three-to-five-space-deep inlet open to the sea. Increasing its area makes a working basin; leaving a single-space mouth makes a boat haven. Lanes are enclosed passages joining dry courtyards or plazas: two or three passage spaces make a pocket lane, four or more make a through lane, and a junction reaching three courts makes market lanes. The Atlas includes top-down examples. All use the same build/remove controls, stay available for discovery during the Voyage, and persist in saves. The Voyage still teaches its original 18 lessons.
+
+Sheltered basins gain pale stepped banks and a continuous roofed landing; working basins gain heavy cargo quays, loaded lighters, and twin derricks; boat havens fill with canopy boats behind beacon posts and a marked buoy boom. Lanes gain continuous stone paving, laundry, stools, goods tables, and market awnings. Every new form also has its own town signature: Tide Landing, Twin Cargo Derricks, Harbor Beacons, Moon Gate, Green Pergola, or Market Crown. The Atlas depicts those landmarks in the existing field-journal style and keeps the footprint as a separate build plan. Residents use the real walking routes and visit the new forms; suitable nearby trades receive the existing formation benefits. Closing a basin mouth or opening a lane wall reshapes the whole affected space immediately. Boats, wildlife, and architectural discoveries use the same water/ground decision.
 
 Put compatible forms close together and the town creates one of 14 living places. A Canal Market draws merchant boats. A Ferry Quarter runs a passenger route. A Story Court brings children and elders together. Each place adds its own landmark and marks nearby buildings with details such as route boards, rain chains, cloth, letter boxes, or kites. Shops also remember which place first attracted them.
 
@@ -56,7 +62,13 @@ npm run dev
 
 Create a production build with `npm run build`.
 
-Run the deterministic checks with `npm run test:formations`, `npm run test:crafting`, `npm run test:memory`, `npm run test:lanterns`, `npm run test:water-routes`, `npm run test:render-structure`, and `npm run test:palettes`.
+Run the deterministic checks with `npm run test:campaign`, `npm run test:campaign-guidance`, `npm run test:formations`, `npm run test:harbor-spaces`, `npm run test:crafting`, `npm run test:memory`, `npm run test:lanterns`, `npm run test:water-routes`, `npm run test:render-structure`, and `npm run test:palettes`.
+
+`npm run test:harbor-spaces-ui` checks all six new forms in Chromium, Atlas entries, persistence, and mobile layout, and captures world/Atlas screenshots in `test-output/`.
+
+`npm run test:campaign-ui` checks the welcome-to-Sea-Arch flow through real desktop clicks and touch taps, collapsed-state recovery, concealed Atlas plans, chapter transitions, reduced motion, sandbox unlock, menu restart, and legacy-save reset in Chromium. Screenshots land in `test-output/`.
+
+Voyage funnel diagnostics stay on the device: the last 200 events are stored under `little-tides-voyage-events-v1` in local storage and also emitted as `little-tides:voyage` custom events. They record a random session identifier, timestamps, session-relative milliseconds, input device, lesson, and milestones (welcome, first home, formation, chapter, recovery, and unlock); no data is sent over the network. For moderated testing, export this log alongside observations. The ten desktop/touch usability sessions and their learning targets in [UX_PROGRESSION_PLAN.md](UX_PROGRESSION_PLAN.md) still require real participants; automated checks do not establish those results.
 
 `npm run capture-test` loads a fixture town through a share link in headless Chromium, takes three default portrait screenshots, scales them to 200 px, writes a contact sheet next to any reference thumbnails in `scripts/capture-reference/`, and checks the draw-call and frame-time budgets. Add `-- --webkit` to also run WebKit, or `-- --dev` to test the dev server. The output lands in `test-output/`.
 

@@ -35,11 +35,11 @@ const town = (entries) => new Map(entries.map(([x, z, height = 1]) => [
 ]));
 const ids = (cells) => new Set(detectFormations(cells).map((formation) => formation.id));
 
-assert.equal(new Set(FORMATION_CATALOG.map((formation) => formation.id)).size, 18, 'the atlas has 18 unique forms');
-assert.equal(new Set(FORMATION_CATALOG.map((formation) => formation.socialEffect)).size, 18, 'each formation describes a distinct resident draw');
+assert.equal(new Set(FORMATION_CATALOG.map((formation) => formation.id)).size, 24, 'the atlas has 24 unique forms');
+assert.equal(new Set(FORMATION_CATALOG.map((formation) => formation.socialEffect)).size, 24, 'each formation describes a distinct resident draw');
 assert.equal(
   new Set(FORMATION_CATALOG.map((formation) => formationGatheringActivity(formation.id))).size,
-  18,
+  24,
   'residents name a distinct activity at every formation',
 );
 assert.ok(

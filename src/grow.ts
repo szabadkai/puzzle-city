@@ -1,3 +1,4 @@
+import { analyzeHarborSpaces } from './harbor-spaces';
 import { CARDINALS, type BusinessSave, type BusinessType, type Cell, type CitizenAgeGroup, type CitizenKind, type CitizenSave, type ConfluenceId, type JournalEntry, type JournalIllustration, type PlaceIdentityId, keyOf } from './types';
 import { analyzeWaterTopology } from './water';
 import { findPlazaAnchors } from './topology';
@@ -126,6 +127,7 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
   const cells = [...input.cells].map((cell) => Object.freeze({ ...cell, placedAt: 0 }));
   const cellMap = new Map(cells.map((cell) => [keyOf(cell.x, cell.z), cell]));
   const topology: Record<TopologyFeature, GridPoint[]> = { courtyard: [], arch: [], bridge: [], tower: [], plaza: [] };
+  const harborSpaces = analyzeHarborSpaces(cellMap);
   const plazaAnchors = findPlazaAnchors(cellMap);
   const plazaCells = new Set<string>();
   for (const anchor of plazaAnchors) {
@@ -142,7 +144,7 @@ export function createWorldSnapshot(input: SnapshotInput): WorldSnapshot {
   }
   for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
     if (cellMap.has(keyOf(x, z))) continue;
-    if (plazaCells.has(keyOf(x, z))) continue;
+    if (plazaCells.has(keyOf(x, z)) || harborSpaces.byTile.has(keyOf(x, z))) continue;
     const heights = CARDINALS.map(([dx, dz]) => cellMap.get(keyOf(x + dx, z + dz))?.height ?? 0);
     const count = heights.filter((height) => height > 0).length;
     const point = Object.freeze({ x, z });

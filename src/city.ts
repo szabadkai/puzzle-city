@@ -1,3 +1,6 @@
+import { analyzeHarborSpaces } from './harbor-spaces';
+import { buildHarborSpace } from './harbor-space-meshes';
+import { buildSpaceSignature } from './harbor-space-signatures';
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -301,6 +304,7 @@ function drawBusinessPictogram(context: CanvasRenderingContext2D, type: Business
 export class CityRenderer {
   readonly root = new THREE.Group();
   readonly cells = new Map<string, Cell>();
+  private harborSpaces = analyzeHarborSpaces(this.cells);
   private readonly pieces = new Map<string, THREE.Group>();
   private readonly staticBatchRoot = new THREE.Group();
   private staticBatchRebuildTimer: ReturnType<typeof setTimeout> | null = null;
@@ -478,6 +482,11 @@ export class CityRenderer {
         && before?.name === after?.name
         && (before?.prosperityTier ?? 0) === (after?.prosperityTier ?? 0)) continue;
       changed.push(key);
+      const [x, z] = key.split(',').map(Number);
+      for (const [dx, dz] of CARDINALS) {
+        const neighbor = keyOf(x + dx, z + dz);
+        if (this.harborSpaces.byTile.get(neighbor)?.kind === 'lane') changed.push(neighbor);
+      }
     }
     this.rebuildPieces(changed);
     this.syncHarborLanterns();
@@ -1033,6 +1042,7 @@ export class CityRenderer {
   }
 
   private rebuildAll(animate: boolean) {
+    this.harborSpaces = analyzeHarborSpaces(this.cells);
     this.clearGlobalStaticBatch();
     for (const piece of this.pieces.values()) {
       this.root.remove(piece);
@@ -1051,9 +1061,25 @@ export class CityRenderer {
 
   private rebuildAround(x: number, z: number, deferStaticBatch = false) {
     this.clearGlobalStaticBatch();
-    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
-      const px = x + dx;
-      const pz = z + dz;
+    const currentSpaces = analyzeHarborSpaces(this.cells);
+    const affected = new Set<string>();
+    const around = (px: number, pz: number) => {
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) affected.add(keyOf(px + dx, pz + dz));
+    };
+    around(x, z);
+    if (currentSpaces !== this.harborSpaces) {
+      // An edit at a mouth or junction can change distant tiles in its shape.
+      for (const layout of [this.harborSpaces, currentSpaces]) {
+        for (const space of layout.spaces) for (const point of space.tiles) around(point.x, point.z);
+        for (const key of layout.ground) {
+          if (this.harborSpaces.ground.has(key) === currentSpaces.ground.has(key)) continue;
+          const [px, pz] = key.split(',').map(Number); around(px, pz);
+        }
+      }
+    }
+    this.harborSpaces = currentSpaces;
+    for (const affectedKey of affected) {
+      const [px, pz] = affectedKey.split(',').map(Number);
       const key = keyOf(px, pz);
       const old = this.pieces.get(key);
       if (old) {
@@ -2513,12 +2539,15 @@ export class CityRenderer {
       if (height > 0) return;
       const dir = index as Direction;
       const [dx, dz] = CARDINALS[dir];
+      const adjacentSpace = analyzeHarborSpaces(this.cells).byTile.get(keyOf(cell.x + dx, cell.z + dz));
+      if (adjacentSpace?.kind === 'lane') return;
       const adjacentFeature = this.emptyFeature(cell.x + dx, cell.z + dz);
       if (adjacentFeature?.includes('courtyard') || adjacentFeature === 'cloister garden' || adjacentFeature === 'harbor plaza') return;
       const [px, pz] = this.edgePosition(dir, CELL * .51);
       const quay = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .24 : CELL * .98, .68, dir % 2 ? CELL * .98 : .24), this.stoneDark));
       quay.position.set(px, -.17, pz);
       group.add(quay);
+      if (adjacentSpace?.kind === 'basin') return;
       if (hasDock(cell, dir, this.seed)) {
         const dock = shadow(new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? 1.1 : .82, .12, dir % 2 ? .82 : 1.1), this.wood));
         dock.position.set(dx * (CELL * .78), -.03, dz * (CELL * .78));
@@ -3813,6 +3842,8 @@ export class CityRenderer {
   }
 
   private emptyFeature(x: number, z: number): string | null {
+    const space = analyzeHarborSpaces(this.cells).byTile.get(keyOf(x, z));
+    if (space) return space.id.replaceAll('-', ' ');
     if (plazaAnchorAt(x, z, this.cells)) return 'harbor plaza';
     const courtyard = courtyardFeature(x, z, this.cells);
     if (courtyard) return courtyard;
@@ -3828,6 +3859,18 @@ export class CityRenderer {
   }
 
   private buildFeature(group: THREE.Group, x: number, z: number) {
+    const space = analyzeHarborSpaces(this.cells).byTile.get(keyOf(x, z));
+    if (space) {
+      buildHarborSpace(group, x, z, space, this.cells, {
+        stone: this.stone, dark: this.stoneDark, wood: this.wood, cream: this.cream,
+        green: this.greenTile, cloth: this.flagMaterial,
+      }, this.businesses);
+      buildSpaceSignature(group, x, z, space, this.cells, {
+        stone: this.stone, dark: this.stoneDark, wood: this.wood, cream: this.cream,
+        green: this.greenTile, cloth: this.flagMaterial, light: this.warmLight,
+      });
+      return;
+    }
     const feature = this.emptyFeature(x, z);
     const confluence = this.confluenceAt(x, z);
     if (confluence?.kind === 'exchange-pier') {

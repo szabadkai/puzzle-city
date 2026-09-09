@@ -9,11 +9,13 @@ import { HarborAmbience, type HarborMemoryInspection } from './harbor';
 import { weatherAt, type TownMemorySnapshot } from './memory';
 import { CraftingSystem } from './crafting';
 import { CARDINALS, keyOf, type BuildAction, type ConfluenceId, type FormationId, type HarborLanternId, type JournalEntry, type JournalIllustration, type PlaceIdentityId, type SavedTown } from './types';
-import { FLOOR_HEIGHT } from './spatial';
+import { CELL_SIZE, FLOOR_HEIGHT } from './spatial';
 import { makeTidePostcard, readTidePostcard, TidePostcardError } from './tide-postcard';
 import { makeTownStl } from './town-stl';
 import { composePostcard, postcardDate } from './postcard-image';
 import { FORMATION_SKETCHES } from './atlas-illustrations';
+import { HARBOR_SPACE_PLANS, harborSpacePlanSketch } from './harbor-space-plans';
+import { SPACE_SIGNATURES } from './harbor-space-signatures';
 import {
   detectFormations,
   FORMATION_BY_ID,
@@ -65,11 +67,15 @@ import { encodeShareCode, SHARE_CODE_COMFORTABLE_BYTES, shareUrl } from './share
 import type { DepthOfFieldPreset } from './postfx';
 import { PALETTES } from './palette';
 import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, storedTierOverride, type QualityTier } from './quality';
+import { advanceCampaign, CAMPAIGN_LESSONS, chapterInfo, currentLesson, isNewPattern, observeCampaign, replayCampaign, restoreCampaign } from './campaign';
+import { renderCampaignCard, renderCampaignJourney } from './campaign-view';
+import { campaignGuidance, findCampaignWater, type CampaignGuidance, type GuidePoint } from './campaign-guidance';
 import './style.css';
 
 installPresentationShading();
 
 const STORAGE_KEY = 'little-tides-town-v1';
+const SANDBOX_UNLOCK_KEY = 'little-tides-sandbox-unlocked-v1';
 const MUSIC_MUTED_KEY = 'little-tides-music-muted';
 const DETECTED_TIER_KEY = 'little-tides-quality-detected';
 const HIGH_REFRESH_KEY = 'little-tides-high-refresh';
@@ -104,22 +110,27 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <button id="observe-toggle" class="menu-row menu-switch" style="--i:0" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="menu-icon" aria-hidden="true">◉</span><span class="menu-label">Observe<small>Pick a person or place to read its history</small></span><span class="menu-knob" aria-hidden="true"></span></button>
             <button id="music-toggle" class="menu-row menu-switch" style="--i:1" aria-label="Turn music off" aria-pressed="true" data-keep-open><span class="menu-icon music-state" aria-hidden="true">♫</span><span class="menu-label">Music</span><span class="menu-knob" aria-hidden="true"></span></button>
           </div>
+          <div class="menu-section" role="group" aria-labelledby="menu-kicker-voyage">
+            <span class="menu-kicker" id="menu-kicker-voyage">Voyage</span>
+            <button id="campaign-open" class="menu-row" style="--i:2"><span class="menu-icon" aria-hidden="true">⌁</span><span class="menu-label">Formation Voyage<small>Follow the harbor's building journey</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
+            <button id="campaign-restart" class="menu-row" style="--i:3" data-campaign-action="restart"><span class="menu-icon" aria-hidden="true">↺</span><span class="menu-label">Restart voyage<small>Begin again from the first formation</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
+          </div>
           <div class="menu-section" role="group" aria-labelledby="menu-kicker-keep">
             <span class="menu-kicker" id="menu-kicker-keep">Keep</span>
-            <button id="postcard-open" class="menu-row" style="--i:2" aria-label="Save or load a tide postcard"><span class="menu-icon" aria-hidden="true">⇧</span><span class="menu-label">Postcard<small>Save, share, or reload the town as a PNG</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
-            <button id="ui-hide" class="menu-row" style="--i:3" aria-label="Hide the interface for a screenshot"><span class="menu-icon" aria-hidden="true">◫</span><span class="menu-label">Hide UI<small>Tap the bottom-right corner or press H to bring it back</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
+            <button id="postcard-open" class="menu-row" style="--i:4" aria-label="Save or load a tide postcard"><span class="menu-icon" aria-hidden="true">⇧</span><span class="menu-label">Postcard<small>Save, share, or reload the town as a PNG</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
+            <button id="ui-hide" class="menu-row" style="--i:5" aria-label="Hide the interface for a screenshot"><span class="menu-icon" aria-hidden="true">◫</span><span class="menu-label">Hide UI<small>Tap the bottom-right corner or press H to bring it back</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
           </div>
           <div class="menu-section" role="group" aria-labelledby="menu-kicker-town">
             <span class="menu-kicker" id="menu-kicker-town">Town</span>
-            <label class="menu-row menu-field" style="--i:4" for="quality-select"><span class="menu-icon" aria-hidden="true">✦</span><span class="menu-label">Graphics quality<small>A change reloads the town</small></span><select id="quality-select" aria-label="Graphics quality"><option value="auto">Auto</option><option value="low">Low</option><option value="mid">Medium</option><option value="high">High</option></select></label>
-            <button id="reset" class="menu-row" style="--i:5" aria-label="Start a new town" aria-expanded="false" aria-controls="reset-confirm" data-keep-open><span class="menu-icon" aria-hidden="true">↻</span><span class="menu-label">New tide<small>Let this town drift away</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
+            <label class="menu-row menu-field" style="--i:6" for="quality-select"><span class="menu-icon" aria-hidden="true">✦</span><span class="menu-label">Graphics quality<small>A change reloads the town</small></span><select id="quality-select" aria-label="Graphics quality"><option value="auto">Auto</option><option value="low">Low</option><option value="mid">Medium</option><option value="high">High</option></select></label>
+            <button id="reset" class="menu-row" style="--i:7" aria-label="Start a new town" aria-expanded="false" aria-controls="reset-confirm" data-keep-open><span class="menu-icon" aria-hidden="true">↻</span><span class="menu-label">New tide<small>Let this town drift away</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
             <div class="menu-confirm" id="reset-confirm" hidden>
               <p>Let this town drift away and begin with a new tide?</p>
               <button id="reset-cancel" data-keep-open>Keep this town</button>
               <button id="reset-confirm-yes">Begin a new tide</button>
             </div>
           </div>
-          <footer class="menu-foot" style="--i:6">
+          <footer class="menu-foot" style="--i:8">
             <button id="about-open" class="menu-foot-link" aria-label="About Little Tides">About Little Tides</button>
           </footer>
         </div>
@@ -128,10 +139,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="toast" id="toast"></div>
     <div class="follow-label" id="follow-label" aria-live="polite"></div>
     <button id="ui-restore" class="keep-visible" aria-label="Show the interface"></button>
-    <button id="photo-open" class="photo-quick" aria-label="Open photo mode" title="Photo mode (F)">📷</button>
+    <button id="photo-open" class="photo-quick" aria-label="Open camera photo mode" aria-haspopup="dialog" aria-controls="photo-panel" title="Photo mode (F)">📷</button>
     <div class="photo-countdown keep-visible" id="photo-countdown" aria-live="polite"></div>
-    <section class="photo-panel keep-visible" id="photo-panel" aria-label="Photo mode" aria-hidden="true">
-      <header><strong>Photo mode</strong><button id="photo-close" aria-label="Leave photo mode">×</button></header>
+    <dialog class="photo-panel keep-visible" id="photo-panel" aria-labelledby="photo-title" aria-hidden="true">
+      <header><strong id="photo-title">Photo mode</strong><button id="photo-close" autofocus aria-label="Leave photo mode">×</button></header>
       <div class="photo-controls">
         <label class="wide">Time of day <span id="photo-hour-label"></span><input id="photo-hour" type="range" min="0" max="24" step="0.25"></label>
         <label>Weather<select id="photo-weather"><option value="sim">As simulated</option><option value="clear">Clear</option><option value="overcast">Overcast</option><option value="rain">Rain</option><option value="night">Night, clear</option></select></label>
@@ -149,7 +160,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <p class="photo-status" id="photo-status" aria-live="polite"></p>
       <div class="photo-progress" id="photo-progress"><i id="photo-progress-fill"></i></div>
-    </section>
+    </dialog>
     <div class="perf-panel" id="perf-panel">Performance</div>
     <div class="shadow-tuning" id="shadow-tuning" aria-label="Shadow tuning">
       <label>bias <input id="shadow-bias" type="range" min="-0.002" max="0.002" step="0.00002" value="-0.00018"><span id="shadow-bias-value"></span></label>
@@ -185,6 +196,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <p id="thread-hint"></p>
       <div class="thread-progress" role="progressbar" aria-label="Discovery progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="thread-progress-fill"></i></div>
     </aside>
+    <aside class="first-tide campaign-card" id="campaign-card" aria-label="Current Formation Voyage lesson"></aside>
+    <div id="voyage-pointer" class="voyage-pointer" aria-live="polite"></div>
+    <button id="voyage-reveal" class="voyage-reveal" data-campaign-action="view" aria-live="polite"></button>
     <aside class="first-tide" id="first-tide" aria-live="polite">
       <button class="first-tide-close" id="first-tide-close" aria-label="Skip the first-tide guide">×</button>
       <span id="first-tide-progress">First tide · 1/4</span>
@@ -252,8 +266,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <button id="journal-close" aria-label="Close observation journal">×</button>
         </header>
         <div class="journal-tabs" role="tablist" aria-label="Harbor records">
+          <button id="journal-tab-campaign" role="tab" data-journal-view="campaign" aria-selected="false">Voyage</button>
           <button id="journal-tab-stories" role="tab" data-journal-view="stories" aria-selected="true">Stories <span id="story-count">0</span></button>
-          <button id="journal-tab-atlas" role="tab" data-journal-view="atlas" aria-selected="false">Formations <span id="formation-count">0/18</span></button>
+          <button id="journal-tab-atlas" role="tab" data-journal-view="atlas" aria-selected="false">Formations <span id="formation-count">0/${FORMATION_CATALOG.length}</span></button>
         </div>
         <p class="journal-intro" id="journal-intro">Build freely. The journal saves what happens.</p>
         <div class="journal-list" id="journal-list" tabindex="0" aria-label="Journal entries"></div>
@@ -300,7 +315,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `;
 
-const saved = (await loadSharedTown()) ?? loadTown();
+const loadedTown = (await loadSharedTown()) ?? loadTown();
+// Towns without Voyage state predate this experience and start fresh.
+const saved = loadedTown?.campaign?.version === 1 ? loadedTown : undefined;
+if (loadedTown && !saved) localStorage.removeItem(SANDBOX_UNLOCK_KEY);
+let campaign = restoreCampaign(saved?.campaign, localStorage.getItem(SANDBOX_UNLOCK_KEY) === 'true');
+if (campaign.sandboxUnlocked) localStorage.setItem(SANDBOX_UNLOCK_KEY, 'true');
 const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
 // New towns open at golden hour. The most saturated light makes the first frame.
 let timeOfDay = saved?.timeOfDay ?? 17.5;
@@ -570,12 +590,35 @@ const knownConfluences = new Set<ConfluenceId>(saved?.confluences ?? []);
 for (const occurrence of confluenceOccurrences) knownConfluences.add(occurrence.id);
 city.setPlaceIdentities(placeIdentityOccurrences.filter((place) => !confluenceOccurrences.some((confluence) => confluenceSupersedesPlace(confluence, place))));
 city.setConfluences(confluenceOccurrences);
-let onboardingDismissed = saved?.onboardingDismissed ?? Boolean(saved?.cells.length);
+const voyageSession = crypto.randomUUID();
+const reducedVoyageMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let voyageGuidance: CampaignGuidance | undefined;
+let voyageAnchor: GuidePoint | undefined;
+let voyageHelp = false;
+let voyageFresh = false;
+let voyageKeyboard = false;
+let voyageIncorrectEdits = 0;
+let lastVoyageEdit: GuidePoint | undefined;
+let voyageReturning = saved && campaign.mode === 'campaign' && campaign.started !== false ? `Welcome back · Formation ${Math.min(18, campaign.completed + 1)} of 18` : '';
+let voyageReveal: (FormationOccurrence & { until: number }) | undefined;
+let voyageCameraMove: { from: THREE.Vector3; to: THREE.Vector3; cameraFrom: THREE.Vector3; cameraTo: THREE.Vector3; start: number } | undefined;
+let voyageLayoutAt = 0;
+document.addEventListener('keydown', () => { voyageKeyboard = true; });
+document.addEventListener('pointerdown', () => { voyageKeyboard = false; }, { capture: true });
+controls.addEventListener('start', () => { voyageCameraMove = undefined; });
+renderer.domElement.addEventListener('pointermove', (event) => {
+  const prompt = document.querySelector<HTMLElement>('#voyage-pointer')!;
+  if (event.pointerType !== 'touch') {
+    prompt.style.left = `${Math.max(12, Math.min(innerWidth - 300, event.clientX + 18))}px`;
+    prompt.style.top = `${Math.min(innerHeight - 60, event.clientY + 24)}px`;
+  }
+});
+let onboardingDismissed = saved?.onboardingDismissed ?? (Boolean(saved?.cells.length) || campaign.sandboxUnlocked);
 let placeIntroductionSeen = saved?.placeIntroductionSeen ?? Boolean(saved?.placeIdentities?.length);
 let confluenceIntroductionSeen = saved?.confluenceIntroductionSeen ?? Boolean(saved?.confluences?.length);
 const revealedFormationHints = new Set<FormationId>(saved?.formationHints ?? []);
 revealNearMissHints(formationOccurrences);
-let journalView: 'stories' | 'atlas' = 'stories';
+let journalView: 'stories' | 'atlas' | 'campaign' = 'stories';
 const citizens = new CitizenSystem(seed, city.cells, saved?.citizens ?? []);
 scene.add(citizens.root);
 const businesses = new BusinessSystem(seed, saved?.businesses ?? []);
@@ -630,6 +673,74 @@ const guides = new THREE.Group();
 guides.userData.nonPrintable = true;
 guides.add(onboardingMarkers, clueRings, nearMissMarkers);
 scene.add(guides);
+
+// Reuse marker geometry and materials across edits. The symbols also distinguish actions without color.
+const voyageLineMaterials = {
+  build: new THREE.LineBasicMaterial({ color: 0xffd477, depthTest: false, depthWrite: false }),
+  raise: new THREE.LineBasicMaterial({ color: 0xffd477, depthTest: false, depthWrite: false }),
+  lower: new THREE.LineBasicMaterial({ color: 0xf79082, depthTest: false, depthWrite: false }),
+  preserve: new THREE.LineBasicMaterial({ color: 0xbbe9f3, depthTest: false, depthWrite: false }),
+};
+const voyageLowerMaterial = onboardingMarkerMaterial.clone();
+voyageLowerMaterial.color.set(0xf79082);
+const voyageSymbols = {
+  build: new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-.2, 0, 0), new THREE.Vector3(.2, 0, 0), new THREE.Vector3(0, 0, -.2), new THREE.Vector3(0, 0, .2)]),
+  raise: new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-.2, 0, .14), new THREE.Vector3(0, 0, -.14), new THREE.Vector3(0, 0, -.14), new THREE.Vector3(.2, 0, .14)]),
+  lower: new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-.2, 0, -.14), new THREE.Vector3(0, 0, .14), new THREE.Vector3(0, 0, .14), new THREE.Vector3(.2, 0, -.14)]),
+  preserve: new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-.5, 0, -.5), new THREE.Vector3(.5, 0, -.5), new THREE.Vector3(.5, 0, .5), new THREE.Vector3(-.5, 0, .5)]),
+};
+function updateVoyageMarkers() {
+  onboardingMarkers.clear();
+  onboardingMarkers.visible = campaign.mode === 'campaign' && campaign.started !== false && !campaign.ready;
+  if (!onboardingMarkers.visible) return;
+  for (const target of voyageGuidance?.markers ?? []) {
+    const group = new THREE.Group();
+    group.userData = { nonPrintable: true, voyageMarker: target };
+    group.position.set(target.x * CELL_SIZE, target.height ? .7 + target.height * FLOOR_HEIGHT : .06, target.z * CELL_SIZE);
+    if (target.action !== 'preserve') {
+      const ring = new THREE.Mesh(onboardingMarkerGeometry, target.action === 'lower' ? voyageLowerMaterial : onboardingMarkerMaterial);
+      ring.rotation.x = Math.PI / 2;
+      ring.renderOrder = 4;
+      group.add(ring);
+    }
+    const symbol = target.action === 'preserve'
+      ? new THREE.LineLoop(voyageSymbols.preserve, voyageLineMaterials.preserve)
+      : new THREE.LineSegments(voyageSymbols[target.action], voyageLineMaterials[target.action]);
+    symbol.renderOrder = 5;
+    group.add(symbol);
+    onboardingMarkers.add(group);
+  }
+}
+
+renderer.domElement.tabIndex = 0;
+renderer.domElement.setAttribute('aria-label', 'Harbor. Arrow keys choose a space, Enter raises a home, and Delete lowers it.');
+let keyboardBuildPoint = { x: 0, z: 0 };
+function showKeyboardBuildPoint() {
+  const { x, z } = keyboardBuildPoint;
+  const height = city.get(x, z)?.height ?? 0;
+  hover.position.set(x * CELL_SIZE, height ? .7 + height * FLOOR_HEIGHT : .12, z * CELL_SIZE);
+  hover.visible = true;
+  renderer.domElement.setAttribute('aria-label', `Harbor: east ${x}, south ${z}, ${height ? `${height} floors` : 'open water'}. Arrow keys choose a space, Enter raises a home, Delete lowers it.`);
+}
+renderer.domElement.addEventListener('focus', () => {
+  const marker = voyageGuidance?.markers.find(({ action }) => action !== 'preserve');
+  if (marker) keyboardBuildPoint = { x: marker.x, z: marker.z };
+  showKeyboardBuildPoint();
+});
+renderer.domElement.addEventListener('blur', () => { hover.visible = false; });
+renderer.domElement.addEventListener('keydown', (event) => {
+  if (photo.active || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Delete', 'Backspace'].includes(event.key)) return;
+  event.preventDefault();
+  voyageKeyboard = true;
+  const { x, z } = keyboardBuildPoint;
+  if (event.key === 'Enter') build(x, z);
+  else if (event.key === 'Delete' || event.key === 'Backspace') demolish(x, z);
+  else {
+    const next = { x: x + (event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0), z: z + (event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0) };
+    if (city.isBuildable(next.x, next.z)) keyboardBuildPoint = next;
+  }
+  if (document.activeElement === renderer.domElement) showKeyboardBuildPoint();
+});
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -914,6 +1025,9 @@ function build(x: number, z: number) {
     softTone(150, .05);
     return;
   }
+  if (campaign.started === false && campaign.mode === 'campaign') { campaign = { ...campaign, started: true }; voyageEvent('welcome_started'); }
+  if (city.cells.size === 1 && city.get(x, z)?.height === 1 && campaign.completed === 0 && campaign.mode === 'campaign') voyageEvent('first_home');
+  lastVoyageEdit = { x, z };
   recordBuildAction(x, z, city.get(x, z)?.height ?? 1);
   citizens.rebuild(city.cells);
   water.setCells(city.cells.values());
@@ -935,6 +1049,7 @@ function build(x: number, z: number) {
 function demolish(x: number, z: number) {
   if (photo.active) return;
   if (!city.remove(x, z, day * 24 + timeOfDay, true)) return;
+  lastVoyageEdit = { x, z };
   recordBuildAction(x, z, city.get(x, z)?.height ?? 0);
   hideMemoryCard();
   citizens.rebuild(city.cells);
@@ -978,6 +1093,7 @@ function currentTownData(): SavedTown {
     catColonyFoundedAt,
     crafting: crafting.serialize(),
     formations: [...knownFormations],
+    campaign,
     placeIdentities: [...knownPlaceIdentities],
     confluences: [...knownConfluences],
     harborLanterns: [...litHarborLanternIds],
@@ -1122,7 +1238,7 @@ function refreshFormations(announce: boolean) {
   ) : [];
   for (const lantern of completedLanterns) litHarborLanternIds.add(lantern.id);
   if (completedLanterns.length) city.setHarborLanterns(litHarborLanternIds);
-  if (announce && settledConfluences.length) {
+  if (announce && campaign.mode === 'sandbox' && settledConfluences.length) {
     const occurrence = settledConfluences.at(-1)!;
     const definition = CONFLUENCE_BY_ID.get(occurrence.id);
     const landmark = confluenceLandmarkSocket(occurrence);
@@ -1148,7 +1264,7 @@ function refreshFormations(announce: boolean) {
       softTone(1560, 1.1, .5, .035, 'triangle');
     }
     if (settledConfluences.some((confluence) => confluence.id === followedConfluenceId)) followedConfluenceId = null;
-  } else if (announce && settledPlaces.length) {
+  } else if (announce && campaign.mode === 'sandbox' && settledPlaces.length) {
     const occurrence = settledPlaces.at(-1)!;
     const identity = PLACE_IDENTITY_BY_ID.get(occurrence.id);
     const landmark = placeLandmarkSocket(occurrence);
@@ -1165,14 +1281,264 @@ function refreshFormations(announce: boolean) {
     if (settledPlaces.some((place) => place.id === followedPlaceIdentityId)) followedPlaceIdentityId = null;
   } else if (announce && revealed.length) {
     const formation = FORMATION_BY_ID.get(revealed.at(-1)!);
-    if (formation) showToast(`New formation: ${formation.title}. Recorded in the Atlas.`);
+    const voyageCompleting = campaign.mode === 'campaign' && !campaign.ready && formationOccurrences.some(({ id }) => id === currentLesson(campaign)?.id);
+    if (formation && !voyageCompleting && !(campaign.mode === 'campaign' && formation.id === currentLesson(campaign)?.id)) showToast(`New formation: ${formation.title}. Recorded in the Atlas.`);
   }
+  updateCampaign(announce);
   updateFirstTideGuide();
   updateSecondTideIntroduction();
   updateThirdTideIntroduction();
   updateThreadStatus();
   if (document.querySelector('#journal-scrim')?.classList.contains('show')) renderJournal();
 }
+
+function voyageEvent(event: string, extra: Record<string, number | string> = {}) {
+  const entry = { event, session: voyageSession, at: new Date().toISOString(), lesson: campaign.completed + 1, elapsedMs: Math.round(performance.now()), device: matchMedia('(pointer: coarse)').matches ? 'touch' : 'desktop', ...extra };
+  // Local, bounded diagnostics for moderated sessions; no network or personal data.
+  try {
+    const previous = JSON.parse(localStorage.getItem('little-tides-voyage-events-v1') ?? '[]');
+    localStorage.setItem('little-tides-voyage-events-v1', JSON.stringify([...(Array.isArray(previous) ? previous : []).slice(-199), entry]));
+  } catch { /* Diagnostics must not interrupt play. */ }
+  window.dispatchEvent(new CustomEvent('little-tides:voyage', { detail: entry }));
+}
+
+function renderVoyage() {
+  const lesson = currentLesson(campaign);
+  const active = Boolean(lesson && formationOccurrences.some(({ id }) => id === lesson.id));
+  renderCampaignCard(document.querySelector<HTMLElement>('#campaign-card')!, campaign, {
+    guidance: voyageGuidance, returning: voyageReturning, active,
+    discoveredEarly: Boolean(lesson && !campaign.ready && knownFormations.has(lesson.id)),
+    touch: matchMedia('(pointer: coarse)').matches, help: voyageHelp,
+  });
+  const prompt = document.querySelector<HTMLElement>('#voyage-pointer')!;
+  const firstBuild = campaign.mode === 'campaign' && campaign.started !== false && campaign.completed === 0 && !city.cells.size;
+  prompt.classList.toggle('show', firstBuild);
+  prompt.textContent = matchMedia('(pointer: coarse)').matches ? 'Build is selected. Tap the gold ripple.' : 'Click the gold ripple to raise a home.';
+}
+
+function updateCampaign(edited = false) {
+  const previous = campaign;
+  campaign = observeCampaign(campaign, formationOccurrences);
+  const oldGuidance = voyageGuidance;
+  if (campaign.mode === 'campaign') {
+    if (edited && lastVoyageEdit && voyageAnchor && Math.hypot(lastVoyageEdit.x - voyageAnchor.x, lastVoyageEdit.z - voyageAnchor.z) < 4) voyageFresh = false;
+    voyageGuidance = campaignGuidance(campaign, city.cells, (x, z) => city.isBuildable(x, z), voyageAnchor ?? {
+      x: Math.round(controls.target.x / CELL_SIZE), z: Math.round(controls.target.z / CELL_SIZE),
+    }, voyageFresh);
+    if (voyageGuidance) voyageAnchor = voyageGuidance.anchor;
+    if (edited && !campaign.ready) {
+      const relevant = !lastVoyageEdit || !oldGuidance || oldGuidance.markers.some((point) => Math.hypot(point.x - lastVoyageEdit!.x, point.z - lastVoyageEdit!.z) <= 2);
+      if (relevant) {
+        const improving = oldGuidance && (voyageGuidance?.remaining ?? Infinity) < oldGuidance.remaining;
+        voyageIncorrectEdits = improving ? 0 : voyageIncorrectEdits + 1;
+        if (voyageIncorrectEdits === 3) {
+          campaign = { ...campaign, expanded: true, planExpanded: true };
+          voyageEvent('recovery_shown');
+        }
+      }
+    }
+  }
+  if (campaign !== previous) persistSoon();
+  document.querySelector('.hud')!.classList.toggle('campaign-active', campaign.mode === 'campaign');
+  document.querySelector('#campaign-open')!.setAttribute('aria-label', 'Open Formation Voyage');
+  renderVoyage();
+  if (!previous.ready && campaign.ready && edited) {
+    voyageReturning = '';
+    voyageEvent('formation_collected');
+    const lesson = currentLesson(campaign)!;
+    const occurrence = formationOccurrences.find(({ id }) => id === lesson.id)!;
+    voyageReveal = { ...occurrence, until: performance.now() + (chapterInfo(campaign).complete ? 9000 : 8000) };
+    if (!reducedVoyageMotion.matches) city.celebrateAt(occurrence.x, occurrence.z);
+    softTone(440, .16);
+    window.setTimeout(() => softTone(660, .2), 100);
+    if (chapterInfo(campaign).complete) {
+      voyageEvent('chapter_collected');
+      citizens.gatherAt(occurrence.x, occurrence.z, 'celebrating a new chapter of the harbor');
+    }
+    if (campaign.completed === 1) { campaign = { ...campaign, expanded: true }; renderVoyage(); }
+    if (voyageKeyboard) {
+      campaign = { ...campaign, expanded: true };
+      renderVoyage();
+      document.querySelector<HTMLElement>('#campaign-card h2')?.focus({ preventScroll: true });
+    }
+  }
+  if (campaign.completed === 17 && campaign.ready && campaign.mode === 'campaign') {
+    campaign = advanceCampaign(campaign, formationOccurrences);
+    localStorage.setItem(SANDBOX_UNLOCK_KEY, 'true');
+    voyageEvent('sandbox_unlocked');
+    moveVoyageCamera(controls.target.clone(), true);
+    if (!reducedVoyageMotion.matches) formationOccurrences.slice(0, 6).forEach((formation, index) => window.setTimeout(() => {
+      city.celebrateAt(formation.x, formation.z);
+      softTone(330 + index * 66, .18);
+    }, index * 220));
+    renderVoyage();
+    updateVoyageMarkers();
+    if (voyageKeyboard) document.querySelector<HTMLElement>('#campaign-card h2')?.focus({ preventScroll: true });
+    saveTown();
+  }
+}
+
+function openCampaign() {
+  setJournalView('campaign');
+  setJournalOpen(true);
+}
+
+function moveVoyageCamera(target: THREE.Vector3, pullBack = false) {
+  director.follow(null);
+  director.noteInput();
+  const offset = camera.position.clone().sub(controls.target);
+  if (pullBack) offset.multiplyScalar(1.12);
+  const destination = target.clone().add(offset);
+  if (reducedVoyageMotion.matches) {
+    controls.target.copy(target);
+    camera.position.copy(destination);
+    controls.update();
+  } else voyageCameraMove = { from: controls.target.clone(), to: target, cameraFrom: camera.position.clone(), cameraTo: destination, start: performance.now() };
+}
+
+function updateVoyageWorld() {
+  if (voyageCameraMove) {
+    const move = voyageCameraMove;
+    const t = reducedVoyageMotion.matches ? 1 : Math.min(1, (performance.now() - move.start) / 900);
+    const eased = t * t * (3 - 2 * t);
+    controls.target.lerpVectors(move.from, move.to, eased);
+    camera.position.lerpVectors(move.cameraFrom, move.cameraTo, eased);
+    if (t === 1) voyageCameraMove = undefined;
+  }
+  const label = document.querySelector<HTMLElement>('#voyage-reveal')!;
+  const visible = voyageReveal && voyageReveal.until > performance.now() && campaign.mode === 'campaign' && !photo.active;
+  label.classList.toggle('show', Boolean(visible));
+  if (visible && voyageReveal) {
+    const point = city.worldPosition(voyageReveal.x, voyageReveal.z).setY(1).project(camera);
+    const x = (point.x + 1) * innerWidth / 2, y = (1 - point.y) * innerHeight / 2;
+    const offscreen = point.z > 1 || x < 100 || x > innerWidth - 100 || y < 110 || y > innerHeight - 100;
+    label.textContent = `${FORMATION_BY_ID.get(voyageReveal.id)!.title}${offscreen ? ' · View formation' : ' ✓'}`;
+    label.style.left = `${Math.max(110, Math.min(innerWidth - 110, x))}px`;
+    const cardTop = document.querySelector('#campaign-card')!.getBoundingClientRect().top;
+    const maxY = innerWidth <= 750 ? Math.max(120, cardTop - 55) : innerHeight - 120;
+    label.style.top = `${Math.max(120, Math.min(maxY, y - 35))}px`;
+  }
+  if (performance.now() - voyageLayoutAt < 200 || campaign.mode !== 'campaign') return;
+  voyageLayoutAt = performance.now();
+  const panel = document.querySelector<HTMLElement>('#campaign-card')!;
+  if (campaign.started === false) return;
+  const points = (voyageGuidance?.markers ?? []).map((marker) => {
+    const point = city.worldPosition(marker.x, marker.z).setY(marker.height ? .7 + marker.height * FLOOR_HEIGHT : 0).project(camera);
+    return { x: (point.x + 1) * innerWidth / 2, y: (1 - point.y) * innerHeight / 2 };
+  });
+  const box = panel.getBoundingClientRect();
+  const lowerRight = points.some(({ x, y }) => x > innerWidth - box.width - 40 && y > box.top - 30);
+  const lowerLeft = points.some(({ x, y }) => x < box.width + 40 && y > box.top - 30);
+  if (innerWidth > 750) {
+    panel.classList.toggle('voyage-left', lowerRight && !lowerLeft);
+    panel.classList.remove('voyage-above');
+    panel.style.maxHeight = '';
+  }
+  else {
+    panel.classList.remove('voyage-left');
+    const markerY = Math.max(...points.filter(({ x, y }) => x > 0 && x < innerWidth && y > 140 && y < innerHeight - 110).map(({ y }) => y));
+    const roomBelow = innerHeight - 105 - markerY - 38;
+    const above = Number.isFinite(markerY) && roomBelow < 140;
+    panel.classList.toggle('voyage-above', above);
+    const roomAbove = Math.min(...points.filter(({ y }) => y > 140).map(({ y }) => y)) - 180;
+    panel.style.maxHeight = Number.isFinite(markerY) ? `${Math.max(90, above ? roomAbove : roomBelow)}px` : '';
+  }
+}
+
+document.querySelector('#campaign-open')!.addEventListener('click', openCampaign);
+document.querySelector('#campaign-card')!.addEventListener('toggle', (event) => {
+  const detail = event.target as HTMLDetailsElement;
+  if (!detail.isConnected) return;
+  const field = detail.classList.contains('campaign-fold') ? 'expanded' : detail.classList.contains('campaign-example') ? 'planExpanded' : undefined;
+  if (!field || campaign[field] === detail.open) return;
+  campaign = { ...campaign, [field]: detail.open };
+  if (field === 'expanded') detail.querySelector('summary')?.setAttribute('aria-expanded', String(detail.open));
+  persistSoon();
+}, true);
+document.querySelector('.hud')!.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-campaign-action]');
+  if (!button || button.disabled) return;
+  // Native details toggle events are queued; capture the visible state before navigation.
+  if (button.closest('#campaign-card')) {
+    const fold = document.querySelector<HTMLDetailsElement>('#campaign-card .campaign-fold');
+    const plan = document.querySelector<HTMLDetailsElement>('#campaign-card .campaign-example');
+    campaign = { ...campaign, expanded: fold?.open ?? campaign.expanded, planExpanded: plan?.open ?? campaign.planExpanded };
+  }
+  switch (button.dataset.campaignAction) {
+    case 'help': voyageHelp = true; renderVoyage(); return;
+    case 'help-back': voyageHelp = false; renderVoyage(); return;
+    case 'start':
+      campaign = { ...campaign, started: true };
+      setTouchMode('build');
+      voyageEvent('welcome_started');
+      document.querySelector('[data-touch-mode="build"]')!.classList.add('voyage-pulse');
+      break;
+    case 'journey': openCampaign(); return;
+    case 'look': campaign = { ...campaign, expanded: false }; break;
+    case 'view': {
+      const lesson = currentLesson(campaign);
+      const occurrence = formationOccurrences.find(({ id }) => id === (lesson?.id ?? voyageReveal?.id));
+      if (occurrence) moveVoyageCamera(city.worldPosition(occurrence.x, occurrence.z).setY(1));
+      else showToast('This formation has been reshaped. Your progress is safe.');
+      setJournalOpen(false);
+      return;
+    }
+    case 'water': {
+      const point = findCampaignWater(city.cells, (x, z) => city.isBuildable(x, z), { x: controls.target.x / CELL_SIZE, z: controls.target.z / CELL_SIZE });
+      if (!point) { showToast('The harbor is full. Lower a few homes to make room; collected stamps stay yours.'); return; }
+      voyageAnchor = point;
+      voyageFresh = true;
+      moveVoyageCamera(city.worldPosition(point.x, point.z).setY(1.3));
+      voyageEvent('find_open_water');
+      break;
+    }
+    case 'next': {
+      const previous = campaign;
+      campaign = advanceCampaign(campaign, formationOccurrences);
+      if (campaign === previous) return;
+      if (campaign.sandboxUnlocked) localStorage.setItem(SANDBOX_UNLOCK_KEY, 'true');
+      voyageIncorrectEdits = 0;
+      voyageReturning = '';
+      voyageReveal = undefined;
+      if (isNewPattern(campaign.completed)) { voyageAnchor = undefined; voyageFresh = true; }
+      voyageEvent('lesson_started');
+      break;
+    }
+    case 'sandbox':
+      if (!campaign.sandboxUnlocked) return;
+      campaign = { ...campaign, mode: 'sandbox' };
+      onboardingDismissed = true;
+      voyageEvent('sandbox_entered');
+      showToast('Free sandbox. Your harbor is yours to shape.');
+      break;
+    case 'restart':
+    case 'replay':
+      campaign = { ...replayCampaign(campaign, formationOccurrences), started: button.dataset.campaignAction !== 'restart' };
+      voyageAnchor = undefined;
+      voyageFresh = true;
+      voyageReveal = undefined;
+      voyageIncorrectEdits = 0;
+      voyageHelp = false;
+      voyageReturning = '';
+      voyageEvent('voyage_restarted');
+      break;
+    case 'campaign':
+      campaign = { ...campaign, mode: 'campaign', started: true };
+      voyageEvent('lesson_started');
+      break;
+    case 'return': break;
+    default: return;
+  }
+  updateCampaign();
+  updateFirstTideGuide();
+  updateSecondTideIntroduction();
+  setJournalOpen(false);
+  saveTown();
+  if (voyageKeyboard) {
+    if (campaign.mode === 'campaign') document.querySelector<HTMLElement>('#campaign-card .campaign-fold > summary, #campaign-card h2')?.focus({ preventScroll: true });
+    else document.querySelector<HTMLButtonElement>('#mobile-menu-toggle')!.focus();
+  }
+});
 
 function onboardingStep() {
   if (!city.cells.size) return 0;
@@ -1194,9 +1560,9 @@ function crossingBanks(occurrence: FormationOccurrence) {
   return [];
 }
 
-function updateOnboardingMarkers(step: number) {
+function updateOnboardingMarkers(step: number, enabled = !onboardingDismissed) {
   onboardingMarkers.clear();
-  onboardingMarkers.visible = !onboardingDismissed && step < 4;
+  onboardingMarkers.visible = enabled && step < 4;
   if (!onboardingMarkers.visible) return;
 
   const targets: { x: number; z: number; height?: number }[] = [];
@@ -1247,6 +1613,11 @@ function updateOnboardingMarkers(step: number) {
 
 function updateFirstTideGuide() {
   const panel = document.querySelector<HTMLElement>('#first-tide')!;
+  if (campaign.mode === 'campaign') {
+    panel.classList.remove('show');
+    updateVoyageMarkers();
+    return;
+  }
   if (onboardingDismissed) {
     panel.classList.remove('show');
     onboardingMarkers.visible = false;
@@ -1281,7 +1652,7 @@ function updateSecondTideIntroduction() {
   const panel = document.querySelector<HTMLElement>('#second-tide')!;
   const journalOpen = document.querySelector('#journal-scrim')?.classList.contains('show');
   const residents = citizens.residents().filter((resident) => resident.residentKind !== 'visitor').length;
-  const eligible = onboardingDismissed
+  const eligible = campaign.mode === 'sandbox' && onboardingDismissed
     && livingPlaceIntroductionReady(knownFormations, formationOccurrences, residents)
     && !placeIntroductionSeen
     && !followedPlaceIdentityId
@@ -1483,8 +1854,9 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
     return;
   }
   if (discovery.event.id === 'lantern-finale') return;
+  if (campaign.mode === 'campaign' && (campaign.completed < 2 || (voyageReveal && voyageReveal.until > performance.now()))) return;
   showToast(effect.caption);
-  if (focus) controls.target.lerp(city.worldPosition(focus.x, focus.z).setY(1), .14);
+  if (focus && campaign.mode === 'sandbox') controls.target.lerp(city.worldPosition(focus.x, focus.z).setY(1), .14);
   const tones = {
     stone: [310, 430],
     green: [390, 590],
@@ -1640,6 +2012,13 @@ function renderJournal() {
     button.setAttribute('aria-selected', String(selected));
   });
   list.replaceChildren();
+  if (journalView === 'campaign') {
+    document.querySelector('#journal-title')!.textContent = 'Formation Voyage';
+    document.querySelector('.journal-kicker')!.textContent = campaign.mode === 'sandbox' ? 'Free sandbox' : 'Your voyage';
+    document.querySelector('#journal-intro')!.textContent = 'Explore your harbor, one formation at a time.';
+    renderCampaignJourney(list, campaign);
+    return;
+  }
   if (journalView === 'atlas') {
     renderFormationAtlas(list);
     return;
@@ -1762,25 +2141,32 @@ function renderFormationAtlas(list: HTMLDivElement) {
 
   const formationHeading = document.createElement('div');
   formationHeading.className = 'atlas-section-heading';
-  formationHeading.innerHTML = '<strong>Building forms</strong><span>Nearby buildings shape one another.</span>';
+  formationHeading.innerHTML = '<strong>Building forms</strong><span>Nearby buildings shape one another. Basin and lane forms grow through their footprint and connections.</span>';
   const grid = document.createElement('div');
   grid.className = 'atlas-grid';
   for (const formation of FORMATION_CATALOG) {
-    const learned = knownFormations.has(formation.id);
+    const lessonIndex = CAMPAIGN_LESSONS.findIndex(({ id }) => id === formation.id);
+    const future = campaign.mode === 'campaign' && lessonIndex > campaign.completed;
+    const learned = knownFormations.has(formation.id) && (campaign.mode === 'sandbox' || lessonIndex < campaign.completed || lessonIndex === campaign.completed && campaign.ready);
+    const hint = future
+      ? 'A rumor from a later chapter. Its building plan will unfold when you reach it.'
+      : campaign.mode === 'campaign' || formationHintRevealed(formation)
+        ? formation.hint.replaceAll('tile', 'space')
+        : HIDDEN_FORM_HINT;
     const active = activeCounts.get(formation.id) ?? 0;
     const gathering = formationUseCounts.get(formation.id) ?? 0;
     const effectSummary = learned ? formationInfluenceSummary(formation) : '';
     const card = document.createElement('button');
     card.className = `atlas-card ${learned ? 'learned' : 'unknown'} ${active ? 'active-place' : ''}`;
-    card.disabled = !active;
-    if (active) card.dataset.formationId = formation.id;
+    card.disabled = !active || future;
+    if (active && !future) card.dataset.formationId = formation.id;
     card.setAttribute('aria-label', learned
       ? `${formation.title}. ${formation.description} ${effectSummary} ${active ? `${active} currently in town${gathering ? ` with ${gathering} visiting` : ''}; focus formation.` : 'Not currently in town.'}`
-      : `Undiscovered formation. ${formationHintRevealed(formation) ? formation.hint : HIDDEN_FORM_HINT}`);
+      : `Undiscovered formation. ${hint}`);
     const illustration = document.createElement('span');
     illustration.className = 'atlas-illustration';
     illustration.setAttribute('aria-hidden', 'true');
-    if (formationHintRevealed(formation)) illustration.append(createFormationSketch(formation.id));
+    if (!future && (learned || campaign.mode === 'sandbox' && formationHintRevealed(formation))) illustration.append(createFormationSketch(formation.id));
     const mark = document.createElement('span');
     mark.className = 'atlas-mark';
     mark.textContent = learned ? formation.mark : '?';
@@ -1789,9 +2175,15 @@ function renderFormationAtlas(list: HTMLDivElement) {
     const family = document.createElement('small');
     family.textContent = `${formation.family} · ${formation.tier > 1 ? `form ${formation.tier}` : 'first form'}`;
     const title = document.createElement('strong');
-    title.textContent = learned ? formation.title : 'Uncharted form';
+    title.textContent = learned || future || campaign.mode === 'campaign' ? formation.title : 'Uncharted form';
     const description = document.createElement('span');
-    description.textContent = learned ? formation.description : formationHintRevealed(formation) ? formation.hint : HIDDEN_FORM_HINT;
+    description.textContent = learned ? formation.description.replaceAll('tile', 'space') : hint;
+    const footprint = HARBOR_SPACE_PLANS[formation.id];
+    const plan = footprint && learned ? document.createElement('span') : null;
+    if (plan) {
+      plan.className = 'atlas-footprint-plan';
+      plan.innerHTML = `<small>Build plan</small><svg viewBox="0 0 108 72" focusable="false" aria-hidden="true"><g class="journal-sketch-lines">${harborSpacePlanSketch(formation.id)}</g></svg>`;
+    }
     const influence = document.createElement('span');
     influence.className = 'atlas-influence';
     if (learned) {
@@ -1814,18 +2206,26 @@ function renderFormationAtlas(list: HTMLDivElement) {
       influence.append(socialLine, tradeLine);
     }
     const status = document.createElement('em');
-    status.textContent = active
+    status.textContent = future ? knownFormations.has(formation.id) ? 'Discovered early · saved in the Atlas' : 'Rumor' : active
       ? `${active} in town${gathering ? ` · ${gathering} visiting` : ''} · View`
       : learned ? 'Known' : 'Not found';
     copy.append(family, title, description);
+    if (plan) copy.append(plan);
+    const signature = SPACE_SIGNATURES[formation.id as keyof typeof SPACE_SIGNATURES];
+    if (learned && signature) {
+      const signatureNote = document.createElement('span');
+      signatureNote.className = 'atlas-signature-note';
+      signatureNote.textContent = `Town signature · ${signature}`;
+      copy.append(signatureNote);
+    }
     if (learned) copy.append(influence);
     copy.append(status);
     card.append(illustration, mark, copy);
     grid.append(card);
   }
   list.append(formationHeading, grid);
-  renderPlaceIdentityAtlas(list);
-  if (confluencesUnlocked) renderConfluenceAtlas(list);
+  if (campaign.mode === 'sandbox') renderPlaceIdentityAtlas(list);
+  if (campaign.mode === 'sandbox' && confluencesUnlocked) renderConfluenceAtlas(list);
 }
 
 function renderPlaceIdentityAtlas(list: HTMLDivElement) {
@@ -1966,7 +2366,7 @@ function createFormationSketch(id: FormationId) {
   return template.content.firstElementChild!;
 }
 
-function setJournalView(view: 'stories' | 'atlas') {
+function setJournalView(view: 'stories' | 'atlas' | 'campaign') {
   journalView = view;
   renderJournal();
   updateNearMissMarkers();
@@ -2827,7 +3227,7 @@ document.querySelector('#third-tide-atlas')!.addEventListener('click', () => {
 document.querySelector('#journal-open')!.addEventListener('click', () => setJournalOpen(true));
 document.querySelector('#journal-close')!.addEventListener('click', () => setJournalOpen(false));
 document.querySelectorAll<HTMLButtonElement>('[data-journal-view]').forEach((button) => {
-  button.addEventListener('click', () => setJournalView(button.dataset.journalView === 'atlas' ? 'atlas' : 'stories'));
+  button.addEventListener('click', () => setJournalView(button.dataset.journalView === 'campaign' ? 'campaign' : button.dataset.journalView === 'atlas' ? 'atlas' : 'stories'));
 });
 document.querySelector('#journal-scrim')!.addEventListener('click', (event) => {
   if (event.target === event.currentTarget) setJournalOpen(false);
@@ -2997,6 +3397,25 @@ function updateLightning(time: number, rain: number) {
 window.addEventListener('keydown', (event) => {
   // Browser shortcuts such as Cmd+F or Ctrl+P must never trigger game hotkeys.
   if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (photo.active) {
+    if (event.key === 'Tab') {
+      const fields = [...document.querySelectorAll<HTMLElement>('#photo-panel button:not(:disabled), #photo-panel input:not(:disabled), #photo-panel select:not(:disabled)')];
+      const first = fields[0];
+      const last = fields[fields.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+    if (event.key === 'Escape' || (event.key.toLowerCase() === 'f' && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement))) {
+      event.preventDefault();
+      setPhotoMode(false);
+    }
+    return;
+  }
   if (event.key.toLowerCase() === 'p') {
     const panel = document.querySelector<HTMLElement>('#perf-panel')!;
     const showing = !panel.classList.contains('show');
@@ -3048,9 +3467,13 @@ ambience.setCargoState(crafting.goodsSnapshot());
 scene.add(ambience.root);
 renderJournal();
 updateThreadStatus();
+updateCampaign();
 updateFirstTideGuide();
 updateSecondTideIntroduction();
 updateThirdTideIntroduction();
+if (campaign.started === false) voyageEvent('welcome_shown');
+if (voyageReturning) voyageEvent('voyage_returned');
+if (voyageReturning) window.setTimeout(() => { voyageReturning = ''; renderVoyage(); }, 3000);
 
 function refreshAmbience() {
   const catsBefore = ambience.wildlifeStats();
@@ -3158,11 +3581,11 @@ async function startClipRecorder() {
 function setPhotoMode(active: boolean) {
   if (photo.active === active) return;
   photo.active = active;
-  const panel = document.querySelector<HTMLElement>('#photo-panel')!;
+  const panel = document.querySelector<HTMLDialogElement>('#photo-panel')!;
   document.body.classList.toggle('photo-mode', active);
-  panel.classList.toggle('show', active);
   panel.setAttribute('aria-hidden', String(!active));
   if (active) {
+    setTopActionsOpen(false);
     setJournalOpen(false);
     setAboutOpen(false);
     setPostcardOpen(false);
@@ -3175,6 +3598,7 @@ function setPhotoMode(active: boolean) {
     photo.weather = 'sim';
     pipeline!.setDepthOfField(pipeline!.depthOfFieldAvailable ? 'cinematic' : 'off');
     setUiHidden(true);
+    panel.showModal();
     director.beginDrift();
     photoStatus(webCodecsAvailable() ? 'The last seconds are always ready to save as a clip.' : 'Clips record forward from the moment you press Record.');
     void startClipRecorder();
@@ -3184,7 +3608,11 @@ function setPhotoMode(active: boolean) {
     photo.tailSeconds = null;
     palette.set(photo.paletteBefore);
     pipeline!.setDepthOfField(photo.depthOfFieldBefore);
+    panel.close();
     setUiHidden(false);
+    requestAnimationFrame(() => {
+      if (!photo.active) document.querySelector<HTMLButtonElement>('#mobile-menu-toggle')!.focus({ preventScroll: true });
+    });
     photoProgress(null);
   }
   applyViewport();
@@ -3441,6 +3869,10 @@ async function recordTimelapse() {
 
 document.querySelector('#photo-open')!.addEventListener('click', () => setPhotoMode(true));
 document.querySelector('#photo-close')!.addEventListener('click', () => setPhotoMode(false));
+document.querySelector('#photo-panel')!.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  setPhotoMode(false);
+});
 document.querySelector<HTMLInputElement>('#photo-hour')!.addEventListener('input', (event) => {
   photo.hour = Number((event.currentTarget as HTMLInputElement).value);
   if (photo.weather === 'night') photo.weather = 'sim';
@@ -3837,7 +4269,9 @@ function animate() {
     performanceCooldown = 0;
     recoverySeconds = 0;
   }
+  director.driftEnabled = campaign.mode === 'sandbox' && !reducedVoyageMotion.matches;
   director.update(rawDelta);
+  updateVoyageWorld();
   // Cinematic depth of field belongs to the drifting camera; play stays sharp.
   if (!photo.active && pipeline!.depthOfFieldAvailable) {
     const wanted = director.drifting ? 'cinematic' : 'off';

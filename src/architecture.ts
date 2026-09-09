@@ -1,3 +1,4 @@
+import { analyzeHarborSpaces } from './harbor-spaces.ts';
 import { CARDINALS, type Cell, keyOf } from './types.ts';
 import { hash } from './random.ts';
 
@@ -148,6 +149,7 @@ export function isRoofAccessCell(cell: Cell, cells: CellMap, seed: number) {
 }
 
 export function courtyardFeature(x: number, z: number, cells: CellMap): CourtyardFeature | null {
+  if (analyzeHarborSpaces(cells).byTile.has(keyOf(x, z))) return null;
   const occupied = cardinalHeights(x, z, cells).filter((height) => height > 0);
   if (occupied.length < 3) return null;
   const lowestWall = Math.min(...occupied);
@@ -162,7 +164,7 @@ export function courtyardFeature(x: number, z: number, cells: CellMap): Courtyar
  * three-by-three neighborhood as the rest of the procedural architecture.
  */
 export function vegetationPlotFeature(x: number, z: number, cells: CellMap, seed: number): VegetationPlotFeature | null {
-  if (cells.has(keyOf(x, z))) return null;
+  if (cells.has(keyOf(x, z)) || analyzeHarborSpaces(cells).byTile.has(keyOf(x, z))) return null;
   const neighbors = CARDINALS
     .map(([dx, dz], direction) => ({ owner: cells.get(keyOf(x - dx, z - dz)), direction: direction as GridDirection }))
     .filter((candidate): candidate is { owner: Cell; direction: GridDirection } => Boolean(candidate.owner));
@@ -183,6 +185,7 @@ export function vegetationPlotFeature(x: number, z: number, cells: CellMap, seed
 
 /** Opposing buildings progressively turn a water lane into an arch, bridge, then roofed skybridge. */
 export function emptyCrossingFeature(x: number, z: number, cells: CellMap): EmptyArchitectureFeature | null {
+  if (analyzeHarborSpaces(cells).byTile.has(keyOf(x, z))) return null;
   const heights = cardinalHeights(x, z, cells);
   const northSouth = heights[0] > 0 && heights[2] > 0 && heights[1] === 0 && heights[3] === 0;
   const eastWest = heights[1] > 0 && heights[3] > 0 && heights[0] === 0 && heights[2] === 0;

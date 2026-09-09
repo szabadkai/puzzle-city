@@ -14,6 +14,8 @@ export type SavedTown = {
   version: 10;
   seed: number;
   cells: Cell[];
+  /** Guided formation lessons and the permanent sandbox reward. */
+  campaign?: import('./campaign').CampaignSave;
   timeOfDay?: number;
   day?: number;
   citizens?: CitizenSave[];
@@ -60,7 +62,9 @@ export type FormationId =
   | 'stepped-terrace' | 'terraced-garden' | 'lantern-stair'
   | 'rooftop-court' | 'rooftop-pavilion' | 'hanging-roof-garden'
   | 'courtyard-garden' | 'cloister-garden' | 'courtyard-pavilion'
-  | 'harbor-plaza' | 'lookout-tower';
+  | 'harbor-plaza' | 'lookout-tower'
+  | 'sheltered-basin' | 'working-basin' | 'boat-haven'
+  | 'pocket-lane' | 'through-lane' | 'market-lanes';
 
 export type PlaceIdentityId =
   | 'canal-market'

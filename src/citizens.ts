@@ -1,3 +1,4 @@
+import { analyzeHarborSpaces } from './harbor-spaces';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { businessLabel, businessOccupation, businessProsperityTier, isBusinessOpen } from './businesses';
@@ -407,15 +408,13 @@ export class NavGraph {
     for (const occurrence of detectFormations(this.cells)) {
       const definition = FORMATION_BY_ID.get(occurrence.id);
       if (!definition) continue;
+      const distanceToForm = (node: NavNode) => Math.min(...(occurrence.footprint ?? [occurrence]).map((point) =>
+        Math.hypot(node.position.x - point.x * CELL, node.position.z - point.z * CELL)));
       const elevated = definition.family === 'rooftop' || definition.family === 'terrace' || occurrence.id === 'roof-promenade';
       const nearby = [...this.nodes.values()]
-        .filter((node) => Math.hypot(node.position.x - occurrence.x * CELL, node.position.z - occurrence.z * CELL) <= CELL * 2.35)
+        .filter((node) => distanceToForm(node) <= CELL * 2.35)
         .filter((node) => elevated ? this.rooftops.has(node.key) : !this.rooftops.has(node.key))
-        .sort((a, b) => {
-          const distanceA = Math.hypot(a.position.x - occurrence.x * CELL, a.position.z - occurrence.z * CELL);
-          const distanceB = Math.hypot(b.position.x - occurrence.x * CELL, b.position.z - occurrence.z * CELL);
-          return distanceA - distanceB;
-        });
+        .sort((a, b) => distanceToForm(a) - distanceToForm(b));
       const representedComponents = new Set<string>();
       for (const node of nearby) {
         const component = this.componentByNode.get(node.key);
@@ -513,6 +512,7 @@ export class NavGraph {
   }
 
   private build() {
+    const spaces = analyzeHarborSpaces(this.cells);
     const plazaAnchors = findPlazaAnchors(this.cells);
     const lanternTheatreAnchors = new Set(detectPlaceIdentities(detectFormations(this.cells))
       .filter((identity) => identity.id === 'lantern-square')
@@ -540,7 +540,8 @@ export class NavGraph {
         const a = this.addNode(centerX + lx * EDGE, centerZ + lz * EDGE);
         const middle = this.addNode(centerX, centerZ);
         const b = this.addNode(centerX - lx * EDGE, centerZ - lz * EDGE);
-        if (hasDock(cell, dir, this.seed)) this.docks.push(middle);
+        const waterSpace = spaces.byTile.get(keyOf(cell.x + dx, cell.z + dz));
+        if (waterSpace?.kind === 'basin' || !spaces.ground.has(keyOf(cell.x + dx, cell.z + dz)) && hasDock(cell, dir, this.seed)) this.docks.push(middle);
         sides[dir] = { a, b };
         this.connect(a, middle);
         this.connect(middle, b);
@@ -568,7 +569,7 @@ export class NavGraph {
     // Courtyards become tiny walkable shortcuts linking their surrounding doors.
     for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
       if (this.cells.has(keyOf(x, z))) continue;
-      if (plazaCells.has(keyOf(x, z))) continue;
+      if (plazaCells.has(keyOf(x, z)) || spaces.byTile.has(keyOf(x, z))) continue;
       const neighbors = CARDINALS.map(([dx, dz]) => this.cells.get(keyOf(x + dx, z + dz)));
       if (neighbors.filter(Boolean).length < 3) continue;
       const center = this.addNode(x * CELL, z * CELL);
@@ -578,6 +579,21 @@ export class NavGraph {
         const edge = this.addNode(x * CELL + dx * (CELL - WALK_OUT), z * CELL + dz * (CELL - WALK_OUT));
         this.connect(center, edge);
       });
+    }
+
+    for (const space of spaces.spaces) {
+      if (space.kind !== 'lane') continue;
+      for (const { x, z } of space.tiles) {
+        const center = this.addNode(x * CELL, z * CELL);
+        for (const [dx, dz] of CARDINALS) {
+          if (this.cells.has(keyOf(x + dx, z + dz))) {
+            const edge = this.addNode(x * CELL + dx * (CELL - WALK_OUT), z * CELL + dz * (CELL - WALK_OUT));
+            this.connect(center, edge);
+          } else if (spaces.ground.has(keyOf(x + dx, z + dz))) {
+            this.connect(center, this.addNode((x + dx) * CELL, (z + dz) * CELL));
+          }
+        }
+      }
     }
 
     for (const anchor of plazaAnchors) {
@@ -616,7 +632,7 @@ export class NavGraph {
     }
 
     for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
-      if (this.cells.has(keyOf(x, z)) || plazaCells.has(keyOf(x, z))) continue;
+      if (this.cells.has(keyOf(x, z)) || plazaCells.has(keyOf(x, z)) || spaces.byTile.has(keyOf(x, z))) continue;
       const heights = CARDINALS.map(([dx, dz]) => this.cells.get(keyOf(x + dx, z + dz))?.height ?? 0);
       const northSouth = heights[0] >= 3 && heights[2] >= 3 && heights[1] === 0 && heights[3] === 0;
       const eastWest = heights[1] >= 3 && heights[3] >= 3 && heights[0] === 0 && heights[2] === 0;

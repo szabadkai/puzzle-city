@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CARDINALS, type Cell, keyOf } from './types';
 import { hash } from './random';
-import { findPlazaAnchors } from './topology';
+import { analyzeHarborSpaces } from './harbor-spaces';
 import { CELL_SIZE } from './spatial';
 
 export const WORLD_CELL_SIZE = CELL_SIZE;
@@ -32,19 +32,8 @@ export function createDockNavigationPath(cells: Iterable<Cell>, dock: ShorelineE
   const blocked = new Set(cellList.map((cell) => keyOf(cell.x, cell.z)));
   const occupied = new Map(cellList.map((cell) => [keyOf(cell.x, cell.z), cell]));
 
-  // Plazas and almost-enclosed courtyards render as solid ground even though
-  // they do not have Cell records, so boats must route around those as well.
-  for (const anchor of findPlazaAnchors(occupied)) {
-    blocked.add(keyOf(anchor.x, anchor.z));
-    blocked.add(keyOf(anchor.x + 1, anchor.z));
-    blocked.add(keyOf(anchor.x, anchor.z + 1));
-    blocked.add(keyOf(anchor.x + 1, anchor.z + 1));
-  }
-  for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
-    if (blocked.has(keyOf(x, z))) continue;
-    const landSides = CARDINALS.filter(([dx, dz]) => occupied.has(keyOf(x + dx, z + dz))).length;
-    if (landSides >= 3) blocked.add(keyOf(x, z));
-  }
+  // Dry passages and courts share the exact footprint used by feet and meshes.
+  for (const key of analyzeHarborSpaces(occupied).ground) blocked.add(key);
 
   const outwardX = dock.water.x - dock.land.x;
   const outwardZ = dock.water.z - dock.land.z;
@@ -168,18 +157,8 @@ export function hasWaterStairs(cell: Cell, direction: number, seed: number) {
 export function analyzeWaterTopology(cells: Iterable<Cell>, seed: number): WaterTopology {
   const cellList = [...cells];
   const occupied = new Map(cellList.map((cell) => [keyOf(cell.x, cell.z), cell]));
-  const groundFeatures = new Set<string>();
-  for (const anchor of findPlazaAnchors(occupied)) {
-    groundFeatures.add(keyOf(anchor.x, anchor.z));
-    groundFeatures.add(keyOf(anchor.x + 1, anchor.z));
-    groundFeatures.add(keyOf(anchor.x, anchor.z + 1));
-    groundFeatures.add(keyOf(anchor.x + 1, anchor.z + 1));
-  }
-  for (let x = -9; x <= 9; x++) for (let z = -9; z <= 9; z++) {
-    if (occupied.has(keyOf(x, z)) || groundFeatures.has(keyOf(x, z))) continue;
-    const landSides = CARDINALS.filter(([dx, dz]) => occupied.has(keyOf(x + dx, z + dz))).length;
-    if (landSides >= 3) groundFeatures.add(keyOf(x, z));
-  }
+  const spaces = analyzeHarborSpaces(occupied);
+  const groundFeatures = spaces.ground;
   const shoreline: ShorelineEdge[] = [];
 
   for (const cell of cellList) {
@@ -190,7 +169,7 @@ export function analyzeWaterTopology(cells: Iterable<Cell>, seed: number): Water
         land: Object.freeze({ x: cell.x, z: cell.z }),
         water: Object.freeze({ x: cell.x + dx, z: cell.z + dz }),
         direction,
-        dock: hasDock(cell, direction, seed),
+        dock: !spaces.byTile.has(keyOf(cell.x + dx, cell.z + dz)) && hasDock(cell, direction, seed),
       }));
     });
   }
@@ -203,15 +182,15 @@ export function analyzeWaterTopology(cells: Iterable<Cell>, seed: number): Water
   for (const point of candidates.values()) {
     const cardinal = CARDINALS.map(([dx, dz]) => occupied.has(keyOf(point.x + dx, point.z + dz)));
     const landSides = cardinal.filter(Boolean).length;
-    if (landSides >= 3) continue; // Rendered as a courtyard rather than navigable water.
+    if (groundFeatures.has(keyOf(point.x, point.z))) continue;
     const oppositeBanks = (cardinal[0] && cardinal[2]) || (cardinal[1] && cardinal[3]);
-    if (oppositeBanks && landSides === 2) canals.push(point);
+    if (oppositeBanks && landSides === 2 && !spaces.byTile.has(keyOf(point.x, point.z))) canals.push(point);
 
     let nearbyLand = 0;
     for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
       if (occupied.has(keyOf(point.x + dx, point.z + dz))) nearbyLand += 1;
     }
-    if (landSides === 2 || nearbyLand >= 6) sheltered.push(point);
+    if (spaces.byTile.get(keyOf(point.x, point.z))?.kind === 'basin' || landSides === 2 || nearbyLand >= 6) sheltered.push(point);
   }
 
   return Object.freeze({

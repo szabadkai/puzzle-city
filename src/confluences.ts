@@ -204,6 +204,11 @@ export function confluenceProgress(id: ConfluenceId, formations: readonly Format
   });
 }
 
+/** Every active formation that can fill one of the three roles of this Confluence. */
+export function confluenceMembers(id: ConfluenceId, formations: readonly FormationOccurrence[]) {
+  return formations.filter((formation) => roleMatches(id, 0, formation) || roleMatches(id, 1, formation) || roleMatches(id, 2, formation));
+}
+
 export function confluenceLandmarkSocket(occurrence: ConfluenceOccurrence): ConfluenceLandmarkSocket {
   const definition = CONFLUENCE_BY_ID.get(occurrence.id)!;
   const preferred = occurrence.members.find((member) => {

@@ -31,6 +31,7 @@ import {
   PLACE_IDENTITY_BY_ID,
   PLACE_IDENTITY_CATALOG,
   placeBusinessAffinity,
+  placeIdentityMembers,
   placeIdentityProgress,
   placeLandmarkSocket,
   livingPlaceIntroductionReady,
@@ -40,6 +41,7 @@ import {
   CONFLUENCE_BY_ID,
   CONFLUENCE_CATALOG,
   confluenceLandmarkSocket,
+  confluenceMembers,
   confluenceProgress,
   confluenceSupersedesPlace,
   detectConfluences,
@@ -87,14 +89,39 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <button id="journal-open" class="journal-quick" aria-label="Open observation journal"><span class="desktop-journal-label">Journal</span><span class="mobile-journal-label" aria-hidden="true">▤</span><span id="journal-count">0</span></button>
       <div class="top-actions">
-        <button id="mobile-menu-toggle" class="mobile-menu-toggle" aria-label="Open town controls" aria-controls="top-actions-menu" aria-expanded="false"><span aria-hidden="true">☰</span></button>
-        <div class="top-actions-menu" id="top-actions-menu">
-          <button id="observe-toggle" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="desktop-observe-label">Observe</span><span class="mobile-observe-label" aria-hidden="true">◉</span></button>
-          <button id="music-toggle" aria-label="Turn music off" aria-pressed="true"><span>Music</span><span class="music-state" aria-hidden="true">♫</span></button>
-          <button id="ui-hide" aria-label="Hide the interface for a screenshot"><span class="desktop-hide-label">Hide UI</span><span class="mobile-hide-label" aria-hidden="true">◫</span></button>
-          <button id="postcard-open" aria-label="Save or load a tide postcard"><span class="desktop-postcard-label">Postcard</span><span class="mobile-postcard-label" aria-hidden="true">⇧</span></button>
-          <button id="about-open" aria-label="About Little Tides"><span class="desktop-about-label">About</span><span class="mobile-about-label" aria-hidden="true">i</span></button>
-          <button id="reset" aria-label="Start a new town"><span class="desktop-reset-label">New tide</span><span class="mobile-reset-label" aria-hidden="true">↻</span></button>
+        <button id="mobile-menu-toggle" class="mobile-menu-toggle" aria-label="Open town menu" aria-controls="top-actions-menu" aria-expanded="false" aria-haspopup="dialog"><span class="menu-glyph" aria-hidden="true">☰</span><span class="menu-glyph-close" aria-hidden="true">×</span></button>
+        <div class="menu-scrim" id="menu-scrim"></div>
+        <div class="top-actions-menu" id="top-actions-menu" role="dialog" aria-modal="true" aria-labelledby="menu-title" aria-hidden="true" tabindex="-1" inert>
+          <i class="menu-handle" aria-hidden="true"></i>
+          <header class="menu-head">
+            <span class="menu-kicker">Town menu</span>
+            <strong id="menu-title">Little Tides</strong>
+            <span class="menu-clock" id="menu-clock" aria-hidden="true">Day 1 · 07:30</span>
+            <span class="menu-stamp" aria-hidden="true">潮</span>
+          </header>
+          <div class="menu-section" role="group" aria-labelledby="menu-kicker-watch">
+            <span class="menu-kicker" id="menu-kicker-watch">Watch</span>
+            <button id="observe-toggle" class="menu-row menu-switch" style="--i:0" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="menu-icon" aria-hidden="true">◉</span><span class="menu-label">Observe<small>Pick a person or place to read its history</small></span><span class="menu-knob" aria-hidden="true"></span></button>
+            <button id="music-toggle" class="menu-row menu-switch" style="--i:1" aria-label="Turn music off" aria-pressed="true" data-keep-open><span class="menu-icon music-state" aria-hidden="true">♫</span><span class="menu-label">Music</span><span class="menu-knob" aria-hidden="true"></span></button>
+          </div>
+          <div class="menu-section" role="group" aria-labelledby="menu-kicker-keep">
+            <span class="menu-kicker" id="menu-kicker-keep">Keep</span>
+            <button id="postcard-open" class="menu-row" style="--i:2" aria-label="Save or load a tide postcard"><span class="menu-icon" aria-hidden="true">⇧</span><span class="menu-label">Postcard<small>Save, share, or reload the town as a PNG</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
+            <button id="ui-hide" class="menu-row" style="--i:3" aria-label="Hide the interface for a screenshot"><span class="menu-icon" aria-hidden="true">◫</span><span class="menu-label">Hide UI<small>Tap the bottom-right corner or press H to bring it back</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
+          </div>
+          <div class="menu-section" role="group" aria-labelledby="menu-kicker-town">
+            <span class="menu-kicker" id="menu-kicker-town">Town</span>
+            <label class="menu-row menu-field" style="--i:4" for="quality-select"><span class="menu-icon" aria-hidden="true">✦</span><span class="menu-label">Graphics quality<small>A change reloads the town</small></span><select id="quality-select" aria-label="Graphics quality"><option value="auto">Auto</option><option value="low">Low</option><option value="mid">Medium</option><option value="high">High</option></select></label>
+            <button id="reset" class="menu-row" style="--i:5" aria-label="Start a new town" aria-expanded="false" aria-controls="reset-confirm" data-keep-open><span class="menu-icon" aria-hidden="true">↻</span><span class="menu-label">New tide<small>Let this town drift away</small></span><span class="menu-chevron" aria-hidden="true">›</span></button>
+            <div class="menu-confirm" id="reset-confirm" hidden>
+              <p>Let this town drift away and begin with a new tide?</p>
+              <button id="reset-cancel" data-keep-open>Keep this town</button>
+              <button id="reset-confirm-yes">Begin a new tide</button>
+            </div>
+          </div>
+          <footer class="menu-foot" style="--i:6">
+            <button id="about-open" class="menu-foot-link" aria-label="About Little Tides">About Little Tides</button>
+          </footer>
         </div>
       </div>
     </div>
@@ -172,6 +199,13 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <p id="second-tide-hint">New place clues are waiting in the Atlas.</p>
       <button class="second-tide-atlas" id="second-tide-atlas">Explore living places</button>
     </aside>
+    <aside class="second-tide" id="third-tide" aria-live="polite">
+      <button class="second-tide-close" id="third-tide-close" aria-label="Dismiss the confluence introduction">×</button>
+      <span>Third tide</span>
+      <strong>Three shapes, one cluster</strong>
+      <p>Seven Confluences wait in the Atlas. Each needs three forms, and every pair must stand within three tiles.</p>
+      <button class="second-tide-atlas" id="third-tide-atlas">Explore confluences</button>
+    </aside>
     <aside class="lantern-finale-card" id="lantern-finale-card" aria-live="polite">
       <span>Five lights, one harbor</span>
       <strong>All the Lanterns</strong>
@@ -240,14 +274,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <div><dt>History</dt><dd>Choose Observe, then select a person or place.</dd></div>
           </dl>
         </section>
-        <label class="quality-setting" for="quality-select">Graphics quality
-          <select id="quality-select" aria-label="Graphics quality">
-            <option value="auto">Auto</option>
-            <option value="low">Low</option>
-            <option value="mid">Medium</option>
-            <option value="high">High</option>
-          </select>
-        </label>
         <p class="creator-credit">Made by <a href="https://szabadkai.com" target="_blank" rel="noreferrer">Levente Szabadkai</a> · <a href="https://github.com/szabadkai/puzzle-city" target="_blank" rel="noreferrer">GitHub</a>.</p>
         <a class="feedback-link" href="https://github.com/szabadkai/puzzle-city/issues/new" target="_blank" rel="noreferrer">Send feedback on GitHub</a>
         <details class="music-credit">
@@ -428,6 +454,7 @@ controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 controls.touches.ONE = THREE.TOUCH.ROTATE;
 controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
 const director = new CameraDirector(camera, controls, renderer.domElement);
+controls.addEventListener('start', releaseCameraHold);
 
 const hemi = new THREE.HemisphereLight(0xffe8bd, 0x315f63, 2.25);
 scene.add(hemi);
@@ -545,6 +572,9 @@ city.setPlaceIdentities(placeIdentityOccurrences.filter((place) => !confluenceOc
 city.setConfluences(confluenceOccurrences);
 let onboardingDismissed = saved?.onboardingDismissed ?? Boolean(saved?.cells.length);
 let placeIntroductionSeen = saved?.placeIntroductionSeen ?? Boolean(saved?.placeIdentities?.length);
+let confluenceIntroductionSeen = saved?.confluenceIntroductionSeen ?? Boolean(saved?.confluences?.length);
+const revealedFormationHints = new Set<FormationId>(saved?.formationHints ?? []);
+revealNearMissHints(formationOccurrences);
 let journalView: 'stories' | 'atlas' = 'stories';
 const citizens = new CitizenSystem(seed, city.cells, saved?.citizens ?? []);
 scene.add(citizens.root);
@@ -585,8 +615,21 @@ const onboardingMarkerMaterial = new THREE.MeshBasicMaterial({
   depthTest: false,
 });
 const onboardingMarkers = new THREE.Group();
-onboardingMarkers.userData.nonPrintable = true;
-scene.add(onboardingMarkers);
+const clueRingMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffd477,
+  transparent: true,
+  opacity: .3,
+  depthWrite: false,
+  depthTest: false,
+  side: THREE.DoubleSide,
+});
+const clueRingGeometries = new Map<number, THREE.RingGeometry>();
+const clueRings = new THREE.Group();
+const nearMissMarkers = new THREE.Group();
+const guides = new THREE.Group();
+guides.userData.nonPrintable = true;
+guides.add(onboardingMarkers, clueRings, nearMissMarkers);
+scene.add(guides);
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -599,6 +642,12 @@ let gesturePointerId: number | null = null;
 let multiTouchGesture = false;
 let dragged = false;
 let toastTimer = 0;
+let toastHoldUntil = 0;
+let deferredToastTimer = 0;
+let celebrationHoldRelease = 0;
+let celebrationDuskStartedAt: number | null = null;
+let thirdTideTimer = 0;
+let thirdTideEligibleSince: number | null = null;
 let saveTimer = 0;
 let secondTideTimer = 0;
 let secondTideEligibleSince: number | null = null;
@@ -935,6 +984,8 @@ function currentTownData(): SavedTown {
     harborLanternMode: 'confluence-mastery',
     onboardingDismissed,
     placeIntroductionSeen,
+    confluenceIntroductionSeen,
+    formationHints: [...revealedFormationHints],
     palette: palette.id,
     history: buildHistory.length ? buildHistory : undefined,
   };
@@ -974,12 +1025,73 @@ async function loadSharedTown(): Promise<SavedTown | null> {
   return town;
 }
 
-function showToast(message: string) {
+/** Longer celebration toasts hold the slot; ordinary captions wait until they end. */
+function showToast(message: string, durationMs = 2200) {
+  const now = performance.now();
+  if (durationMs <= 2200 && now < toastHoldUntil) {
+    window.clearTimeout(deferredToastTimer);
+    deferredToastTimer = window.setTimeout(() => showToast(message, durationMs), toastHoldUntil - now + 150);
+    return;
+  }
+  if (durationMs > 2200) toastHoldUntil = now + durationMs;
   const toast = document.querySelector<HTMLDivElement>('#toast')!;
   toast.textContent = message;
   toast.classList.add('show');
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2200);
+  toastTimer = window.setTimeout(() => toast.classList.remove('show'), durationMs);
+}
+
+const CELEBRATION_DUSK_SECONDS = 6;
+const HIDDEN_FORM_HINT = 'Its shape is still hidden. Build the form before it and look again.';
+
+/** Keep the camera on a landmark for a few seconds. A drag releases it early. */
+function holdCameraOn(x: number, z: number, seconds: number) {
+  const target = city.worldPosition(x, z).setY(1);
+  director.follow(() => target);
+  window.clearTimeout(celebrationHoldRelease);
+  celebrationHoldRelease = window.setTimeout(releaseCameraHold, seconds * 1000);
+}
+
+function releaseCameraHold() {
+  window.clearTimeout(celebrationHoldRelease);
+  if (selectedCitizenId === null) director.follow(null);
+}
+
+function beginCelebrationDusk() {
+  if (timeOfDay > 7 && timeOfDay < 17.5) celebrationDuskStartedAt = performance.now();
+}
+
+/** Blend a daytime hour toward dusk for a few seconds while a Confluence forms. */
+function celebrationDuskHour(hour: number) {
+  if (celebrationDuskStartedAt === null) return hour;
+  const elapsed = (performance.now() - celebrationDuskStartedAt) / 1000;
+  if (elapsed >= CELEBRATION_DUSK_SECONDS) {
+    celebrationDuskStartedAt = null;
+    return hour;
+  }
+  const weight = Math.sin(Math.PI * elapsed / CELEBRATION_DUSK_SECONDS);
+  return THREE.MathUtils.lerp(hour, 18.9, weight * .85);
+}
+
+/** A form's hint appears once the tier below it stands in town. First tiers are always readable. */
+function revealNearMissHints(occurrences: readonly FormationOccurrence[]) {
+  for (const occurrence of occurrences) {
+    const next = nextTierOf(occurrence.id);
+    if (next) revealedFormationHints.add(next.id);
+  }
+}
+
+function nextTierOf(id: FormationId) {
+  const current = FORMATION_BY_ID.get(id);
+  return current && FORMATION_CATALOG.find((formation) => formation.family === current.family && formation.tier === current.tier + 1);
+}
+
+function formationHintRevealed(formation: typeof FORMATION_CATALOG[number]) {
+  return formation.tier === 1 || knownFormations.has(formation.id) || revealedFormationHints.has(formation.id);
+}
+
+function confluenceLayerOpen() {
+  return knownPlaceIdentities.size >= 4 || knownConfluences.size > 0;
 }
 
 function refreshFormations(announce: boolean) {
@@ -998,6 +1110,7 @@ function refreshFormations(announce: boolean) {
   const expanded = formationLineage(formationOccurrences.map((formation) => formation.id));
   const revealed = [...expanded].filter((id) => !knownFormations.has(id));
   for (const id of expanded) knownFormations.add(id);
+  revealNearMissHints(formationOccurrences);
   const revealedPlaces = placeIdentityOccurrences.filter((occurrence) => !knownPlaceIdentities.has(occurrence.id));
   for (const occurrence of placeIdentityOccurrences) knownPlaceIdentities.add(occurrence.id);
   const revealedConfluences = confluenceOccurrences.filter((occurrence) => !knownConfluences.has(occurrence.id));
@@ -1021,13 +1134,19 @@ function refreshFormations(announce: boolean) {
         : '';
     if (definition) showToast(firstDiscovery
       ? `${definition.title} formed here. Three formations raised its ${definition.landmark.title.toLowerCase()}.${lanternNotice}`
-      : `${definition.landmark.title} has returned.${lanternNotice}`);
-    controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .22);
+      : `${definition.landmark.title} has returned.${lanternNotice}`, 5600);
+    if (firstDiscovery) confluenceIntroductionSeen = true;
+    holdCameraOn(landmark.x, landmark.z, CELEBRATION_DUSK_SECONDS);
+    beginCelebrationDusk();
     city.celebrateAt(landmark.x, landmark.z);
     citizens.gatherAt(landmark.x, landmark.z, `welcoming the new ${landmark.title.toLowerCase()}`);
     softTone(360, .16);
     window.setTimeout(() => softTone(540, .2), 80);
     window.setTimeout(() => softTone(760, .22), 160);
+    if (completedLanterns.length) {
+      softTone(1040, .9, .34, .05, 'triangle');
+      softTone(1560, 1.1, .5, .035, 'triangle');
+    }
     if (settledConfluences.some((confluence) => confluence.id === followedConfluenceId)) followedConfluenceId = null;
   } else if (announce && settledPlaces.length) {
     const occurrence = settledPlaces.at(-1)!;
@@ -1037,8 +1156,8 @@ function refreshFormations(announce: boolean) {
     if (firstDiscovery) placeIntroductionSeen = true;
     if (identity) showToast(firstDiscovery
       ? `${identity.title} formed here. Its ${identity.landmark.title.toLowerCase()} marks the spot.`
-      : `${identity.landmark.title} has returned.`);
-    controls.target.lerp(city.worldPosition(landmark.x, landmark.z).setY(1), .22);
+      : `${identity.landmark.title} has returned.`, 4200);
+    holdCameraOn(landmark.x, landmark.z, 4);
     city.celebrateAt(landmark.x, landmark.z);
     citizens.gatherAt(landmark.x, landmark.z, `welcoming the new ${landmark.title.toLowerCase()}`);
     softTone(430, .16);
@@ -1050,6 +1169,7 @@ function refreshFormations(announce: boolean) {
   }
   updateFirstTideGuide();
   updateSecondTideIntroduction();
+  updateThirdTideIntroduction();
   updateThreadStatus();
   if (document.querySelector('#journal-scrim')?.classList.contains('show')) renderJournal();
 }
@@ -1192,6 +1312,83 @@ function dismissSecondTide() {
   window.clearTimeout(secondTideTimer);
   document.querySelector('#second-tide')!.classList.remove('show');
   persistSoon();
+}
+
+function updateThirdTideIntroduction() {
+  const panel = document.querySelector<HTMLElement>('#third-tide')!;
+  const journalOpen = document.querySelector('#journal-scrim')?.classList.contains('show');
+  const eligible = onboardingDismissed
+    && placeIntroductionSeen
+    && confluenceLayerOpen()
+    && !confluenceIntroductionSeen
+    && !followedPlaceIdentityId
+    && !followedConfluenceId;
+  if (!eligible) {
+    thirdTideEligibleSince = null;
+    window.clearTimeout(thirdTideTimer);
+    panel.classList.remove('show');
+    return;
+  }
+  if (thirdTideEligibleSince === null) {
+    thirdTideEligibleSince = performance.now();
+    window.clearTimeout(thirdTideTimer);
+    thirdTideTimer = window.setTimeout(updateThirdTideIntroduction, 4200);
+  }
+  panel.classList.toggle('show', performance.now() - thirdTideEligibleSince >= 4000 && !journalOpen);
+}
+
+function dismissThirdTide() {
+  confluenceIntroductionSeen = true;
+  thirdTideEligibleSince = null;
+  window.clearTimeout(thirdTideTimer);
+  document.querySelector('#third-tide')!.classList.remove('show');
+  persistSoon();
+}
+
+/** One faint diamond per existing member form shows the Manhattan range the followed clue needs. */
+function updateClueRings() {
+  clueRings.clear();
+  const clue = followedConfluenceId
+    ? { range: CONFLUENCE_BY_ID.get(followedConfluenceId)!.range, members: confluenceMembers(followedConfluenceId, formationOccurrences) }
+    : followedPlaceIdentityId
+      ? { range: PLACE_IDENTITY_BY_ID.get(followedPlaceIdentityId)!.range, members: placeIdentityMembers(followedPlaceIdentityId, formationOccurrences) }
+      : null;
+  clueRings.visible = clue !== null;
+  if (!clue) return;
+  const size = CityRenderer.cellSize();
+  let geometry = clueRingGeometries.get(clue.range);
+  if (!geometry) {
+    const outer = (clue.range + .5) * size;
+    geometry = new THREE.RingGeometry(outer - .07, outer, 4);
+    clueRingGeometries.set(clue.range, geometry);
+  }
+  for (const member of clue.members) {
+    const ring = new THREE.Mesh(geometry, clueRingMaterial);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(member.x * size, -.2, member.z * size);
+    ring.renderOrder = 4;
+    clueRings.add(ring);
+  }
+}
+
+/** Gold ripples mark forms whose next tier is still unknown, only while the player reads the Atlas or follows a clue. */
+function updateNearMissMarkers() {
+  nearMissMarkers.clear();
+  const atlasOpen = journalView === 'atlas' && Boolean(document.querySelector('#journal-scrim')?.classList.contains('show'));
+  const guideDone = onboardingDismissed || onboardingStep() === 4;
+  nearMissMarkers.visible = guideDone && (atlasOpen || followedPlaceIdentityId !== null || followedConfluenceId !== null);
+  if (!nearMissMarkers.visible) return;
+  const size = CityRenderer.cellSize();
+  for (const occurrence of formationOccurrences) {
+    const next = nextTierOf(occurrence.id);
+    if (!next || knownFormations.has(next.id)) continue;
+    const cell = city.get(occurrence.x, occurrence.z);
+    const marker = new THREE.Mesh(onboardingMarkerGeometry, onboardingMarkerMaterial);
+    marker.rotation.x = Math.PI / 2;
+    marker.position.set(occurrence.x * size, cell ? .5 + cell.height * FLOOR_HEIGHT : -.22, occurrence.z * size);
+    marker.renderOrder = 4;
+    nearMissMarkers.add(marker);
+  }
 }
 
 function currentSnapshot() {
@@ -1579,11 +1776,11 @@ function renderFormationAtlas(list: HTMLDivElement) {
     if (active) card.dataset.formationId = formation.id;
     card.setAttribute('aria-label', learned
       ? `${formation.title}. ${formation.description} ${effectSummary} ${active ? `${active} currently in town${gathering ? ` with ${gathering} visiting` : ''}; focus formation.` : 'Not currently in town.'}`
-      : `Undiscovered formation. ${formation.hint}`);
+      : `Undiscovered formation. ${formationHintRevealed(formation) ? formation.hint : HIDDEN_FORM_HINT}`);
     const illustration = document.createElement('span');
     illustration.className = 'atlas-illustration';
     illustration.setAttribute('aria-hidden', 'true');
-    illustration.append(createFormationSketch(formation.id));
+    if (formationHintRevealed(formation)) illustration.append(createFormationSketch(formation.id));
     const mark = document.createElement('span');
     mark.className = 'atlas-mark';
     mark.textContent = learned ? formation.mark : '?';
@@ -1594,7 +1791,7 @@ function renderFormationAtlas(list: HTMLDivElement) {
     const title = document.createElement('strong');
     title.textContent = learned ? formation.title : 'Uncharted form';
     const description = document.createElement('span');
-    description.textContent = learned ? formation.description : formation.hint;
+    description.textContent = learned ? formation.description : formationHintRevealed(formation) ? formation.hint : HIDDEN_FORM_HINT;
     const influence = document.createElement('span');
     influence.className = 'atlas-influence';
     if (learned) {
@@ -1772,6 +1969,7 @@ function createFormationSketch(id: FormationId) {
 function setJournalView(view: 'stories' | 'atlas') {
   journalView = view;
   renderJournal();
+  updateNearMissMarkers();
 }
 
 function revisitFormation(id: FormationId) {
@@ -1878,6 +2076,12 @@ function createClueCard(clue: DiscoveryClue) {
 }
 
 function updateThreadStatus(snapshot = currentSnapshot()) {
+  renderThreadStatus(snapshot);
+  updateClueRings();
+  updateNearMissMarkers();
+}
+
+function renderThreadStatus(snapshot: ReturnType<typeof currentSnapshot>) {
   const panel = document.querySelector<HTMLElement>('#tide-thread')!;
   document.querySelector('#thread-kicker')!.textContent = 'Following a thread';
   if (followedConfluenceId) {
@@ -1976,6 +2180,8 @@ function followConfluence(id: ConfluenceId) {
     followedThreadId = null;
     followedPlaceIdentityId = null;
   }
+  confluenceIntroductionSeen = true;
+  updateThirdTideIntroduction();
   updateThreadStatus();
   renderJournal();
   persistSoon();
@@ -2156,6 +2362,7 @@ function setJournalOpen(open: boolean) {
   }
   scrim.classList.toggle('show', open);
   scrim.setAttribute('aria-hidden', String(!open));
+  updateNearMissMarkers();
   document.querySelectorAll<HTMLElement>('.hud > :not(#journal-scrim)').forEach((element) => {
     if (open) element.setAttribute('inert', '');
     else element.removeAttribute('inert');
@@ -2173,7 +2380,7 @@ function setJournalOpen(open: boolean) {
 
 function setAboutOpen(open: boolean) {
   const scrim = document.querySelector<HTMLElement>('#about-scrim')!;
-  const openButton = document.querySelector<HTMLButtonElement>('#about-open')!;
+  const openButton = document.querySelector<HTMLButtonElement>('#mobile-menu-toggle')!;
   scrim.classList.toggle('show', open);
   scrim.setAttribute('aria-hidden', String(!open));
   if (open) {
@@ -2187,7 +2394,7 @@ function setAboutOpen(open: boolean) {
 
 function setPostcardOpen(open: boolean) {
   const scrim = document.querySelector<HTMLElement>('#postcard-scrim')!;
-  const openButton = document.querySelector<HTMLButtonElement>('#postcard-open')!;
+  const openButton = document.querySelector<HTMLButtonElement>('#mobile-menu-toggle')!;
   scrim.classList.toggle('show', open);
   scrim.setAttribute('aria-hidden', String(!open));
   if (open) {
@@ -2205,17 +2412,17 @@ function setPostcardOpen(open: boolean) {
 function canvasPng(inscription: string) {
   return new Promise<Blob>((resolve, reject) => {
     const hoverWasVisible = hover.visible;
-    const markersWereVisible = onboardingMarkers.visible;
+    const markersWereVisible = guides.visible;
     hover.visible = false;
-    onboardingMarkers.visible = false;
+    guides.visible = false;
     pipeline?.render(0);
     void composePostcard(renderer.domElement, { inscription, date: postcardDate(), day }).then((blob) => {
       hover.visible = hoverWasVisible;
-      onboardingMarkers.visible = markersWereVisible;
+      guides.visible = markersWereVisible;
       resolve(blob);
     }, (error) => {
       hover.visible = hoverWasVisible;
-      onboardingMarkers.visible = markersWereVisible;
+      guides.visible = markersWereVisible;
       reject(error);
     });
   });
@@ -2516,31 +2723,61 @@ document.querySelector('#touch-guide')!.addEventListener('click', (event) => {
   if (event.target === event.currentTarget) setTouchGuideOpen(false);
 });
 
+let menuOpen = false;
+let menuInerted: HTMLElement[] = [];
+
 function setTopActionsOpen(open: boolean) {
+  if (menuOpen === open) return;
+  menuOpen = open;
   const actions = document.querySelector<HTMLElement>('.top-actions')!;
   const menu = document.querySelector<HTMLElement>('#top-actions-menu')!;
   const toggle = document.querySelector<HTMLButtonElement>('#mobile-menu-toggle')!;
+  const hadFocus = menu.contains(document.activeElement);
   actions.classList.toggle('open', open);
+  document.body.classList.toggle('menu-open', open);
   toggle.setAttribute('aria-expanded', String(open));
-  toggle.setAttribute('aria-label', open ? 'Close town controls' : 'Open town controls');
+  toggle.setAttribute('aria-label', open ? 'Close town menu' : 'Open town menu');
   menu.setAttribute('aria-hidden', String(!open));
-  if (!open) menu.setAttribute('inert', '');
-  else menu.removeAttribute('inert');
+  menu.toggleAttribute('inert', !open);
+  setResetConfirmOpen(false);
+  if (open) {
+    // Only elements that were not already inert are restored on close, so an
+    // open journal keeps its own inert state.
+    menuInerted = [
+      ...document.querySelectorAll<HTMLElement>('.hud > :not(.header-controls), .header-controls > :not(.top-actions)'),
+      renderer.domElement,
+    ].filter((element) => !element.hasAttribute('inert'));
+    menuInerted.forEach((element) => element.setAttribute('inert', ''));
+    updateTimeDisplay();
+    window.setTimeout(() => menu.focus(), 50);
+  } else {
+    menuInerted.forEach((element) => element.removeAttribute('inert'));
+    menuInerted = [];
+    if (hadFocus) toggle.focus();
+  }
 }
 
-document.querySelector('#mobile-menu-toggle')!.addEventListener('click', () => {
-  setTopActionsOpen(!document.querySelector('.top-actions')!.classList.contains('open'));
-});
+function setResetConfirmOpen(open: boolean) {
+  document.querySelector<HTMLElement>('#reset-confirm')!.hidden = !open;
+  document.querySelector('#reset')!.setAttribute('aria-expanded', String(open));
+  if (open) document.querySelector<HTMLButtonElement>('#reset-cancel')!.focus();
+}
+
+document.querySelector('#mobile-menu-toggle')!.addEventListener('click', () => setTopActionsOpen(!menuOpen));
+document.querySelector('#menu-scrim')!.addEventListener('click', () => setTopActionsOpen(false));
 document.querySelector('#top-actions-menu')!.addEventListener('click', (event) => {
-  if ((event.target as HTMLElement).closest('button')) setTopActionsOpen(false);
+  const button = (event.target as HTMLElement).closest('button');
+  if (button && !button.hasAttribute('data-keep-open')) setTopActionsOpen(false);
 });
-document.addEventListener('pointerdown', (event) => {
-  if (!document.querySelector('.top-actions')!.contains(event.target as Node)) setTopActionsOpen(false);
-});
-setTopActionsOpen(false);
 
 document.querySelector('#reset')!.addEventListener('click', () => {
-  if (!confirm('Let this town drift away and begin with a new tide?')) return;
+  setResetConfirmOpen(document.querySelector<HTMLElement>('#reset-confirm')!.hidden);
+});
+document.querySelector('#reset-cancel')!.addEventListener('click', () => {
+  setResetConfirmOpen(false);
+  document.querySelector<HTMLButtonElement>('#reset')!.focus();
+});
+document.querySelector('#reset-confirm-yes')!.addEventListener('click', () => {
   localStorage.removeItem(STORAGE_KEY);
   location.reload();
 });
@@ -2578,6 +2815,12 @@ document.querySelector('#first-tide-atlas')!.addEventListener('click', () => {
 document.querySelector('#second-tide-close')!.addEventListener('click', dismissSecondTide);
 document.querySelector('#second-tide-atlas')!.addEventListener('click', () => {
   dismissSecondTide();
+  setJournalView('atlas');
+  setJournalOpen(true);
+});
+document.querySelector('#third-tide-close')!.addEventListener('click', dismissThirdTide);
+document.querySelector('#third-tide-atlas')!.addEventListener('click', () => {
+  dismissThirdTide();
   setJournalView('atlas');
   setJournalOpen(true);
 });
@@ -2807,6 +3050,7 @@ renderJournal();
 updateThreadStatus();
 updateFirstTideGuide();
 updateSecondTideIntroduction();
+updateThirdTideIntroduction();
 
 function refreshAmbience() {
   const catsBefore = ambience.wildlifeStats();
@@ -2856,7 +3100,7 @@ function photoProgress(fraction: number | null) {
 
 /** The hour the frame renders with. Photo mode may override the simulation clock. */
 function renderHour() {
-  if (!photo.active) return timeOfDay;
+  if (!photo.active) return celebrationDuskHour(timeOfDay);
   if (photo.weather === 'night') return 23;
   return photo.hour ?? timeOfDay;
 }
@@ -2958,9 +3202,9 @@ function renderFrameAt(width: number, height: number) {
   water.setSize(width, height);
   city.setPointScale(height);
   renderer.shadowMap.needsUpdate = true;
-  const wasHidden = { hover: hover.visible, markers: onboardingMarkers.visible };
+  const wasHidden = { hover: hover.visible, markers: guides.visible };
   hover.visible = false;
-  onboardingMarkers.visible = false;
+  guides.visible = false;
   updateAtmosphere(clock.elapsedTime, 0);
   camera.updateMatrixWorld();
   skyDome.setStarsVisible(false);
@@ -2968,7 +3212,7 @@ function renderFrameAt(width: number, height: number) {
   skyDome.setStarsVisible(true);
   pipeline!.render(0);
   hover.visible = wasHidden.hover;
-  onboardingMarkers.visible = wasHidden.markers;
+  guides.visible = wasHidden.markers;
   return renderer.domElement;
 }
 
@@ -3317,6 +3561,8 @@ function updateTimeDisplay() {
   desktopClock.textContent = `Day ${day} · ${time}`;
   desktopClock.setAttribute('aria-label', `Day ${day}, ${time}, ${population} ${population === 1 ? 'resident' : 'residents'}`);
   document.querySelector('#mobile-clock-display')!.textContent = `D${day} · ${time}`;
+  const residents = `${population} ${population === 1 ? 'resident' : 'residents'}`;
+  document.querySelector('#menu-clock')!.textContent = `Day ${day} · ${time} · ${residents}${menuOpen ? ' · holding its breath' : ''}`;
   updateCitizenCard();
   const memory = selectedMemoryReader?.();
   if (memory) showMemoryCard(memory);
@@ -3434,8 +3680,8 @@ function animate() {
   discoveryCheckElapsed += delta;
   ambientSoundElapsed += rawDelta;
   inspectorElapsed += rawDelta;
-  // Photo mode holds the simulation still while the camera and water keep moving.
-  const simulationRate = photo.active ? 0 : simulationSpeed;
+  // Photo mode and the town menu hold the simulation still while the camera and water keep moving.
+  const simulationRate = photo.active || menuOpen ? 0 : simulationSpeed;
   const deltaHours = delta * simulationRate * .05;
   timeOfDay += deltaHours;
   if (timeOfDay >= 24) {

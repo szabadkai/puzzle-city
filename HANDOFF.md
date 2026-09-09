@@ -40,6 +40,9 @@ This repository contains the completed original prototype plus five implemented 
 7. **Formation mastery — four slices**
    - A pure detector recognizes 18 tiered architectural forms across water, street, terrace, rooftop, courtyard, and landmark families.
    - The Formation Atlas permanently remembers discovered forms, shows clues for unknown forms, counts active occurrences, and refocuses forms that still exist.
+   - Unknown forms keep their hint hidden until the tier below them stands in town. First tiers are always readable. Gold ripples mark those near misses only while the Atlas is open or a clue is followed, and a followed clue draws a faint diamond of its tile range around each existing member form.
+   - Celebrations scale with the layer: a formation gets a short toast, a living place a longer toast with a four-second camera hold, and a Confluence a six-second hold with a brief pull toward dusk and a chime when a lantern lights. Ordinary captions wait until a celebration toast ends.
+   - A one-time Third Tide card introduces the Confluence layer once four living places are known.
    - A dismissible four-step First Tide uses temporary world-space ripples to teach negative space, vertical transformation, and adjacency on desktop and touch layouts.
    - Active forms register named, reachable gathering nodes in the citizen navigation graph; the Atlas reports current visitors and citizen cards name the destination.
    - Compatible forms improve business site scoring, allow a trade to arrive up to two residents earlier when a supported ground floor exists, and add one item to nearby production batches. The Atlas and Observe-mode workplace detail explain the relationship.

@@ -374,6 +374,11 @@ export function placeIdentityProgress(id: PlaceIdentityId, formations: readonly 
   });
 }
 
+/** Every active formation that can fill one of the two roles of this place. */
+export function placeIdentityMembers(id: PlaceIdentityId, formations: readonly FormationOccurrence[]) {
+  return formations.filter((formation) => roleMatches(id, 0, formation) || roleMatches(id, 1, formation));
+}
+
 export function livingPlaceIntroductionReady(
   knownFormations: ReadonlySet<FormationId>,
   activeFormations: readonly FormationOccurrence[],

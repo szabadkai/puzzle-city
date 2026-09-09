@@ -62,7 +62,7 @@ Run the deterministic checks with `npm run test:formations`, `npm run test:craft
 
 GitHub Actions deploys the `main` branch to GitHub Pages.
 
-Press `P` while testing a larger town to see FPS, draw calls (scene plus post passes), triangles, the quality tier, render scale, fallback state, an EMA breakdown of the main CPU work, and GPU time per pass. The same overlay exposes shadow bias and wind strength sliders. The quality tier is detected on first load and can be forced from the About panel or with `?tier=low|mid|high`.
+Press `P` while testing a larger town to see FPS, draw calls (scene plus post passes), triangles, the quality tier, render scale, fallback state, an EMA breakdown of the main CPU work, and GPU time per pass. The same overlay exposes shadow bias and wind strength sliders. The quality tier is detected on first load and can be forced from the town menu (☰) or with `?tier=low|mid|high`.
 
 ## Credits
 

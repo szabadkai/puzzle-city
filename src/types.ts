@@ -40,6 +40,10 @@ export type SavedTown = {
   followedConfluenceId?: ConfluenceId;
   /** Whether the player has seen or dismissed the optional Second Tide introduction. */
   placeIntroductionSeen?: boolean;
+  /** Whether the player has seen or dismissed the optional Third Tide introduction to Confluences. */
+  confluenceIntroductionSeen?: boolean;
+  /** Higher-tier forms whose Atlas hint a near miss has revealed. */
+  formationHints?: FormationId[];
   /** Existing towns and players who skip the guide should not see it again. */
   onboardingDismissed?: boolean;
   /** Active colour palette id. Missing means the default palette. */

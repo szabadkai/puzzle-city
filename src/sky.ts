@@ -26,7 +26,7 @@ export class SkyDome {
   /** Sheet lightning behind the clouds, 0 to 1. Set by the town during heavy rain. */
   flash = 0;
 
-  constructor(radius = 250) {
+  constructor(radius = 292) {
     const material = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
       side: THREE.BackSide,

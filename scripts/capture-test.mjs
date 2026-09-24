@@ -47,6 +47,8 @@ function fixtureTown() {
   return {
     version: 10,
     seed: 20260908,
+    // Current saves need Voyage state; otherwise the app correctly starts a fresh harbor.
+    campaign: { version: 1, mode: 'sandbox', completed: 18, ready: false, sandboxUnlocked: true },
     cells,
     timeOfDay: 17.5,
     day: 3,

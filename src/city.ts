@@ -9,6 +9,7 @@ import { hash, pick } from './random';
 import { PALETTE_SLOT, PALETTES, paletteSlotColors } from './palette';
 import { paletteSlotColor, presentationUniforms, useClothSway, useFlicker, useFoliageSway, usePaletteLookup, useWindowStagger } from './shading';
 import { buildFigureGeometry, FIGURE_MATERIAL } from './citizens';
+import { buildRooftopNook, laundryGeometry } from './cosmetics';
 
 /** Roof silhouettes for free-standing houses. Most stay the steep cap; about a third sit low and wide. */
 const HOUSE_ROOF_STYLES = ['gable', 'gable', 'hip'] as const;
@@ -736,6 +737,15 @@ export class CityRenderer {
     this.syncHarborLanterns();
     this.syncNightLights();
     return true;
+  }
+
+  /** Restore an authored building without changing its paint or founding date. */
+  restoreConstructionCell(x: number, z: number, cell: Cell | null) {
+    if (cell) this.cells.set(keyOf(x, z), { ...cell, placedAt: performance.now() });
+    else this.cells.delete(keyOf(x, z));
+    this.rebuildAround(x, z, true);
+    this.syncHarborLanterns();
+    this.syncNightLights();
   }
 
   serialize() { return [...this.cells.values()].map((cell) => ({ ...cell, placedAt: 0 })); }
@@ -2597,14 +2607,25 @@ export class CityRenderer {
     group.add(line);
     const laundryColors = [0xe9cf9d, 0xb7514a, 0x547f86];
     for (let i = 0; i < 3; i++) {
-      const clothMaterial = this.cachedMaterial(this.colorMaterials, laundryColors[i], 1);
+      const colorIndex = Math.floor(hash(this.seed, cell.x, cell.z, 1450 + i) * laundryColors.length);
+      const clothMaterial = this.cachedMaterial(this.colorMaterials, laundryColors[colorIndex], 1);
       clothMaterial.side = THREE.DoubleSide;
-      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(.27, .31 + i * .03), clothMaterial);
-      cloth.position.set(dx * 1.55 + lateral.x * (i - 1) * .34, topY - .5, dz * 1.55 + lateral.z * (i - 1) * .34);
+      const cloth = new THREE.Mesh(laundryGeometry(i, .3, .29 + i * .025), clothMaterial);
+      cloth.position.set(dx * 1.55 + lateral.x * (i - 1) * .34, topY - .33, dz * 1.55 + lateral.z * (i - 1) * .34);
       cloth.rotation.y = dir % 2 ? Math.PI / 2 : 0;
       cloth.name = `laundry-${i}`;
       group.add(cloth);
       (group.userData.laundry ??= []).push(cloth);
+    }
+    // A narrow planter sits on the rail's end, clear of the hanging garments.
+    const planter = new THREE.Mesh(new THREE.BoxGeometry(dir % 2 ? .16 : .23, .12, dir % 2 ? .23 : .16), this.cream);
+    planter.position.set(dx * 1.47 + lateral.x * .55, topY - .32, dz * 1.47 + lateral.z * .55);
+    group.add(planter);
+    for (let i = 0; i < 3; i++) {
+      const sprig = new THREE.Mesh(new THREE.IcosahedronGeometry(.055, 0), i === 1 ? this.blossom : this.green);
+      sprig.position.copy(planter.position).addScaledVector(lateral, (i - 1) * .065);
+      sprig.position.y += .095;
+      group.add(sprig);
     }
     group.userData.balconyDirection = dir;
   }
@@ -2660,18 +2681,16 @@ export class CityRenderer {
     if (!group.userData.rooftopAerial && roll > .22) this.addRooftopAerial(group, y);
 
     if (roll < .66) {
-      const table = shadow(new THREE.Mesh(new THREE.BoxGeometry(.52, .08, .52), this.greenTile), false);
-      table.name = 'rooftop-mahjong-table';
-      table.position.set(.38, y + .4, .32);
-      const stem = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.035, .045, .34, 6), this.metal), false);
-      stem.position.set(.38, y + .22, .32);
-      group.add(table, stem);
-      for (const [index, [x, z]] of [[.38, -.02], [.38, .66], [.04, .32], [.72, .32]].entries()) {
-        const chair = shadow(new THREE.Mesh(new RoundedBoxGeometry(.22, .3, .22, 1, .04), index % 2 ? this.cream : this.metal), false);
-        chair.name = `rooftop-folding-chair-${index}`;
-        chair.position.set(x, y + .23, z);
-        group.add(chair);
+      const kind = pick(['mahjong', 'tea', 'reading'] as const, hash(this.seed, cell.x, cell.z, 1422));
+      const accent = this.cachedMaterial(this.colorMaterials, pick([0xb96752, 0x558c8b, 0xd1aa60], hash(this.seed, cell.x, cell.z, 1423)), .95);
+      const nook = buildRooftopNook(kind, { wood: this.wood, metal: this.metal, cream: this.cream, green: this.greenTile, accent });
+      nook.position.set(.4, y + .16, .32);
+      // Direct children join the building's batch even while it is growing.
+      for (const object of [...nook.children]) {
+        object.position.add(nook.position);
+        group.add(object);
       }
+      group.userData.rooftopNook = kind;
     } else {
       const pot = shadow(new THREE.Mesh(new THREE.CylinderGeometry(.17, .14, .24, 8), this.cream), false);
       pot.position.set(.46, y + .3, .35);
@@ -2696,9 +2715,9 @@ export class CityRenderer {
       group.add(line);
       const clothMaterial = this.cachedMaterial(this.colorMaterials, 0x4e7990, 1);
       clothMaterial.side = THREE.DoubleSide;
-      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(.34, .28), clothMaterial);
+      const cloth = new THREE.Mesh(laundryGeometry(0, .38, .3), clothMaterial);
       cloth.name = 'laundry-rooftop-everyday';
-      cloth.position.set(.16, y + .66, -.54);
+      cloth.position.set(.16, y + .81, -.54);
       group.add(cloth);
       (group.userData.laundry ??= []).push(cloth);
     }

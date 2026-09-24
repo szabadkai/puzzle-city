@@ -70,6 +70,7 @@ import { GpuTimer, guessTier, QUALITY_SETTINGS, refineTier, storeTierOverride, s
 import { advanceCampaign, CAMPAIGN_LESSONS, chapterInfo, currentLesson, isNewPattern, observeCampaign, replayCampaign, restoreCampaign } from './campaign';
 import { renderCampaignCard, renderCampaignJourney } from './campaign-view';
 import { campaignGuidance, findCampaignWater, type CampaignGuidance, type GuidePoint } from './campaign-guidance';
+import { BuildingPicker, ConstructionHistory } from './build-tools';
 import './style.css';
 
 installPresentationShading();
@@ -230,13 +231,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button id="finale-postcard">Save postcard</button>
       </div>
     </aside>
-    <nav class="mobile-controls" aria-label="Touch controls">
+    <div id="build-preview-label" class="build-preview-label" aria-hidden="true"></div>
+    <nav class="mobile-controls" aria-label="Building tools">
       <button class="touch-action active" data-touch-mode="build" aria-pressed="true">
         <span class="touch-action-icon" aria-hidden="true">＋</span><span>Build</span>
       </button>
       <button class="touch-action" data-touch-mode="remove" aria-pressed="false">
         <span class="touch-action-icon" aria-hidden="true">−</span><span>Remove</span>
       </button>
+      <button class="touch-action" id="build-undo" disabled title="Undo construction (⌘/Ctrl Z)" aria-label="Undo construction"><span class="touch-action-icon" aria-hidden="true">↶</span><span>Undo</span></button>
+      <button class="touch-action" id="build-redo" disabled title="Redo construction (⌘/Ctrl Shift Z)" aria-label="Redo construction"><span class="touch-action-icon" aria-hidden="true">↷</span><span>Redo</span></button>
       <button class="touch-action" id="touch-center">
         <span class="touch-action-icon touch-compass" aria-hidden="true">⌖</span><span>Center</span>
       </button>
@@ -248,7 +252,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section class="touch-guide" role="dialog" aria-modal="true" aria-labelledby="touch-guide-title">
         <span class="guide-kicker">How to play</span>
         <button class="guide-close" id="touch-guide-close" aria-label="Close touch guide">×</button>
-        <h2 id="touch-guide-title">Touch controls</h2>
+        <h2 id="touch-guide-title">Shape your harbor</h2>
+        <p class="desktop-build-help">Click water to build, or a roof to add a floor. Right-click lowers one floor. Drag to move; right-drag to orbit. B / R selects Build / Remove. Arrow keys choose a space, Enter builds, Delete lowers.</p>
         <div class="gesture-list">
           <div><span class="gesture-icon" aria-hidden="true">☝</span><p><strong>Tap</strong> water to build or a resident to meet them.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">↔</span><p><strong>One-finger drag</strong> turns the view.</p></div>
@@ -256,6 +261,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <div><span class="gesture-icon" aria-hidden="true">−</span><p><strong>Remove</strong> takes down one floor.</p></div>
           <div><span class="gesture-icon" aria-hidden="true">◉</span><p><strong>Observe</strong> shows a person or place's history.</p></div>
         </div>
+        <p class="construction-help">Undo and Redo retrace your last 60 building edits this session. Town life keeps moving and discoveries stay earned.</p>
         <button class="guide-done" id="touch-guide-done">Got it</button>
       </section>
     </div>
@@ -637,15 +643,27 @@ city.setDiscoveryState(grow.discoveredIds());
 city.setHarborLanterns(litHarborLanternIds);
 citizens.setDiscoveries(grow.discoveredIds());
 
-const previewHeight = 1.28;
+const constructionHistory = new ConstructionHistory();
+const buildingPicker = new BuildingPicker();
+const previewLabel = document.querySelector<HTMLElement>('#build-preview-label')!;
+const undoButton = document.querySelector<HTMLButtonElement>('#build-undo')!;
+const redoButton = document.querySelector<HTMLButtonElement>('#build-redo')!;
+const previewHeight = FLOOR_HEIGHT;
 const hoverGeometry = new RoundedBoxGeometry(CityRenderer.cellSize() * .9, previewHeight, CityRenderer.cellSize() * .9, 4, .12);
 const hoverMaterial = new THREE.MeshBasicMaterial({ color: 0xffd894, transparent: true, opacity: .24, depthWrite: false });
-const hoverOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xffd894, transparent: true, opacity: .9 });
+const hoverOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xffd894, transparent: true, opacity: .9, depthTest: false, depthWrite: false });
 const hover = new THREE.Mesh(hoverGeometry, hoverMaterial);
-const hoverOutline = new THREE.LineSegments(new THREE.EdgesGeometry(hoverGeometry, 24), hoverOutlineMaterial);
+// A rounded box has no sharp edges for EdgesGeometry to retain. Use a simple
+// box for the outline so the selected floor remains readable through its walls.
+const hoverOutlineBox = new THREE.BoxGeometry(CELL_SIZE * .92, previewHeight, CELL_SIZE * .92);
+const hoverOutline = new THREE.LineSegments(new THREE.EdgesGeometry(hoverOutlineBox), hoverOutlineMaterial);
+hoverOutlineBox.dispose();
+hoverOutline.renderOrder = 5;
 hover.add(hoverOutline);
 hover.position.y = .12;
 hover.renderOrder = 3;
+hover.userData.nonPrintable = true;
+hover.name = 'construction-preview';
 hover.visible = false;
 scene.add(hover);
 
@@ -718,8 +736,8 @@ let keyboardBuildPoint = { x: 0, z: 0 };
 function showKeyboardBuildPoint() {
   const { x, z } = keyboardBuildPoint;
   const height = city.get(x, z)?.height ?? 0;
-  hover.position.set(x * CELL_SIZE, height ? .7 + height * FLOOR_HEIGHT : .12, z * CELL_SIZE);
-  hover.visible = true;
+  hoveredCell = { x, z };
+  updateBuildPreview(x, z);
   renderer.domElement.setAttribute('aria-label', `Harbor: east ${x}, south ${z}, ${height ? `${height} floors` : 'open water'}. Arrow keys choose a space, Enter raises a home, Delete lowers it.`);
 }
 renderer.domElement.addEventListener('focus', () => {
@@ -729,7 +747,7 @@ renderer.domElement.addEventListener('focus', () => {
 });
 renderer.domElement.addEventListener('blur', () => { hover.visible = false; });
 renderer.domElement.addEventListener('keydown', (event) => {
-  if (photo.active || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Delete', 'Backspace'].includes(event.key)) return;
+  if (photo.active || event.metaKey || event.ctrlKey || event.altKey || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Delete', 'Backspace'].includes(event.key)) return;
   event.preventDefault();
   voyageKeyboard = true;
   const { x, z } = keyboardBuildPoint;
@@ -747,6 +765,10 @@ const pointer = new THREE.Vector2();
 const interactionPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const hit = new THREE.Vector3();
 let hoveredCell: { x: number; z: number } | null = null;
+let pendingHover: { x: number; y: number } | null = null;
+let pointerOnCanvas = false;
+let lastPointer = { x: 0, y: 0 };
+let removingWithPointer = false;
 const pointerStart = new THREE.Vector2();
 const activePointers = new Set<number>();
 let gesturePointerId: number | null = null;
@@ -783,6 +805,7 @@ let observeMode = false;
 let selectedMemoryReader: (() => CityMemoryInspection | HarborMemoryInspection | null) | null = null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
+  removingWithPointer = event.button === 2;
   activePointers.add(event.pointerId);
   if (activePointers.size === 1) {
     gesturePointerId = event.pointerId;
@@ -798,18 +821,19 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 });
 
 renderer.domElement.addEventListener('pointermove', (event) => {
-  // Mouse/pen hover should keep the build target live before a gesture begins.
-  if (!activePointers.size) {
-    updateHover(event.clientX, event.clientY);
-    return;
+  pointerOnCanvas = true;
+  lastPointer = { x: event.clientX, y: event.clientY };
+  if (activePointers.size) {
+    if (event.pointerId !== gesturePointerId || multiTouchGesture) return;
+    const dragThreshold = event.pointerType === 'touch' ? 10 : 5;
+    if (Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > dragThreshold) {
+      dragged = true;
+      renderer.domElement.classList.add('dragging');
+    }
   }
-  if (event.pointerId !== gesturePointerId || multiTouchGesture) return;
-  const dragThreshold = event.pointerType === 'touch' ? 10 : 5;
-  if (Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > dragThreshold) {
-    dragged = true;
-    renderer.domElement.classList.add('dragging');
-  }
-  updateHover(event.clientX, event.clientY);
+  // Coalesce high-frequency pointer events into one pick per presented frame.
+  pendingHover = dragged ? null : lastPointer;
+  if (dragged) hover.visible = false;
 });
 
 renderer.domElement.addEventListener('pointerup', (event) => {
@@ -836,6 +860,7 @@ renderer.domElement.addEventListener('pointerup', (event) => {
   }
   if (event.button === 2 && hoveredCell) demolish(hoveredCell.x, hoveredCell.z);
   if (event.pointerType === 'touch') {
+    pointerOnCanvas = false;
     hover.visible = false;
     hoveredCell = null;
     renderer.domElement.classList.remove('inspect-resident');
@@ -850,6 +875,9 @@ renderer.domElement.addEventListener('pointercancel', (event) => {
 });
 
 renderer.domElement.addEventListener('pointerleave', () => {
+  pointerOnCanvas = false;
+  pendingHover = null;
+  previewLabel.classList.remove('show');
   if (activePointers.size) return;
   hover.visible = false;
   hoveredCell = null;
@@ -858,8 +886,13 @@ renderer.domElement.addEventListener('pointerleave', () => {
   renderer.domElement.classList.remove('dragging');
 });
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
+controls.addEventListener('change', () => {
+  if (pointerOnCanvas && !activePointers.size) pendingHover = lastPointer;
+});
 
 function resetPointerGesture() {
+  removingWithPointer = false;
+  pendingHover = pointerOnCanvas ? lastPointer : null;
   gesturePointerId = null;
   multiTouchGesture = false;
   dragged = false;
@@ -888,11 +921,14 @@ function pointerToNdc(clientX: number, clientY: number) {
 }
 
 function updateHover(clientX: number, clientY: number) {
+  pendingHover = null;
+  if (photo.active || multiTouchGesture || dragged) return;
   pointerToNdc(clientX, clientY);
   raycaster.setFromCamera(pointer, camera);
-  const residentHovered = citizens.pick(raycaster) !== null;
+  const removing = touchMode === 'remove' || removingWithPointer;
+  const residentHovered = !removing && citizens.pick(raycaster) !== null;
   const absoluteHours = day * 24 + timeOfDay;
-  const observableHovered = observeMode && raycaster.intersectObject(ambience.root, true)
+  const observableHovered = !removing && observeMode && raycaster.intersectObject(ambience.root, true)
     .some((intersection) => ambience.memoryFromObject(intersection.object, absoluteHours, catColonyFoundedAt, intersection.instanceId) !== null);
   renderer.domElement.classList.toggle('inspect-resident', residentHovered);
   renderer.domElement.classList.toggle('inspect-observable', observableHovered);
@@ -902,9 +938,7 @@ function updateHover(clientX: number, clientY: number) {
     return;
   }
   const size = CityRenderer.cellSize();
-  const cityHit = raycaster.intersectObject(city.root, true)
-    .map((intersection) => city.cellFromObject(intersection.object))
-    .find((cell) => cell !== null);
+  const cityHit = buildingPicker.pick(raycaster.ray, city.cells.values());
   if (!cityHit && !raycaster.ray.intersectPlane(interactionPlane, hit)) {
     hover.visible = false;
     hoveredCell = null;
@@ -918,14 +952,42 @@ function updateHover(clientX: number, clientY: number) {
     return;
   }
   hoveredCell = { x, z };
-  const cell = city.get(x, z);
-  const allowed = touchMode === 'remove' ? Boolean(cell) : cell ? cell.height < 5 : city.isBuildable(x, z);
-  const color = allowed ? (touchMode === 'remove' ? 0xc65f57 : 0xffd894) : 0x82918c;
-  hover.visible = true;
-  hover.scale.y = cell ? 1 : .12;
-  hover.position.set(x * size, cell ? .34 + cell.height * FLOOR_HEIGHT + previewHeight / 2 : .12, z * size);
+  updateBuildPreview(x, z);
+}
+
+function updateBuildPreview(x: number, z: number) {
+  const height = city.get(x, z)?.height ?? 0;
+  const removing = touchMode === 'remove' || removingWithPointer;
+  const allowed = removing ? height > 0 : height < 5 && city.isBuildable(x, z);
+  const color = !allowed ? 0x82918c : removing ? 0xf28e7b : 0xffd894;
+  const floor = removing ? Math.max(0, height - 1) : Math.min(4, height);
+  hover.visible = !observeMode;
+  hover.scale.y = height === 0 && removing ? .08 : 1;
+  hover.position.set(x * CELL_SIZE, .34 + floor * FLOOR_HEIGHT + previewHeight / 2, z * CELL_SIZE);
   hoverMaterial.color.setHex(color);
   hoverOutlineMaterial.color.setHex(color);
+  hoverMaterial.opacity = removing ? .18 : .12;
+  previewLabel.dataset.mode = !allowed ? 'blocked' : removing ? 'remove' : 'build';
+  previewLabel.textContent = !allowed ? (removing ? 'Open water · nothing to remove' : height >= 5 ? 'Five floors · maximum height' : 'Deep water · choose a nearer space')
+    : removing ? (height === 1 ? 'Remove home · leave open water' : `Lower roof · ${height} → ${height - 1} floors`)
+    : height ? `Raise roof · ${height} → ${height + 1} floors` : 'Raise a new home · 1 floor';
+}
+
+const previewScreenPoint = new THREE.Vector3();
+function updateBuildPreviewLabel() {
+  const visible = hover.visible && !photo.active && !dragged && !menuOpen;
+  previewLabel.classList.toggle('show', visible);
+  if (!visible) return;
+  previewScreenPoint.copy(hover.position);
+  previewScreenPoint.y += previewHeight / 2 + .35;
+  previewScreenPoint.project(camera);
+  if (Math.abs(previewScreenPoint.x) > 1 || Math.abs(previewScreenPoint.y) > 1 || previewScreenPoint.z > 1) {
+    previewLabel.classList.remove('show');
+    return;
+  }
+  const x = Math.max(140, Math.min(innerWidth - 140, (previewScreenPoint.x + 1) * innerWidth / 2));
+  const y = Math.max(90, Math.min(innerHeight - 120, (1 - previewScreenPoint.y) * innerHeight / 2));
+  previewLabel.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
 }
 
 function inspectCitizen(clientX: number, clientY: number) {
@@ -1020,35 +1082,48 @@ function hideMemoryCard() {
 
 function build(x: number, z: number) {
   if (photo.active) return;
+  const before = city.get(x, z) ? { ...city.get(x, z)! } : null;
   if (!city.place(x, z, day * 24 + timeOfDay, true)) {
     showToast(city.get(x, z) ? 'That tower is tall enough.' : 'The water is too deep to build there.');
     softTone(150, .05);
     return;
   }
+  constructionHistory.record(x, z, before, city.get(x, z) ?? null);
+  updateConstructionButtons();
   if (campaign.started === false && campaign.mode === 'campaign') { campaign = { ...campaign, started: true }; voyageEvent('welcome_started'); }
   if (city.cells.size === 1 && city.get(x, z)?.height === 1 && campaign.completed === 0 && campaign.mode === 'campaign') voyageEvent('first_home');
-  lastVoyageEdit = { x, z };
-  recordBuildAction(x, z, city.get(x, z)?.height ?? 1);
-  citizens.rebuild(city.cells);
-  water.setCells(city.cells.values());
-  refreshFormations(true);
-  ambience.scatterWildlife(x, z);
-  refreshAmbience();
-  applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), false);
-  performanceWarmup = 0;
-  performanceCooldown = 0;
-  overloadSeconds = 0;
-  severeOverloadSeconds = 0;
-  renderer.shadowMap.needsUpdate = true;
-  ignoreNextPerformanceSample = true;
-  popSound(city.get(x, z)?.height ?? 1);
-  persistSoon();
-  evaluateDiscoveries();
+  finishConstructionEdit(x, z, false);
 }
 
 function demolish(x: number, z: number) {
   if (photo.active) return;
+  const before = city.get(x, z) ? { ...city.get(x, z)! } : null;
   if (!city.remove(x, z, day * 24 + timeOfDay, true)) return;
+  constructionHistory.record(x, z, before, city.get(x, z) ?? null);
+  updateConstructionButtons();
+  finishConstructionEdit(x, z, true);
+}
+
+function updateConstructionButtons() {
+  undoButton.disabled = !constructionHistory.canUndo;
+  redoButton.disabled = !constructionHistory.canRedo;
+}
+
+function retraceConstruction(direction: 'undo' | 'redo') {
+  if (photo.active || renderer.domElement.hasAttribute('inert') || document.querySelector('#touch-guide')!.classList.contains('show')) return;
+  const edit = constructionHistory.take(direction);
+  if (!edit) return;
+  const cell = direction === 'undo' ? edit.before : edit.after;
+  const lowering = (city.get(edit.x, edit.z)?.height ?? 0) > (cell?.height ?? 0);
+  city.restoreConstructionCell(edit.x, edit.z, cell);
+  updateConstructionButtons();
+  finishConstructionEdit(edit.x, edit.z, lowering);
+  showToast(direction === 'undo' ? 'Building edit undone.' : 'Building edit redone.');
+}
+undoButton.addEventListener('click', () => retraceConstruction('undo'));
+redoButton.addEventListener('click', () => retraceConstruction('redo'));
+
+function finishConstructionEdit(x: number, z: number, lowering: boolean) {
   lastVoyageEdit = { x, z };
   recordBuildAction(x, z, city.get(x, z)?.height ?? 0);
   hideMemoryCard();
@@ -1057,15 +1132,18 @@ function demolish(x: number, z: number) {
   refreshFormations(true);
   ambience.scatterWildlife(x, z);
   refreshAmbience();
-  applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), true);
+  applyBusinessUpdate(businesses.maintain(citizens.residents(), city.cells), lowering);
   performanceWarmup = 0;
   performanceCooldown = 0;
   overloadSeconds = 0;
   severeOverloadSeconds = 0;
   renderer.shadowMap.needsUpdate = true;
   ignoreNextPerformanceSample = true;
-  hideCitizenCard();
-  softTone(120 * (1 + (Math.random() * 2 - 1) * .03), .09, 0, .035, 'triangle');
+  if (lowering) {
+    hideCitizenCard();
+    softTone(120 * (1 + (Math.random() * 2 - 1) * .03), .09, 0, .035, 'triangle');
+  } else popSound(city.get(x, z)?.height ?? 1);
+  if (hoveredCell && (pointerOnCanvas || document.activeElement === renderer.domElement)) updateBuildPreview(hoveredCell.x, hoveredCell.z);
   persistSoon();
   evaluateDiscoveries();
 }
@@ -3098,7 +3176,8 @@ function setTouchMode(mode: 'build' | 'remove') {
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
   });
-  showToast(mode === 'build' ? 'Tap the water to build.' : 'Tap a building to remove one floor.');
+  if (pointerOnCanvas) pendingHover = lastPointer;
+  showToast(mode === 'build' ? 'Choose water to build, or a roof to raise it.' : 'Choose a building to remove one floor.');
 }
 
 document.querySelectorAll<HTMLButtonElement>('[data-touch-mode]').forEach((button) => {
@@ -3395,6 +3474,18 @@ function updateLightning(time: number, rain: number) {
 }
 
 window.addEventListener('keydown', (event) => {
+  const editingText = event.target instanceof HTMLElement && Boolean(event.target.closest('input, textarea, select, [contenteditable="true"]'));
+  const canEdit = !editingText && !photo.active && !renderer.domElement.hasAttribute('inert') && !document.querySelector('#touch-guide')!.classList.contains('show');
+  const historyShortcut = event.key.toLowerCase() === 'z' || (event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'y');
+  if (canEdit && (event.metaKey || event.ctrlKey) && !event.altKey && historyShortcut) {
+    event.preventDefault();
+    retraceConstruction(event.shiftKey || event.key.toLowerCase() === 'y' ? 'redo' : 'undo');
+    return;
+  }
+  if (canEdit && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (event.key.toLowerCase() === 'b') setTouchMode('build');
+    if (event.key.toLowerCase() === 'r') setTouchMode('remove');
+  }
   // Browser shortcuts such as Cmd+F or Ctrl+P must never trigger game hotkeys.
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (photo.active) {
@@ -4279,6 +4370,8 @@ function animate() {
   }
   controls.update();
   camera.updateMatrixWorld();
+  if (pendingHover) updateHover(pendingHover.x, pendingHover.y);
+  updateBuildPreviewLabel();
   renderer.info.reset();
   gpuTimer.begin('reflection');
   skyDome.setStarsVisible(false);

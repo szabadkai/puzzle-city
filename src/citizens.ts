@@ -60,6 +60,43 @@ const UMBRELLA_GEOMETRY = new THREE.ConeGeometry(.17, .07, 9, 1, true);
 const CARGO_GEOMETRY = new THREE.BoxGeometry(.2, .16, .18);
 const SHADOW_GEOMETRY = new THREE.CircleGeometry(.17, 14);
 
+/** Clothing sits in tunic-local space and follows the existing body animation. */
+function outfitGeometry(style: number) {
+  const parts: THREE.BufferGeometry[] = [];
+  const panel = (w: number, h: number, d: number, x: number, y: number, z: number, tilt = 0) => {
+    parts.push(new THREE.BoxGeometry(w, h, d).rotateZ(tilt).translate(x, y, z));
+  };
+  if (style === 0) {
+    // A wrapped scarf with two uneven tails.
+    parts.push(new THREE.TorusGeometry(.056, .019, 5, 10).rotateX(Math.PI / 2).translate(0, .127, 0));
+    panel(.039, .115, .022, -.028, .062, .091, -.15);
+    panel(.032, .076, .022, .028, .078, .09, .15);
+  } else if (style === 1) {
+    // Open waistcoat: contrasting front panels and little hem pockets.
+    for (const side of [-1, 1]) {
+      panel(.055, .155, .025, side * .051, .005, .077, side * -.08);
+      panel(.049, .025, .033, side * .053, -.043, .086);
+    }
+  } else if (style === 2) {
+    // Curved sailor stripes follow the tunic rather than hovering in front.
+    for (const y of [-.065, -.018, .029]) {
+      parts.push(new THREE.CylinderGeometry(.091, .091, .016, 10, 1, true).translate(0, y, 0));
+    }
+  } else {
+    // Apron bib, shoulder straps, waistband and a visible patch pocket.
+    panel(.082, .058, .018, 0, .055, .089);
+    for (const side of [-1, 1]) panel(.017, .09, .021, side * .038, .084, .066, side * -.13);
+    panel(.145, .018, .025, 0, -.004, .092);
+    panel(.065, .041, .013, .017, -.069, .107);
+  }
+  const geometry = mergeGeometries(parts, false)!;
+  parts.forEach((part) => part.dispose());
+  return geometry;
+}
+
+const OUTFIT_GEOMETRIES = [0, 1, 2, 3].map(outfitGeometry);
+const OUTFIT_ACCENTS = [0xe8d9ba, 0xd89a43, 0xb84f48, 0x345d65, 0x784f69];
+
 function capHair() {
   return new THREE.SphereGeometry(.094, 9, 6, 0, Math.PI * 2, 0, Math.PI * .48);
 }
@@ -138,6 +175,7 @@ export function buildFigureGeometry({
     place(SHOE_GEOMETRY, FIGURE_SHOE, side * at.legX, at.legY + at.shoeDrop, at.shoeForward);
   }
   place(TUNIC_GEOMETRY, clothes, 0, at.tunic);
+  place(OUTFIT_GEOMETRIES[2], FIGURE_CAP, 0, at.tunic);
   if (arms) for (const side of [-1, 1]) {
     place(SLEEVE_GEOMETRY, clothes, side * at.armX, at.shoulderY + at.sleeveDrop, 0, side * at.armLean);
     place(HAND_GEOMETRY, skin, side * (at.armX + .012), at.shoulderY + at.handDrop);
@@ -161,6 +199,8 @@ export type FigureLook = {
   apron: number | null;
   pack: number | null;
   stick: boolean;
+  outfit: number;
+  accent: number;
 };
 
 const APRONS: Record<string, number> = { Cook: 0xe8dfcc, Baker: 0xf0ebe0, Restaurateur: 0xe8dfcc, Potter: 0xb9a48a, Weaver: 0x6d7fa3, Artisan: 0x7a5a3c, Shipwright: 0x7a5a3c, Fishmonger: 0x9fb4b8 };
@@ -192,6 +232,8 @@ export function deriveLook(data: CitizenSave, seed: number): FigureLook {
     apron: APRONS[data.occupation] ?? null,
     pack: PACKS[data.occupation] ?? null,
     stick: elder && roll(916) < .6,
+    outfit: APRONS[data.occupation] ? 3 : data.occupation === 'Fisher' ? 2 : Math.floor(roll(917) * 3),
+    accent: APRONS[data.occupation] ? 0xd2bc96 : pick(OUTFIT_ACCENTS, roll(918)),
   };
 }
 
@@ -274,11 +316,29 @@ function createFigureBatches() {
     mesh.raycast = () => {};
     return mesh;
   };
+  // All wardrobes share one draw call. Unselected garment triangles collapse
+  // to the tunic origin; instance colour still supplies each person's accent.
+  const garments = [TUNIC_GEOMETRY, ...OUTFIT_GEOMETRIES].map((source, index) => {
+    const geometry = source.clone();
+    geometry.setAttribute('garmentStyle', new THREE.Float32BufferAttribute(new Float32Array(geometry.getAttribute('position').count).fill(index - 1), 1));
+    return geometry;
+  });
+  const wardrobeGeometry = mergeGeometries(garments, false)!;
+  garments.forEach((geometry) => geometry.dispose());
+  wardrobeGeometry.setAttribute('wardrobeStyle', new THREE.InstancedBufferAttribute(new Float32Array(MAX_RENDERED_CITIZENS), 1).setUsage(THREE.DynamicDrawUsage));
+  wardrobeGeometry.setAttribute('wardrobeAccent', new THREE.InstancedBufferAttribute(new Float32Array(MAX_RENDERED_CITIZENS * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  const wardrobeMaterial = tinted();
+  wardrobeMaterial.onBeforeCompile = (shader) => {
+    shader.vertexShader = `attribute float garmentStyle;\nattribute float wardrobeStyle;\nattribute vec3 wardrobeAccent;\n${shader.vertexShader}`;
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nif (garmentStyle > -0.5) transformed *= 1.0 - step(0.5, abs(garmentStyle - wardrobeStyle));');
+    shader.vertexShader = shader.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\nif (garmentStyle > -0.5) vColor.xyz = wardrobeAccent;\n#endif');
+  };
+  wardrobeMaterial.customProgramCacheKey = () => 'citizen-wardrobe-v1';
   return {
     shadows: batch(SHADOW_GEOMETRY, new THREE.MeshBasicMaterial({ color: 0x14101c, transparent: true, opacity: .5, depthWrite: false }), 'citizen-shadows'),
     shoes: batch(SHOE_GEOMETRY, fixed(FIGURE_SHOE), 'citizen-shoes', 2),
     legs: batch(LEG_GEOMETRY, tinted(), 'citizen-legs', 2, true),
-    tunics: batch(TUNIC_GEOMETRY, tinted(), 'citizen-tunics', 1, true),
+    tunics: batch(wardrobeGeometry, wardrobeMaterial, 'citizen-tunics', 1, true),
     aprons: batch(APRON_GEOMETRY, tinted(), 'citizen-aprons', 1, true),
     packs: batch(PACK_GEOMETRY, tinted(), 'citizen-packs', 1, true),
     sleeves: batch(SLEEVE_GEOMETRY, tinted(), 'citizen-sleeves', 2, true),
@@ -1220,6 +1280,8 @@ export class CitizenSystem {
     const matrix = this.renderMatrix;
     const limb = this.limbMatrix;
     const batches = this.batches;
+    const wardrobeStyles = batches.tunics.geometry.getAttribute('wardrobeStyle') as THREE.InstancedBufferAttribute;
+    const wardrobeAccents = batches.tunics.geometry.getAttribute('wardrobeAccent') as THREE.InstancedBufferAttribute;
     for (let index = 0; index < renderedCount; index++) {
       const citizen = this.citizens[index];
       if (this.indoors(citizen)) continue;
@@ -1237,6 +1299,9 @@ export class CitizenSystem {
       }
       parts.tunic.updateMatrix();
       limb.multiplyMatrices(base, parts.tunic.matrix);
+      wardrobeStyles.setX(batches.tunics.count, look.outfit);
+      this.tint.setHex(look.accent);
+      wardrobeAccents.setXYZ(batches.tunics.count, this.tint.r, this.tint.g, this.tint.b);
       this.place(batches.tunics, limb, look.tunic);
       if (look.apron !== null) {
         parts.apron.updateMatrix();
@@ -1272,6 +1337,8 @@ export class CitizenSystem {
       if (look.hat === 'straw') this.place(batches.straw, matrix.multiplyMatrices(limb, this.hatOffset));
       else if (look.hat === 'cap') this.place(batches.caps, matrix.multiplyMatrices(limb, this.capOffset));
     }
+    wardrobeStyles.needsUpdate = true;
+    wardrobeAccents.needsUpdate = true;
     for (const batch of this.batchList) {
       if (!batch.count) continue;
       batch.instanceMatrix.needsUpdate = true;

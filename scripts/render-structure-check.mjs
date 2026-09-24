@@ -170,6 +170,31 @@ try {
   city.setDiscoveryState(discoveries);
   city.setHarborLanterns(['blossom', 'table', 'chorus', 'clock', 'welcome']);
   city.update(1, 240);
+  {
+    // Construction selection should stay independent of scene mesh complexity.
+    const { BuildingPicker } = await server.ssrLoadModule('/src/build-tools.ts');
+    const picker = new BuildingPicker();
+    const raycaster = new THREE.Raycaster(new THREE.Vector3(0, 30, 0), new THREE.Vector3(0, -1, 0));
+    city.root.updateMatrixWorld(true);
+    const measurePicking = (pick) => {
+      for (let i = 0; i < 10; i++) pick();
+      const started = performance.now();
+      for (let i = 0; i < 100; i++) pick();
+      return (performance.now() - started) / 100;
+    };
+    const meshPickMs = measurePicking(() => raycaster.intersectObject(city.root, true));
+    const boundsPickMs = measurePicking(() => picker.pick(raycaster.ray, city.cells.values()));
+    console.log(`Construction picking (${city.cells.size} homes): meshes ${meshPickMs.toFixed(3)} ms → bounds ${boundsPickMs.toFixed(3)} ms per pick.`);
+    const undoCity = new CityRenderer(seed);
+    undoCity.load(cells, 240);
+    const remembered = { ...undoCity.get(0, 0) };
+    undoCity.restoreConstructionCell(0, 0, null);
+    if (undoCity.get(0, 0)) throw new Error('Undo failed to remove the construction cell.');
+    undoCity.restoreConstructionCell(0, 0, remembered);
+    if (undoCity.get(0, 0)?.color !== remembered.color || undoCity.get(0, 0)?.foundedAt !== remembered.foundedAt) {
+      throw new Error('Restoring construction lost paint or founding metadata.');
+    }
+  }
   const buildingCity = new CityRenderer(seed);
   buildingCity.place(0, 0, 0);
   const buildingGroup = buildingCity.root.children.find((group) => group.userData.cellX === 0 && group.userData.cellZ === 0);

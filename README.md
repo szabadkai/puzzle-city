@@ -24,6 +24,8 @@ After you discover four living places, the Atlas opens a third layer with seven 
 
 Every reachable home gets a named resident. Taller homes can hold small households with children or elders. Residents walk the actual quays, bridges, courtyards, and rooftops. They keep schedules, make friends, choose favorite shops, and stop for conversations or meals. Click one to see where they live, what they like, and where they are going. One full day takes about eight minutes.
 
+Everyday details give the harbor its own character: cushioned rooftop chairs surround mahjong games, tea sets, or books and a portable radio. Shirts, trousers, and towels hang beside balcony planters. Residents wear scarves, waistcoats, sailor stripes, and detailed work aprons. These cosmetic variations follow the town seed and appear in existing saves automatically.
+
 As the population rises, residents open egg-tart bakeries, cha chaan teng-inspired cafés, wet-market fish stalls, dai pai dong-inspired restaurants, tea houses, upstairs guesthouses, workshops, and other businesses on accessible ground floors. Projecting signs, corrugated shutters, tiled bases, window grilles, milk-tea booths, and evening tables make the trades readable in the street. Seventeen production steps connect the working harbor. Fish and herbs come from town. Merchant boats bring grain, timber, clay, and fiber beneath striped tarps, and finished export crates leave the real inventory when the merchant sails away.
 
 Recent customers and successful production make prosperity visible. Comfortable shops set extra goods outside, flourishing shops raise a pennant, and customers carry parcels home. When several trades flourish together, a fair-weather market opens every few days at a harbor plaza or along an arcade. Its stalls pack away again that afternoon, and quiet shops gradually lose their extra displays.
@@ -42,6 +44,9 @@ Every new town uses the same Hong Kong-inspired building language and grounded h
 
 - Left click: build
 - Right click: remove one floor or building
+- B / R: select Build / Remove; the building dock also works on desktop
+- Ctrl/Cmd+Z: undo construction; Ctrl/Cmd+Shift+Z or Ctrl+Y: redo (last 60 edits this session)
+- Arrow keys: choose a space; Enter: build; Delete: lower one floor
 - Click and drag: move the view
 - Middle or right drag: orbit
 - Mouse wheel: zoom
@@ -61,6 +66,8 @@ npm run dev
 ```
 
 Create a production build with `npm run build`.
+
+`npm run test:build-tools` checks construction history, lightweight building picking, desktop shortcuts, touch controls, saved building details, and screenshots. Undo restores the building shape, paint, and founding date; simulation life continues and earned discoveries stay collected.
 
 Run the deterministic checks with `npm run test:campaign`, `npm run test:campaign-guidance`, `npm run test:formations`, `npm run test:harbor-spaces`, `npm run test:crafting`, `npm run test:memory`, `npm run test:lanterns`, `npm run test:water-routes`, `npm run test:render-structure`, and `npm run test:palettes`.
 

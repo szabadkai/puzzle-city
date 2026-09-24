@@ -314,7 +314,9 @@ const FRAGMENT_SHADER = /* glsl */`
     float cameraDistance = distance(vWorld, uCameraPosition);
     float fog = 1.0 - exp(-uFogDensity * uFogDensity * cameraDistance * cameraDistance);
     color = mix(color, uFogColor, fog);
-    float horizonHaze = smoothstep(95.0, 170.0, distance(vWorld.xz, uHorizonCenter));
+    // Keep the opposite shore in visible water; reserve the pale sky blend
+    // for the open sea beyond the hills.
+    float horizonHaze = smoothstep(180.0, 320.0, distance(vWorld.xz, uHorizonCenter));
     color = mix(color, uHorizonColor, horizonHaze);
     gl_FragColor = vec4(color, 1.0);
   }

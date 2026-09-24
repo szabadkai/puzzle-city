@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:build-tools": "node scripts/build-tools-check.mjs",
+    "test:canvas-focus": "node scripts/canvas-focus-check.mjs",
     "test:crafting": "node --experimental-strip-types scripts/crafting-check.mjs",
     "test:prosperity": "node --experimental-strip-types scripts/prosperity-check.mjs",
     "test:memory": "node --experimental-strip-types scripts/memory-check.mjs",

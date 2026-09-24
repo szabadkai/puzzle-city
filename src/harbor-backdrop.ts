@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { AtmosphereState } from './atmosphere';
 import { hash } from './random';
-import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER } from './water-surface';
+import { EMISSIVE_REFLECTION_LAYER, REFLECTION_LAYER, WATER_LEVEL } from './water-surface';
 
 export type BackdropAtmosphere = Pick<AtmosphereState, 'fogColor' | 'night' | 'overcast'>;
 
@@ -11,6 +11,7 @@ type Range = {
   inner: number;
   outer: number;
   peak: number;
+  coastVariation: number;
   /** How far the ridge sinks inside the shipping channel, 0 to 1. */
   channelDepth: number;
   low: THREE.Color;
@@ -19,6 +20,8 @@ type Range = {
   salt: number;
 };
 
+type Terrain = { innerAt(angle: number): number; heightAt(angle: number, radius: number): number };
+
 type Channel = { angle: number; halfWidth: number; soft: number };
 
 const TAU = Math.PI * 2;
@@ -26,8 +29,9 @@ const SEA_FLOOR = -6;
 /** A low shelf at the water before the ridge climbs; the hillside city sits on it. */
 const APRON_HEIGHT = 1.6;
 const APRON_END = .3;
-const ANGULAR_STEPS = 192;
-const RADIAL_STEPS = 9;
+const ANGULAR_STEPS = 256;
+// More detail at the waterline, with broader facets on the upper slopes.
+const RADIAL_ROWS = [0, .06, .12, .17, .2, .23, .26, .3, .39, .5, .62, .75, .88, 1];
 /** The default camera looks from (18, 19, 20) toward the origin. The opposite shore is behind that view. */
 const DEFAULT_VIEW_ANGLE = Math.atan2(-1, -1);
 
@@ -76,27 +80,27 @@ export class HarborBackdrop {
     const open = (angle: number) => THREE.MathUtils.smoothstep(angularDistance(angle, channel.angle), channel.halfWidth, channel.halfWidth + channel.soft);
 
     const near: Range = {
-      name: 'near-green-hills', inner: 126, outer: 154, peak: 30, channelDepth: 1,
+      name: 'near-green-hills', inner: 126, outer: 174, peak: 30, coastVariation: 72, channelDepth: 1,
       low: new THREE.Color(0x6d9a6a), high: new THREE.Color(0x527a5a), crest: new THREE.Color(0x86928a), salt: 11,
     };
     const far: Range = {
-      name: 'misty-far-hills', inner: 158, outer: 180, peak: 40, channelDepth: .72,
+      name: 'misty-far-hills', inner: 182, outer: 214, peak: 40, coastVariation: 24, channelDepth: .72,
       low: new THREE.Color(0x7d949a), high: new THREE.Color(0x66808a), crest: new THREE.Color(0x8b9ca2), salt: 23,
     };
-    const nearHeight = this.heightFunction(seed, near, open);
-    const farHeight = this.heightFunction(seed, far, open);
+    const nearTerrain = this.terrainFunction(seed, near, open);
+    const farTerrain = this.terrainFunction(seed, far, open);
 
     this.nearMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: .96 });
     this.farMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 1 });
     this.blockMaterial = new THREE.MeshStandardMaterial({ roughness: .92 });
 
-    const nearHills = new THREE.Mesh(this.createRange(seed, near, nearHeight), this.nearMaterial);
+    const nearHills = new THREE.Mesh(this.createRange(seed, near, nearTerrain), this.nearMaterial);
     nearHills.name = near.name;
-    const farHills = new THREE.Mesh(this.createRange(seed, far, farHeight), this.farMaterial);
+    const farHills = new THREE.Mesh(this.createRange(seed, far, farTerrain), this.farMaterial);
     farHills.name = far.name;
 
-    const blocks = this.createHillsideBlocks(seed, near, nearHeight, open);
-    const blockGlints = this.createGlints(seed, near, nearHeight, open, blocks.placements);
+    const blocks = this.createHillsideBlocks(seed, near, nearTerrain, open);
+    const blockGlints = this.createGlints(seed, near, nearTerrain, open, blocks.placements);
     this.glints = blockGlints;
     const rocks = this.createRocks(seed, open);
 
@@ -120,29 +124,35 @@ export class HarborBackdrop {
     this.glints.material.opacity = .38 * lit * (1 - atmosphere.overcast * .3);
   }
 
-  private heightFunction(seed: number, range: Range, open: (angle: number) => number) {
+  private terrainFunction(seed: number, range: Range, open: (angle: number) => number) {
     const ridge = ridgeProfile(seed, range.salt);
-    return (angle: number, radius: number) => {
-      const across = THREE.MathUtils.clamp((radius - range.inner) / (range.outer - range.inner), 0, 1);
+    const coast = ridgeProfile(seed, range.salt + 101);
+    // Continuous contours make bays and rounded promontories rather than a ring.
+    // All terrain and district placement uses this same shoreline.
+    const innerAt = (angle: number) => range.inner + (coast(angle) - .5) * range.coastVariation;
+    const heightAt = (angle: number, radius: number) => {
+      const across = THREE.MathUtils.clamp((radius - innerAt(angle)) / (range.outer - innerAt(angle)), 0, 1);
       const apron = THREE.MathUtils.smoothstep(across, 0, APRON_END);
       const ridgeShape = Math.sin(Math.PI * THREE.MathUtils.clamp((across - APRON_END) / (1 - APRON_END), 0, 1)) ** 1.4;
       const openness = 1 - range.channelDepth * (1 - open(angle));
       const crest = APRON_HEIGHT + range.peak * (.35 + .65 * ridge(angle));
       return SEA_FLOOR + openness * ((APRON_HEIGHT - SEA_FLOOR) * apron + (crest - APRON_HEIGHT) * ridgeShape);
     };
+    return { innerAt, heightAt };
   }
 
-  private createRange(seed: number, range: Range, heightAt: (angle: number, radius: number) => number) {
-    const rows = RADIAL_STEPS + 1;
+  private createRange(seed: number, range: Range, { innerAt, heightAt }: Terrain) {
+    const rows = RADIAL_ROWS.length;
     const positions = new Float32Array(rows * ANGULAR_STEPS * 3);
     const colors = new Float32Array(rows * ANGULAR_STEPS * 3);
     const color = new THREE.Color();
+    const wetStone = new THREE.Color(0x4b665e);
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < ANGULAR_STEPS; column++) {
         const angle = column / ANGULAR_STEPS * TAU;
-        const across = row / RADIAL_STEPS;
-        const jitterAngle = (hash(seed, column, row, range.salt + 1) - .5) * (TAU / ANGULAR_STEPS) * .6;
-        const radius = range.inner + across * (range.outer - range.inner) + (hash(seed, column, row, range.salt + 2) - .5) * 1.6;
+        const across = RADIAL_ROWS[row];
+        const jitterAngle = (hash(seed, column, 0, range.salt + 1) - .5) * (TAU / ANGULAR_STEPS) * .35;
+        const radius = THREE.MathUtils.lerp(innerAt(angle + jitterAngle), range.outer, across);
         const relief = Math.sin(Math.PI * THREE.MathUtils.clamp((across - APRON_END) / (1 - APRON_END), 0, 1));
         const y = heightAt(angle + jitterAngle, radius) + (hash(seed, column, row, range.salt + 3) - .5) * range.peak * .1 * relief;
         const index = (row * ANGULAR_STEPS + column) * 3;
@@ -153,21 +163,25 @@ export class HarborBackdrop {
         const variation = hash(seed, column, row, range.salt + 4);
         color.copy(range.low).lerp(range.high, THREE.MathUtils.smoothstep(altitude, .05, .55));
         color.lerp(range.crest, THREE.MathUtils.smoothstep(altitude, .6, .95) * (.55 + variation * .45));
-        color.offsetHSL(0, 0, (variation - .5) * .05);
+        color.offsetHSL(0, 0, (variation - .5) * .035);
+        // A narrow damp bank anchors the hills in the sea; scene fog softens it
+        // naturally with distance instead of adding a bright outline.
+        color.lerp(wetStone, 1 - THREE.MathUtils.smoothstep(y, WATER_LEVEL, 1.5));
         colors[index] = color.r;
         colors[index + 1] = color.g;
         colors[index + 2] = color.b;
       }
     }
     const indices: number[] = [];
-    for (let row = 0; row < RADIAL_STEPS; row++) {
+    for (let row = 0; row < rows - 1; row++) {
       for (let column = 0; column < ANGULAR_STEPS; column++) {
         const next = (column + 1) % ANGULAR_STEPS;
         const a = row * ANGULAR_STEPS + column;
         const b = row * ANGULAR_STEPS + next;
         const c = (row + 1) * ANGULAR_STEPS + column;
         const d = (row + 1) * ANGULAR_STEPS + next;
-        indices.push(a, c, b, b, c, d);
+        // Counterclockwise from above: the visible hillside faces the sky.
+        indices.push(a, b, c, b, d, c);
       }
     }
     const geometry = new THREE.BufferGeometry();
@@ -179,17 +193,17 @@ export class HarborBackdrop {
   }
 
   /** Low rows of concrete blocks gathered into a few shore districts; the hills reach the water between them. */
-  private createHillsideBlocks(seed: number, range: Range, heightAt: (angle: number, radius: number) => number, open: (angle: number) => number) {
+  private createHillsideBlocks(seed: number, range: Range, { innerAt, heightAt }: Terrain, open: (angle: number) => number) {
     const placements: THREE.Object3D[] = [];
     const tints = [0xa39f94, 0x9a978d, 0xaba49a, 0x969a92, 0xa89e96, 0x8e918b].map((tint) => new THREE.Color(tint));
     const district = ridgeProfile(seed, 37);
     const density = (angle: number) => THREE.MathUtils.smoothstep(district(angle), .5, .72);
     const shoreRadius = (angle: number) => {
-      let low = range.inner;
-      let high = range.inner + (range.outer - range.inner) * APRON_END;
+      let low = innerAt(angle);
+      let high = THREE.MathUtils.lerp(low, range.outer, APRON_END);
       for (let step = 0; step < 16; step++) {
         const middle = (low + high) / 2;
-        if (heightAt(angle, middle) < 0) low = middle; else high = middle;
+        if (heightAt(angle, middle) < WATER_LEVEL) low = middle; else high = middle;
       }
       return high;
     };
@@ -225,7 +239,7 @@ export class HarborBackdrop {
     return { mesh, placements };
   }
 
-  private createGlints(seed: number, range: Range, heightAt: (angle: number, radius: number) => number, open: (angle: number) => number, blocks: THREE.Object3D[]) {
+  private createGlints(seed: number, range: Range, { innerAt, heightAt }: Terrain, open: (angle: number) => number, blocks: THREE.Object3D[]) {
     const quad = new THREE.PlaneGeometry(.36, .24);
     const pieces: THREE.BufferGeometry[] = [];
     const matrix = new THREE.Matrix4();
@@ -256,7 +270,7 @@ export class HarborBackdrop {
     for (let index = 0; index < 90; index++) {
       const angle = hash(seed, index, 0, 9802) * TAU;
       if (open(angle) < .8) continue;
-      const radius = range.inner + 2 + hash(seed, index, 1, 9802) * (range.outer - range.inner) * .42;
+      const radius = innerAt(angle) + 2 + hash(seed, index, 1, 9802) * (range.outer - innerAt(angle)) * .42;
       const ground = heightAt(angle, radius);
       if (ground < .5) continue;
       house.position.set(Math.cos(angle) * radius, ground, Math.sin(angle) * radius);

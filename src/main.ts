@@ -610,7 +610,11 @@ let voyageReveal: (FormationOccurrence & { until: number }) | undefined;
 let voyageCameraMove: { from: THREE.Vector3; to: THREE.Vector3; cameraFrom: THREE.Vector3; cameraTo: THREE.Vector3; start: number } | undefined;
 let voyageLayoutAt = 0;
 document.addEventListener('keydown', () => { voyageKeyboard = true; });
-document.addEventListener('pointerdown', () => { voyageKeyboard = false; }, { capture: true });
+document.addEventListener('pointerdown', () => {
+  voyageKeyboard = false;
+  // Clicking an already-focused canvas does not reliably clear :focus-visible.
+  renderer.domElement.classList.remove('keyboard-navigation');
+}, { capture: true });
 controls.addEventListener('start', () => { voyageCameraMove = undefined; });
 renderer.domElement.addEventListener('pointermove', (event) => {
   const prompt = document.querySelector<HTMLElement>('#voyage-pointer')!;
@@ -741,15 +745,20 @@ function showKeyboardBuildPoint() {
   renderer.domElement.setAttribute('aria-label', `Harbor: east ${x}, south ${z}, ${height ? `${height} floors` : 'open water'}. Arrow keys choose a space, Enter raises a home, Delete lowers it.`);
 }
 renderer.domElement.addEventListener('focus', () => {
+  renderer.domElement.classList.toggle('keyboard-navigation', voyageKeyboard);
   const marker = voyageGuidance?.markers.find(({ action }) => action !== 'preserve');
   if (marker) keyboardBuildPoint = { x: marker.x, z: marker.z };
   showKeyboardBuildPoint();
 });
-renderer.domElement.addEventListener('blur', () => { hover.visible = false; });
+renderer.domElement.addEventListener('blur', () => {
+  renderer.domElement.classList.remove('keyboard-navigation');
+  hover.visible = false;
+});
 renderer.domElement.addEventListener('keydown', (event) => {
   if (photo.active || event.metaKey || event.ctrlKey || event.altKey || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Delete', 'Backspace'].includes(event.key)) return;
   event.preventDefault();
   voyageKeyboard = true;
+  renderer.domElement.classList.add('keyboard-navigation');
   const { x, z } = keyboardBuildPoint;
   if (event.key === 'Enter') build(x, z);
   else if (event.key === 'Delete' || event.key === 'Backspace') demolish(x, z);

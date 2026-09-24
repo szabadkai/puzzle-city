@@ -77,6 +77,31 @@ try {
     || !backdrop.root.getObjectByName('harbor-background-rocks')) {
     throw new Error('The opposite-shore backdrop lost its mountain ranges, dim city lights, water rocks, or open shipping channel.');
   }
+  // Back-facing terrain disappears from above and leaves its buildings floating.
+  // Check the actual triangle winding, including the wraparound seam.
+  for (const rangeName of ['near-green-hills', 'misty-far-hills']) {
+    const geometry = backdrop.root.getObjectByName(rangeName).geometry;
+    const positions = geometry.getAttribute('position');
+    const indices = geometry.getIndex();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    for (let index = 0; index < indices.count; index += 3) {
+      a.fromBufferAttribute(positions, indices.getX(index));
+      b.fromBufferAttribute(positions, indices.getX(index + 1));
+      c.fromBufferAttribute(positions, indices.getX(index + 2));
+      if (b.sub(a).cross(c.sub(a)).y <= 0) {
+        throw new Error(`${rangeName} has an inverted terrain triangle.`);
+      }
+    }
+  }
+  // Changing the contour must preserve an open passage through the near hills.
+  backdrop.root.updateMatrixWorld(true);
+  const channelAngle = backdrop.root.userData.shippingChannel.angle;
+  const probe = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0));
+  for (let radius = 90; radius <= 180; radius += 2) {
+    probe.ray.origin.set(Math.cos(channelAngle) * radius, 60, Math.sin(channelAngle) * radius);
+    const hits = probe.intersectObject(backdrop.root.getObjectByName('near-green-hills'));
+    if (hits.some(hit => hit.point.y >= -.31)) throw new Error('The coastline blocks the shipping channel.');
+  }
   const distantGlints = backdrop.root.getObjectByName('distant-city-window-glints');
   backdrop.update({ fogColor: new THREE.Color(0x182240), night: 1, overcast: 0 });
   if (!(distantGlints?.material instanceof THREE.MeshBasicMaterial)

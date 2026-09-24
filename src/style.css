@@ -1594,7 +1594,9 @@ button:active { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) { .voyage-finale .voyage-chart::before, .voyage-finale .sandbox-key > span:not(.sr-only) { animation: none; } }
 
 .campaign-fold > summary { position: sticky; top: 0; z-index: 1; background: #ebd9b1; }
-canvas:focus-visible { outline: 3px solid #ffd477; outline-offset: -3px; }
+/* Only keyboard navigation needs a viewport-sized focus indicator. */
+canvas:focus { outline: none; }
+canvas.keyboard-navigation:focus { outline: 3px solid #ffd477; outline-offset: -3px; }
 
 /* Keep every photo action readable and reachable on narrow phones. */
 @media (max-width: 480px) {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 
 // City textures are produced with CanvasTexture. The structural test only
@@ -319,6 +320,61 @@ try {
     vertexBatchMaterials.add(batch.material.uuid);
   }
   if (vertexBatchMaterials.size < 3) throw new Error('Wall, roof, and accent vertex-color batches were not all created.');
+
+  // Construction must preserve stable GPU batches and avoid rebuilding geometry
+  // for journal-only discoveries. Two distant neighborhoods expose broad invalidation.
+  const editCity = new CityRenderer(seed);
+  editCity.load([
+    { x: -5, z: 0, height: 3, color: 1, placedAt: 0 },
+    { x: -4, z: 0, height: 1, color: 2, placedAt: 0 },
+    { x: 5, z: 0, height: 1, color: 3, placedAt: 0 },
+    { x: 6, z: 0, height: 2, color: 4, placedAt: 0 },
+  ]);
+  const pieceAt = (x, z) => editCity.root.children.find((group) => group.userData.cellX === x && group.userData.cellZ === z);
+  const originalPieces = new Map(editCity.pieces);
+  const batchRoot = editCity.root.getObjectByName('town-static-batches');
+  const originalBatches = [...batchRoot.children];
+  editCity.setDiscoveryState(['first-neighbor']);
+  assert.deepEqual(new Map(editCity.pieces), originalPieces, 'journal discoveries must retain every piece');
+  assert.deepEqual(batchRoot.children, originalBatches, 'journal discoveries must retain GPU batches');
+  editCity.setDiscoveryState(['first-neighbor', 'clock-tower']);
+  assert.notEqual(pieceAt(-5, 0), originalPieces.get('-5,0'), 'tower discovery must update eligible geometry');
+  assert.equal(pieceAt(5, 0), originalPieces.get('5,0'), 'tower discovery must leave low homes alone');
+  editCity.setDiscoveryState(['first-neighbor']);
+  const stable = pieceAt(5, 0);
+  const batchesBeforeEdit = [...batchRoot.children];
+  const stableRanges = editCity.staticBatchRanges.get('5,0').map(({ indices, start, count }) => ({
+    indices, start, count, before: indices.array.slice(start, start + count),
+  }));
+  const retiredRanges = [...editCity.staticBatchRanges.get('-5,0')];
+  assert.ok(editCity.place(-5, 0, 1, true));
+  assert.deepEqual(batchRoot.children, batchesBeforeEdit, 'interactive edits must retain settled town batches');
+  assert.equal(pieceAt(5, 0), stable, 'distant neighborhood must not rebuild');
+  for (const { indices, start, count, before } of stableRanges) {
+    assert.deepEqual(indices.array.slice(start, start + count), before, 'stable triangle indices must remain untouched');
+  }
+  for (const { indices, start, count } of retiredRanges) {
+    assert.ok(indices.array.subarray(start, start + count).every((index) => index === 0), 'old edited geometry must disappear immediately');
+  }
+  editCity.rebuildGlobalStaticBatch(true);
+  for (const batch of batchesBeforeEdit) assert.ok(batchRoot.children.includes(batch), 'incremental batching must preserve stable GPU buffers');
+  for (const { indices, start, count, before } of stableRanges) {
+    assert.deepEqual(indices.array.slice(start, start + count), before, 'incremental merge must not retire stable triangles');
+  }
+  assert.ok(editCity.remove(-5, 0, 2, true));
+  editCity.restoreConstructionCell(-5, 0, { x: -5, z: 0, height: 3, color: 1, placedAt: 0 });
+  editCity.get(-5, 0).placedAt = 0;
+  delete pieceAt(-5, 0).userData.morphStartedAt;
+  pieceAt(-5, 0).scale.y = 1;
+  editCity.rebuildGlobalStaticBatch();
+  const batchShape = () => batchRoot.children.map((mesh) => ({
+    material: mesh.material.uuid,
+    vertices: mesh.geometry.getAttribute('position').count,
+    indices: mesh.geometry.index.count,
+  })).sort((a, b) => a.material.localeCompare(b.material) || a.vertices - b.vertices);
+  const incrementalShape = batchShape();
+  editCity.rebuildAll(false);
+  assert.deepEqual(batchShape(), incrementalShape, 'rapid raise/lower/undo must settle to the same geometry as a full rebuild');
 
   const cellMap = new Map(cells.map((cell) => [`${cell.x},${cell.z}`, cell]));
   const people = new CitizenSystem(seed, cellMap, citizens);

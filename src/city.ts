@@ -59,6 +59,7 @@ const DEFAULT_SLOT_COLORS = paletteSlotColors(PALETTES[0]);
 const WALL_SLOT_COUNT = PALETTE_SLOT.wallCount;
 const CANOPY_STRIPE_GAP = .006;
 const STATIC_BATCH_SETTLE_DELAY_MS = 750;
+const MAX_STATIC_BATCHES_DURING_EDITS = 128;
 
 type FacadeLayer = 'opening' | 'composition' | 'equipment';
 type FacadeBounds = Readonly<{ sideMin: number; sideMax: number; yMin: number; yMax: number }>;
@@ -308,10 +309,13 @@ export class CityRenderer {
   private harborSpaces = analyzeHarborSpaces(this.cells);
   private readonly pieces = new Map<string, THREE.Group>();
   private readonly staticBatchRoot = new THREE.Group();
+  private readonly pendingStaticBatchPieces = new Set<string>();
+  private readonly staticBatchRanges = new Map<string, { indices: THREE.BufferAttribute; start: number; count: number }[]>();
   private staticBatchRebuildTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly businesses = new Map<string, BusinessSave>();
   private readonly facadeLayouts = new WeakMap<THREE.Group, FacadeDecorationLayout>();
   private readonly discoveries = new Set<string>();
+  private buildingDiscoveryDependencies: Set<string> | null = null;
   private readonly placeLandmarks = new Map<string, readonly PlaceLandmarkSocket[]>();
   private readonly confluenceLandmarks = new Map<string, ConfluenceLandmarkSocket>();
   private readonly harborLanternRoot = new THREE.Group();
@@ -497,11 +501,22 @@ export class CityRenderer {
   setDiscoveryState(discoveries: readonly string[]) {
     const next = new Set(discoveries);
     if (next.size === this.discoveries.size && [...next].every((id) => this.discoveries.has(id))) return;
+    const changed = new Set([...this.discoveries, ...next].filter((id) => this.discoveries.has(id) !== next.has(id)));
     this.discoveries.clear();
     for (const id of next) this.discoveries.add(id);
-    this.rebuildAll(false);
+    // Most discoveries only affect residents, wildlife, or the journal. Rebuild
+    // only pieces whose geometry actually read one of the changed flags.
+    this.rebuildPieces([...this.pieces].filter(([, group]) => {
+      const dependencies = group.userData.discoveryDependencies as Set<string>;
+      return [...changed].some((id) => dependencies.has(id));
+    }).map(([key]) => key));
     this.syncHarborLanterns();
     this.syncNightLights();
+  }
+
+  private hasGeometryDiscovery(id: string) {
+    this.buildingDiscoveryDependencies?.add(id);
+    return this.discoveries.has(id);
   }
 
   setHarborLanterns(ids: Iterable<HarborLanternId>) {
@@ -522,9 +537,15 @@ export class CityRenderer {
       if (!sockets.some((candidate) => candidate.kind === socket.kind)) sockets.push(socket);
       next.set(key, sockets);
     }
+    const changedSockets = new Set([...this.placeLandmarks.keys(), ...next.keys()].filter((key) => {
+      const before = this.placeLandmarks.get(key) ?? [];
+      const after = next.get(key) ?? [];
+      return before.length !== after.length || before.some((socket, index) => socket.kind !== after[index]?.kind);
+    }));
+    if (!changedSockets.size) return;
     const influencedCellKeys = (landmarks: ReadonlyMap<string, readonly PlaceLandmarkSocket[]>) => {
       const keys = new Set<string>();
-      for (const sockets of landmarks.values()) for (const socket of sockets) {
+      for (const key of changedSockets) for (const socket of landmarks.get(key) ?? []) {
         const radius = PLACE_IDENTITY_BY_ID.get(socket.identityId)?.influenceRadius ?? 3;
         for (const cell of this.cells.values()) {
           if (Math.abs(cell.x - socket.x) + Math.abs(cell.z - socket.z) <= radius) keys.add(keyOf(cell.x, cell.z));
@@ -537,19 +558,20 @@ export class CityRenderer {
       const before = this.placeLandmarks.get(key) ?? [];
       if (sockets.some((socket) => !before.some((candidate) => candidate.kind === socket.kind))) added.add(key);
     }
-    const affected = new Set([
-      ...this.placeLandmarks.keys(), ...next.keys(),
+    const candidates = new Set([
+      ...changedSockets,
       ...influencedCellKeys(this.placeLandmarks), ...influencedCellKeys(next),
     ]);
-    const unchanged = [...affected].every((key) => {
-      const before = this.placeLandmarks.get(key) ?? [];
-      const after = next.get(key) ?? [];
-      return before.length === after.length && before.every((socket, index) => socket.kind === after[index]?.kind);
-    });
-    if (unchanged) return;
+    const influenceSignature = (key: string) => {
+      const [x, z] = key.split(',').map(Number);
+      const influence = this.neighborhoodInfluenceAt(x, z);
+      return influence ? `${influence.landmark.kind}:${influence.landmark.x},${influence.landmark.z}` : '';
+    };
+    const previousInfluence = new Map([...candidates].map((key) => [key, influenceSignature(key)]));
     this.placeLandmarks.clear();
     for (const [key, sockets] of next) this.placeLandmarks.set(key, Object.freeze([...sockets]));
-    this.clearGlobalStaticBatch();
+    const affected = [...candidates].filter((key) => changedSockets.has(key) || previousInfluence.get(key) !== influenceSignature(key));
+    this.clearGlobalStaticBatch(affected);
     for (const key of affected) {
       const [x, z] = key.split(',').map(Number);
       const old = this.pieces.get(key);
@@ -571,13 +593,13 @@ export class CityRenderer {
       const socket = confluenceLandmarkSocket(confluence);
       next.set(keyOf(socket.x, socket.z), socket);
     }
-    const affected = new Set([...this.confluenceLandmarks.keys(), ...next.keys()]);
-    const unchanged = [...affected].every((key) => this.confluenceLandmarks.get(key)?.kind === next.get(key)?.kind);
-    if (unchanged) return;
+    const affected = new Set([...this.confluenceLandmarks.keys(), ...next.keys()].filter((key) =>
+      this.confluenceLandmarks.get(key)?.kind !== next.get(key)?.kind));
+    if (!affected.size) return;
     const added = new Set([...next].filter(([key, socket]) => this.confluenceLandmarks.get(key)?.kind !== socket.kind).map(([key]) => key));
     this.confluenceLandmarks.clear();
     for (const [key, socket] of next) this.confluenceLandmarks.set(key, socket);
-    this.clearGlobalStaticBatch();
+    this.clearGlobalStaticBatch(affected);
     for (const key of affected) {
       const [x, z] = key.split(',').map(Number);
       const old = this.pieces.get(key);
@@ -758,7 +780,7 @@ export class CityRenderer {
     presentationUniforms.uClothRetract.value += (retractTarget - presentationUniforms.uClothRetract.value) * Math.min(1, deltaSeconds * 1.6);
     presentationUniforms.uSimHours.value = absoluteHours;
     const hour = ((absoluteHours % 24) + 24) % 24;
-    let staticBatchChanged = false;
+    const changedPieces = new Set<string>();
     if (this.discoveryGlow) {
       const age = (performance.now() - this.discoveryGlow.startedAt) / 1000;
       const scale = 1 + age * 1.35;
@@ -790,7 +812,7 @@ export class CityRenderer {
           }
           if (cell) cell.placedAt = 0;
           delete group.userData.morphStartedAt;
-          staticBatchChanged = true;
+          changedPieces.add(key);
         }
       } else {
         group.scale.y = 1;
@@ -803,7 +825,7 @@ export class CityRenderer {
           if (object.userData.scheduleVisible === shown) continue;
           object.userData.scheduleVisible = shown;
           object.visible = shown;
-          staticBatchChanged = true;
+          changedPieces.add(key);
         }
       }
 
@@ -817,7 +839,7 @@ export class CityRenderer {
             const requiredStage = child.userData.vegetationStage as number | undefined;
             if (requiredStage !== undefined) child.visible = requiredStage <= stage;
           }
-          staticBatchChanged = true;
+          changedPieces.add(key);
         }
       }
       const timeNest = group.userData.timeNest as THREE.Object3D | undefined;
@@ -831,7 +853,7 @@ export class CityRenderer {
             object.userData.scheduleVisible = nesting;
             object.visible = nesting;
           });
-          staticBatchChanged = true;
+          changedPieces.add(key);
         }
       }
 
@@ -855,7 +877,16 @@ export class CityRenderer {
       if (changed) smokeActive.needsUpdate = true;
     }
     this.smokePoints.visible = activeSmoke > 0;
-    if (staticBatchChanged) this.finishStaticBatchMutation();
+    if (changedPieces.size) {
+      this.clearGlobalStaticBatch(changedPieces);
+      this.finishStaticBatchMutation();
+    }
+    if (this.staticBatchRebuildTimer !== null && this.pendingStaticBatchPieces.size) {
+      // Coalesce all changes from one input event before the next render. Only
+      // the growing building stays unbatched; neighbors immediately draw together.
+      // Compact periodically during a long gesture to keep batch count bounded.
+      this.rebuildGlobalStaticBatch(this.staticBatchRoot.children.length < MAX_STATIC_BATCHES_DURING_EDITS);
+    }
   }
 
   setDaylight(daylight: number) {
@@ -1070,7 +1101,6 @@ export class CityRenderer {
   }
 
   private rebuildAround(x: number, z: number, deferStaticBatch = false) {
-    this.clearGlobalStaticBatch();
     const currentSpaces = analyzeHarborSpaces(this.cells);
     const affected = new Set<string>();
     const around = (px: number, pz: number) => {
@@ -1079,8 +1109,15 @@ export class CityRenderer {
     around(x, z);
     if (currentSpaces !== this.harborSpaces) {
       // An edit at a mouth or junction can change distant tiles in its shape.
+      const signature = (space: typeof currentSpaces.spaces[number]) =>
+        `${space.id}:${space.direction}:${space.anchor.x},${space.anchor.z}:${space.tiles.map((point) => keyOf(point.x, point.z)).join(';')}`;
+      const before = new Set(this.harborSpaces.spaces.map(signature));
+      const after = new Set(currentSpaces.spaces.map(signature));
       for (const layout of [this.harborSpaces, currentSpaces]) {
-        for (const space of layout.spaces) for (const point of space.tiles) around(point.x, point.z);
+        const other = layout === this.harborSpaces ? after : before;
+        for (const space of layout.spaces) {
+          if (!other.has(signature(space))) for (const point of space.tiles) around(point.x, point.z);
+        }
         for (const key of layout.ground) {
           if (this.harborSpaces.ground.has(key) === currentSpaces.ground.has(key)) continue;
           const [px, pz] = key.split(',').map(Number); around(px, pz);
@@ -1088,6 +1125,7 @@ export class CityRenderer {
       }
     }
     this.harborSpaces = currentSpaces;
+    this.clearGlobalStaticBatch(affected);
     for (const affectedKey of affected) {
       const [px, pz] = affectedKey.split(',').map(Number);
       const key = keyOf(px, pz);
@@ -1109,7 +1147,7 @@ export class CityRenderer {
   private rebuildPieces(keys: Iterable<string>) {
     const affected = [...new Set(keys)];
     if (!affected.length) return;
-    this.clearGlobalStaticBatch();
+    this.clearGlobalStaticBatch(affected);
     for (const key of affected) {
       const [x, z] = key.split(',').map(Number);
       const old = this.pieces.get(key);
@@ -1136,13 +1174,21 @@ export class CityRenderer {
       group.scale.y = .04;
     }
     const cell = this.get(x, z);
-    if (cell) this.buildCell(group, cell);
-    else this.buildFeature(group, x, z);
+    const dependencies = new Set<string>();
+    group.userData.discoveryDependencies = dependencies;
+    this.buildingDiscoveryDependencies = dependencies;
+    try {
+      if (cell) this.buildCell(group, cell);
+      else this.buildFeature(group, x, z);
+    } finally {
+      this.buildingDiscoveryDependencies = null;
+    }
     this.consolidateStaticMeshes(group);
     if (animate && cell) this.addConstructionScaffold(group, cell);
     group.traverse((object) => this.markReflective(object));
     this.root.add(group);
     this.pieces.set(keyOf(x, z), group);
+    this.pendingStaticBatchPieces.add(keyOf(x, z));
   }
 
   private static isCloth(object: THREE.Object3D) {
@@ -1227,7 +1273,7 @@ export class CityRenderer {
       if (meshes.length < 2) continue;
       const keepIndexed = meshes.every((mesh) => mesh.geometry.index !== null);
       const geometries = meshes.map((mesh) => {
-        const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
+        const geometry = keepIndexed || !mesh.geometry.index ? new THREE.BufferGeometry().copy(mesh.geometry) : mesh.geometry.toNonIndexed();
         geometry.applyMatrix4(new THREE.Matrix4().multiplyMatrices(groupInverse, mesh.matrixWorld));
         return geometry;
       });
@@ -1283,22 +1329,32 @@ export class CityRenderer {
     mesh.material = target;
   }
 
-  private clearGlobalStaticBatch() {
-    // The first change in an edit session already restored every source mesh.
-    // Follow-up formation/business changes should not traverse the town again.
+  private clearGlobalStaticBatch(keys?: Iterable<string>) {
     if (!this.staticBatchRoot.children.length) return;
-    for (const piece of this.pieces.values()) {
-      piece.traverse((child) => {
+    const affected = keys ? [...keys] : [...this.pieces.keys()];
+    for (const key of affected) {
+      this.pendingStaticBatchPieces.add(key);
+      // Collapse only the old triangles of changed pieces. Stable buildings keep
+      // their GPU buffers and low draw count throughout a construction gesture.
+      for (const { indices, start, count } of keys ? this.staticBatchRanges.get(key) ?? [] : []) {
+        indices.array.fill(0, start, start + count);
+        indices.addUpdateRange(start, count);
+        indices.needsUpdate = true;
+      }
+      this.staticBatchRanges.delete(key);
+      this.pieces.get(key)?.traverse((child) => {
         if (child.userData.hiddenByStaticBatch) {
           child.visible = child.userData.scheduleVisible ?? true;
           delete child.userData.hiddenByStaticBatch;
         }
       });
     }
+    if (keys) return;
     for (const child of this.staticBatchRoot.children) {
       if (child instanceof THREE.Mesh) child.geometry.dispose();
     }
     this.staticBatchRoot.clear();
+    this.staticBatchRanges.clear();
   }
 
   /**
@@ -1306,16 +1362,24 @@ export class CityRenderer {
    * material for the whole town, cloth included, so draw calls stay flat as
    * the town grows. Pieces still animating their construction stay separate.
    */
-  private rebuildGlobalStaticBatch() {
-    if (this.staticBatchRebuildTimer !== null) {
+  private rebuildGlobalStaticBatch(onlyPending = false) {
+    if (!onlyPending && this.staticBatchRebuildTimer !== null) {
       clearTimeout(this.staticBatchRebuildTimer);
       this.staticBatchRebuildTimer = null;
     }
-    this.clearGlobalStaticBatch();
+    if (!onlyPending) {
+      this.pendingStaticBatchPieces.clear();
+      this.clearGlobalStaticBatch();
+    }
     const buckets = new Map<string, THREE.Mesh[]>();
-    for (const group of this.pieces.values()) {
-      const cell = this.cells.get(keyOf(group.userData.cellX as number, group.userData.cellZ as number));
+    const sourceKeys = new Map<THREE.Mesh, string>();
+    const keys = onlyPending ? [...this.pendingStaticBatchPieces] : [...this.pieces.keys()];
+    for (const key of keys) {
+      const group = this.pieces.get(key);
+      if (!group) { this.pendingStaticBatchPieces.delete(key); continue; }
+      const cell = this.cells.get(key);
       if (group.userData.morphStartedAt !== undefined || (cell?.placedAt ?? 0) > 0) continue;
+      this.pendingStaticBatchPieces.delete(key);
       group.updateMatrixWorld(true);
       const { statics, cloth } = this.collectMeshes(group);
       for (const child of [...statics, ...cloth]) {
@@ -1324,6 +1388,7 @@ export class CityRenderer {
         const key = `${material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
         const bucket = buckets.get(key) ?? [];
         bucket.push(child);
+        sourceKeys.set(child, keyOf(group.userData.cellX as number, group.userData.cellZ as number));
         buckets.set(key, bucket);
       }
     }
@@ -1331,13 +1396,29 @@ export class CityRenderer {
       if (meshes.length < 2) continue;
       const keepIndexed = meshes.every((mesh) => mesh.geometry.index !== null);
       const geometries = meshes.map((mesh) => {
-        const geometry = keepIndexed || !mesh.geometry.index ? mesh.geometry.clone() : mesh.geometry.toNonIndexed();
+        const geometry = keepIndexed || !mesh.geometry.index ? new THREE.BufferGeometry().copy(mesh.geometry) : mesh.geometry.toNonIndexed();
         geometry.applyMatrix4(mesh.matrixWorld);
         return geometry;
       });
       const geometry = mergeGeometries(geometries, false);
       for (const part of geometries) part.dispose();
       if (!geometry) continue;
+      // An index also lets edits retire triangles without unbatching the town.
+      if (!geometry.index) {
+        const count = geometry.getAttribute('position').count;
+        const indices = count > 65535 ? new Uint32Array(count) : new Uint16Array(count);
+        for (let index = 0; index < count; index++) indices[index] = index;
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+      }
+      let start = 0;
+      for (const mesh of meshes) {
+        const count = keepIndexed ? mesh.geometry.index!.count : mesh.geometry.getAttribute('position').count;
+        const key = sourceKeys.get(mesh)!;
+        const ranges = this.staticBatchRanges.get(key) ?? [];
+        ranges.push({ indices: geometry.index!, start, count });
+        this.staticBatchRanges.set(key, ranges);
+        start += count;
+      }
       const first = meshes[0];
       const batch = new THREE.Mesh(geometry, first.material as THREE.Material);
       batch.castShadow = first.castShadow;
@@ -1350,12 +1431,12 @@ export class CityRenderer {
         mesh.visible = false;
       }
     }
-    this.syncSmokeSources();
+    if (!onlyPending) this.syncSmokeSources();
   }
 
   /**
-   * During interactive edits, keep the per-piece meshes live and coalesce all
-   * resulting visual changes into one town-wide merge after input settles.
+   * During interactive edits, keep changed pieces live alongside stable town
+   * batches and coalesce their geometry after input settles.
    */
   private finishStaticBatchMutation(defer = this.staticBatchRebuildTimer !== null) {
     if (!defer) {
@@ -1473,7 +1554,7 @@ export class CityRenderer {
         facadeTraceBounds!,
       );
     const clockFaceDirections = new Set<Direction>();
-    if (cell.height >= 3 && count <= 1 && this.discoveries.has('clock-tower')) {
+    if (cell.height >= 3 && count <= 1 && this.hasGeometryDiscovery('clock-tower')) {
       for (let direction = 0; direction < 4; direction++) {
         const dir = direction as Direction;
         if (neighborHeights[dir] === 0) clockFaceDirections.add(dir);
@@ -1496,14 +1577,14 @@ export class CityRenderer {
       && this.reserveFacadeDecoration(group, primaryFacadeDirection, 'balcony', 'composition', {
         sideMin: -.78, sideMax: .78, yMin: topY - .78, yMax: topY - .24,
       });
-    const festivalRibbonsPlanned = this.discoveries.has('festival-ribbons')
+    const festivalRibbonsPlanned = this.hasGeometryDiscovery('festival-ribbons')
       && !clockFaceDirections.has(primaryFacadeDirection)
       && hash(this.seed, cell.x, cell.z, 1920) > .55
       && this.reserveFacadeDecoration(group, primaryFacadeDirection, 'festival-ribbons', 'composition', {
         sideMin: -.9, sideMax: .9, yMin: topY - .7, yMax: topY - .29,
       });
     const finaleLanternsPlanned = count > 0
-      && this.discoveries.has('lantern-finale')
+      && this.hasGeometryDiscovery('lantern-finale')
       && this.lanternFinaleRevealed
       && !clockFaceDirections.has(primaryFacadeDirection)
       && hash(this.seed, cell.x, cell.z, 1930) > .46
@@ -1556,12 +1637,12 @@ export class CityRenderer {
         group.userData.hasPitchedTowerRoof = true;
         if (!this.landmarkAt(cell.x, cell.z, 'signal-beacon')
           && !this.confluenceAt(cell.x, cell.z, 'observatory-beacon')) this.addFlag(group, topY + 1.55);
-        if (this.discoveries.has('tower-bell')) {
+        if (this.hasGeometryDiscovery('tower-bell')) {
           const bellDirection = ([0, 1, 2, 3] as Direction[]).find((dir) => !clockFaceDirections.has(dir)) ?? 2;
           this.addTowerBell(group, topY, bellDirection);
         }
-        if (this.discoveries.has('birds-nest')) this.addBirdNest(group, topY + 1.42);
-        else if (this.discoveries.has('gulls-return') && CARDINALS.some(([dx, dz]) => this.businesses.get(keyOf(cell.x + dx, cell.z + dz))?.type === 'bakery')) {
+        if (this.hasGeometryDiscovery('birds-nest')) this.addBirdNest(group, topY + 1.42);
+        else if (this.hasGeometryDiscovery('gulls-return') && CARDINALS.some(([dx, dz]) => this.businesses.get(keyOf(cell.x + dx, cell.z + dz))?.type === 'bakery')) {
           const nest = this.addBirdNest(group, topY + 1.42);
           nest.visible = false;
           nest.userData.scheduleVisible = false;
@@ -1613,11 +1694,11 @@ export class CityRenderer {
       this.addRooftopAerial(group, topY);
       if (!this.landmarkAt(cell.x, cell.z, 'signal-beacon')
         && !this.confluenceAt(cell.x, cell.z, 'observatory-beacon')) this.addFlag(group, topY + 1.2);
-      if (this.discoveries.has('tower-bell')) {
+      if (this.hasGeometryDiscovery('tower-bell')) {
         const bellDirection = ([0, 1, 2, 3] as Direction[]).find((dir) => !clockFaceDirections.has(dir)) ?? 2;
         this.addTowerBell(group, topY + .05, bellDirection);
       }
-      if (this.discoveries.has('birds-nest')) this.addBirdNest(group, topY + .88);
+      if (this.hasGeometryDiscovery('birds-nest')) this.addBirdNest(group, topY + .88);
     }
     if (cell.height >= 3 && isolated && clockFaceDirections.size) this.addClockFaces(group, [...clockFaceDirections], topY - .43);
 
@@ -1636,7 +1717,7 @@ export class CityRenderer {
     }
     if (group.userData.flatTongLauRoof && !receivesTerrace) this.addTongLauRoofLife(group, cell, topY);
     if (balconyPlanned) this.addBalcony(group, cell, topY);
-    if (!receivesTerrace && this.discoveries.has('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
+    if (!receivesTerrace && this.hasGeometryDiscovery('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
     if (festivalRibbonsPlanned) this.addFestivalRibbon(group, cell, topY);
     if (finaleLanternsPlanned) this.addFinaleLanterns(group, cell, topY);
     if (neighborhoodInfluence) {
@@ -2759,7 +2840,7 @@ export class CityRenderer {
     scaffold.updateMatrixWorld(true);
     const parts = scaffold.children
       .filter((child): child is THREE.Mesh => child instanceof THREE.Mesh)
-      .map((mesh) => mesh.geometry.clone().applyMatrix4(mesh.matrix));
+      .map((mesh) => new THREE.BufferGeometry().copy(mesh.geometry).applyMatrix4(mesh.matrix));
     const merged = mergeGeometries(parts, false);
     parts.forEach((part) => part.dispose());
     scaffold.children.forEach((child) => {
@@ -3582,7 +3663,7 @@ export class CityRenderer {
         z + Math.sin(angle) * .19 * scale,
       );
       group.add(crown);
-      if (this.discoveries.has('blossom-tide') && index === 1) {
+      if (this.hasGeometryDiscovery('blossom-tide') && index === 1) {
         const blooms = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.13 * scale, 1), this.blossom), false);
         blooms.position.copy(crown.position).add(new THREE.Vector3(.1 * scale, .12 * scale, -.06 * scale));
         group.add(blooms);
@@ -3762,7 +3843,7 @@ export class CityRenderer {
       model.updateMatrixWorld(true);
       model.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;
-        const geometry = object.geometry.index ? object.geometry.toNonIndexed() : object.geometry.clone();
+        const geometry = object.geometry.index ? object.geometry.toNonIndexed() : new THREE.BufferGeometry().copy(object.geometry);
         geometry.applyMatrix4(object.matrixWorld);
         geometries.push(geometry);
       });
@@ -4477,11 +4558,11 @@ export class CityRenderer {
     canopy.name = 'swaying-tree';
     canopy.position.y = 1.28;
     for (let i = 0; i < 5; i++) {
-      const crown = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.48 + (i % 2) * .1, 1), this.discoveries.has('rare-tree') ? this.silverLeaf : this.leaf));
+      const crown = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.48 + (i % 2) * .1, 1), this.hasGeometryDiscovery('rare-tree') ? this.silverLeaf : this.leaf));
       const angle = i * Math.PI * .4 + hash(this.seed, x, z, 410) * 2;
       crown.position.set(Math.cos(angle) * .34, (i % 2) * .28, Math.sin(angle) * .34);
       canopy.add(crown);
-      if (this.discoveries.has('blossom-tide') || this.discoveries.has('rare-tree')) {
+      if (this.hasGeometryDiscovery('blossom-tide') || this.hasGeometryDiscovery('rare-tree')) {
         const blooms = shadow(new THREE.Mesh(new THREE.IcosahedronGeometry(.19 + (i % 2) * .035, 1), this.blossom), false);
         blooms.position.copy(crown.position).add(new THREE.Vector3(i % 2 ? .18 : -.12, .16, i % 3 ? .1 : -.14));
         canopy.add(blooms);

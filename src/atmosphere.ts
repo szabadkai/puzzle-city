@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE_SLOT, type PaletteSystem } from './palette';
+import { moonDirectionAt, sunDirectionAt } from './celestial';
 
 /**
  * Lighting state for one moment of the simulation clock. Everything that
@@ -13,6 +14,10 @@ export type AtmosphereState = {
   sunElevation: number;
   moonDirection: THREE.Vector3;
   moonIntensity: number;
+  /** Illuminated fraction of the lunar disc, 0 new to 1 full. */
+  moonIllumination: number;
+  /** Disc visibility also permits a faint daytime moon. */
+  moonVisibility: number;
   skyZenith: THREE.Color;
   skyHorizon: THREE.Color;
   /** Warm glow strength around the sun at the horizon, 0 to 1. */
@@ -93,6 +98,8 @@ export function createAtmosphereState(): AtmosphereState {
     sunElevation: 0,
     moonDirection: new THREE.Vector3(0, 1, 0),
     moonIntensity: 0,
+    moonIllumination: 0,
+    moonVisibility: 0,
     skyZenith: new THREE.Color(),
     skyHorizon: new THREE.Color(),
     horizonGlow: 0,
@@ -113,29 +120,21 @@ export function createAtmosphereState(): AtmosphereState {
 
 const scratchWarm = new THREE.Color();
 
-/** Sun elevation in radians for a solar day that runs from 05:00 to 19:00. */
+const scratchSun = new THREE.Vector3();
+
+/** Continuous solar elevation in radians, including the below-horizon arc. */
 export function sunElevationAt(hour: number) {
-  const t = (((hour % 24) + 24) % 24 - 5) / 14;
-  if (t < 0 || t > 1) {
-    const below = t < 0 ? -t : t - 1;
-    return -THREE.MathUtils.degToRad(8 + below * 40);
-  }
-  return THREE.MathUtils.degToRad(Math.sin(t * Math.PI) * 62);
+  return Math.asin(sunDirectionAt(hour, scratchSun).y);
 }
 
-export function evaluateAtmosphere(hour: number, palette: PaletteSystem, rainIntensity: number, target: AtmosphereState) {
+export function evaluateAtmosphere(hour: number, palette: PaletteSystem, rainIntensity: number, target: AtmosphereState, day = 1) {
   const keys = lerpKeyframes(hour);
   const rain = THREE.MathUtils.clamp(rainIntensity, 0, 1);
-  const elevation = sunElevationAt(hour);
-  // The arc runs behind the default camera at noon, so morning light comes
-  // from the left, evening light rakes in from the right.
-  const azimuth = THREE.MathUtils.degToRad(130.5) - (hour - 6) / 24 * Math.PI * 2;
+  sunDirectionAt(hour, target.sunDirection);
+  const elevation = Math.asin(target.sunDirection.y);
   target.sunElevation = elevation;
-  target.sunDirection.set(Math.cos(azimuth) * Math.cos(elevation), Math.sin(elevation), Math.sin(azimuth) * Math.cos(elevation)).normalize();
-  // The moon hangs low ahead of the default view so its glitter path crosses the water toward the camera.
-  const moonAzimuth = THREE.MathUtils.degToRad(228);
-  const moonElevation = THREE.MathUtils.degToRad(26 + Math.sin(((hour + 6) % 24) / 24 * Math.PI) * 10);
-  target.moonDirection.set(Math.cos(moonAzimuth) * Math.cos(moonElevation), Math.sin(moonElevation), Math.sin(moonAzimuth) * Math.cos(moonElevation));
+  moonDirectionAt(day * 24 + hour, target.moonDirection);
+  target.moonIllumination = THREE.MathUtils.clamp((1 - target.moonDirection.dot(target.sunDirection)) * .5, 0, 1);
   target.night = keys.night;
   target.wetness = rain;
   // Cloud builds before the first drop: the ramp up to 0.3 is overcast, above it rain.
@@ -149,8 +148,12 @@ export function evaluateAtmosphere(hour: number, palette: PaletteSystem, rainInt
 
   kelvinToColor(keys.kelvin, target.sunColor);
   target.sunColor.lerp(NIGHT_SUN_FLOOR, keys.night * .5);
-  target.sunIntensity = keys.sun * (1 - target.overcast * .45 - THREE.MathUtils.clamp((rain - .3) / .7, 0, 1) * .3);
-  target.moonIntensity = Math.pow(keys.night, 1.4) * 1.1 * (1 - rain * .6);
+  target.sunIntensity = keys.sun * THREE.MathUtils.smoothstep(elevation, 0, .04)
+    * (1 - target.overcast * .45 - THREE.MathUtils.clamp((rain - .3) / .7, 0, 1) * .3);
+  target.moonVisibility = THREE.MathUtils.smoothstep(target.moonDirection.y, -.015, .025)
+    * (.22 + .78 * keys.night) * (1 - rain * .85);
+  target.moonIntensity = Math.pow(keys.night, 1.4) * 1.1 * (1 - rain * .6)
+    * target.moonIllumination * THREE.MathUtils.smoothstep(target.moonDirection.y, 0, .08);
 
   const paletteZenith = palette.color(PALETTE_SLOT.skyZenith);
   const paletteHorizon = palette.color(PALETTE_SLOT.skyHorizon);

@@ -17,7 +17,8 @@ export class SkyDome {
     uSunVisible: { value: 1 },
     uGlow: { value: 0 },
     uMoonDirection: { value: new THREE.Vector3(0, 1, 0) },
-    uMoonIntensity: { value: 0 },
+    uMoonVisibility: { value: 0 },
+    uMoonIllumination: { value: 0 },
     uNight: { value: 0 },
     uTime: { value: 0 },
     uRainbow: { value: 0 },
@@ -52,7 +53,8 @@ export class SkyDome {
         uniform float uSunVisible;
         uniform float uGlow;
         uniform vec3 uMoonDirection;
-        uniform float uMoonIntensity;
+        uniform float uMoonVisibility;
+        uniform float uMoonIllumination;
         uniform float uNight;
         uniform float uTime;
         uniform float uRainbow;
@@ -97,21 +99,54 @@ export class SkyDome {
           float sunDot = max(dot(dir, uSunDirection), 0.0);
           float sunFacing = pow(sunDot, 6.0);
           sky += uSunColor * uGlow * sunFacing * (0.35 + band * 0.9);
-          float disc = smoothstep(0.9993, 0.9997, sunDot) * uSunVisible;
-          float corona = pow(sunDot, 180.0) * uSunVisible;
+          // Slightly enlarged angular discs stay readable at the game's scale.
+          // Screen derivatives keep their edges smooth even in small captures.
+          float horizon = smoothstep(-0.001, 0.001, dir.y);
+          float sunEdge = max(fwidth(sunDot), 0.000002);
+          float disc = smoothstep(cos(0.012) - sunEdge, cos(0.012) + sunEdge, sunDot) * uSunVisible * horizon;
+          float corona = pow(sunDot, 180.0) * uSunVisible * horizon;
           sky += uSunColor * (disc * 4.0 + corona * 0.9);
           float moonDot = max(dot(dir, uMoonDirection), 0.0);
-          float moonDisc = smoothstep(0.99955, 0.99975, moonDot);
-          float moonHalo = pow(moonDot, 400.0) * 0.35;
-          sky += vec3(0.86, 0.9, 1.0) * uMoonIntensity * (moonDisc * 1.6 + moonHalo);
+          float moonEdge = max(fwidth(moonDot), 0.000002);
+          float starPixelWidth = max(length(dFdx(dir)), length(dFdy(dir))) * 100.0;
+          float moonDisc = smoothstep(cos(0.0115) - moonEdge, cos(0.0115) + moonEdge, moonDot) * horizon;
+          float moonHalo = pow(moonDot, 400.0) * 0.18 * uMoonIllumination * horizon;
+          if (moonDisc > 0.0) {
+            vec3 tangent = (dir - uMoonDirection * moonDot) / sin(0.0115);
+            vec3 normal = tangent - uMoonDirection * sqrt(max(0.0, 1.0 - dot(tangent, tangent)));
+            // The bright limb always faces the actual sun, including in daylight.
+            float lit = smoothstep(-0.025, 0.025, dot(normal, uSunDirection));
+            vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), uMoonDirection));
+            vec3 top = cross(uMoonDirection, right);
+            vec2 uv = vec2(dot(tangent, right), dot(tangent, top));
+            float maria = sin(uv.x * 9.0 + sin(uv.y * 7.0)) * sin(uv.y * 11.0 - uv.x * 4.0);
+            float surface = 0.84 + 0.16 * maria;
+            vec3 lunarColor = vec3(0.86, 0.9, 1.0) * surface * (lit * 1.6 + 0.025 * uNight);
+            sky = mix(sky, lunarColor, moonDisc * uMoonVisibility);
+          }
+          sky += vec3(0.86, 0.9, 1.0) * uMoonVisibility * moonHalo;
           sky += vec3(0.75, 0.82, 1.0) * uFlash * (0.5 + band * 1.5);
           if (uNight > 0.02 && dir.y > 0.02) {
-            vec3 cell = floor(dir * 140.0);
+            // A small radial glow inside each occupied cell, rather than
+            // lighting the entire cell's polygonal intersection with the sky.
+            vec3 starPosition = dir * 100.0;
+            vec3 cell = floor(starPosition);
             float star = hash13(cell);
-            float twinkle = 0.75 + 0.25 * sin(uTime * (1.5 + star * 3.0) + star * 40.0);
-            float brightness = smoothstep(0.985, 1.0, star) * twinkle;
-            sky += vec3(0.95, 0.96, 1.0) * brightness * uNight * smoothstep(0.02, 0.25, dir.y) * 1.4;
-            sky += meteor(dir) * uNight;
+            vec3 center = cell + 0.3 + 0.4 * vec3(
+              hash13(cell + 17.1), hash13(cell + 43.7), hash13(cell + 91.3));
+            float distanceToStar = length(starPosition - center);
+            float radius = mix(0.045, 0.075, hash13(cell + 7.9));
+            float filteredRadius = min(0.14, sqrt(radius * radius + starPixelWidth * starPixelWidth * 0.25));
+            float point = exp(-distanceToStar * distanceToStar / (filteredRadius * filteredRadius));
+            // Keep the glow inside the cell and conserve brightness as the
+            // pixel filter widens it, preventing square edges and harsh flicker.
+            point *= 1.0 - smoothstep(0.2, 0.28, distanceToStar);
+            point *= radius * radius / (filteredRadius * filteredRadius);
+            float twinkle = 0.92 + 0.08 * sin(uTime * (0.7 + star) + star * 40.0);
+            float brightness = smoothstep(0.94, 1.0, star) * point * twinkle;
+            float starVisibility = smoothstep(0.3, 0.95, uNight) * smoothstep(0.02, 0.25, dir.y);
+            sky += vec3(0.90, 0.94, 1.0) * brightness * starVisibility * 0.9 * (1.0 - moonDisc);
+            sky += meteor(dir) * uNight * (1.0 - moonDisc);
           }
           gl_FragColor = vec4(sky, 1.0);
           #include <tonemapping_fragment>
@@ -188,11 +223,12 @@ export class SkyDome {
     uniforms.uHorizon.value.copy(atmosphere.skyHorizon);
     uniforms.uHaze.value.copy(atmosphere.fogColor);
     uniforms.uSunDirection.value.copy(atmosphere.sunDirection);
-    uniforms.uSunColor.value.copy(atmosphere.sunColor).multiplyScalar(Math.min(1, atmosphere.sunIntensity / 3.5) * (1 - atmosphere.wetness * .7));
-    uniforms.uSunVisible.value = atmosphere.sunElevation > -.02 ? 1 : 0;
+    uniforms.uSunColor.value.copy(atmosphere.sunColor).multiplyScalar(1 - atmosphere.wetness * .85);
+    uniforms.uSunVisible.value = THREE.MathUtils.smoothstep(atmosphere.sunElevation, -.018, .015);
     uniforms.uGlow.value = atmosphere.horizonGlow;
     uniforms.uMoonDirection.value.copy(atmosphere.moonDirection);
-    uniforms.uMoonIntensity.value = atmosphere.moonIntensity;
+    uniforms.uMoonVisibility.value = atmosphere.moonVisibility;
+    uniforms.uMoonIllumination.value = atmosphere.moonIllumination;
     this.nightForStars = atmosphere.night * (1 - atmosphere.wetness);
     uniforms.uNight.value = this.nightForStars;
     uniforms.uTime.value = time;

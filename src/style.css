@@ -249,6 +249,8 @@ canvas.dragging { cursor: grabbing; }
 .campaign-plan .home { background: #5b746b; color: #fff5da; box-shadow: 0 2px 0 #34433d; }
 .campaign-plan .water { background: rgba(88,135,140,.15); color: #456c70; }
 .campaign-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.campaign-dismiss { position: sticky; top: 0; z-index: 2; display: flex; justify-content: flex-end; margin-bottom: 4px; background: #ebd9b1; }
+.campaign-dismiss button { min-height: 44px; }
 [data-campaign-action] { min-height: 42px; padding: 9px 13px; font-size: 13px; letter-spacing: 0; box-shadow: none; }
 [data-campaign-action="next"], [data-campaign-action="sandbox"]:not(:disabled), [data-campaign-action="campaign"] { color: #fff5da; background: #5b746b; }
 [data-campaign-action]:disabled { opacity: .55; cursor: not-allowed; }
@@ -1593,7 +1595,7 @@ button:active { transform: translateY(1px); }
 @keyframes voyage-key { from { transform: rotate(-90deg); background: #ebddbc; color: #617d69; } to { transform: rotate(0); background: #617d69; color: #fff4d5; } }
 @media (prefers-reduced-motion: reduce) { .voyage-finale .voyage-chart::before, .voyage-finale .sandbox-key > span:not(.sr-only) { animation: none; } }
 
-.campaign-fold > summary { position: sticky; top: 0; z-index: 1; background: #ebd9b1; }
+.campaign-fold > summary { position: sticky; top: 48px; z-index: 1; background: #ebd9b1; }
 /* Only keyboard navigation needs a viewport-sized focus indicator. */
 canvas:focus { outline: none; }
 canvas.keyboard-navigation:focus { outline: 3px solid #ffd477; outline-offset: -3px; }
@@ -1706,3 +1708,32 @@ canvas.keyboard-navigation:focus { outline: 3px solid #ffd477; outline-offset: -
   .build-preview-label { display: none; }
 }
 body.menu-open .mobile-controls { opacity: 0; pointer-events: none; }
+
+.resident-wish {
+  position: absolute; right: 25px; bottom: 104px; width: min(340px, calc(100vw - 24px));
+  max-height: calc(100dvh - 230px); overflow: auto; box-sizing: border-box;
+  padding: 20px; border-radius: 20px; background: #efe0bc; color: #30413b;
+  box-shadow: var(--menu-shadow); pointer-events: auto;
+}
+.resident-wish[hidden] { display: none; }
+.night .resident-wish { background: #e8d6b0; }
+.wish-visible .toast { bottom: 110px; }
+.wish-visible:has(.citizen-card.show) .toast { bottom: 180px; }
+.resident-wish small { color: #963a33; font: 600 11px system-ui, sans-serif; }
+.resident-wish h2 { margin: 8px 0; font: 600 23px/1.2 'Fraunces', serif; }
+.resident-wish p { font: 15px/1.5 'Fraunces', serif; }
+.resident-wish > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.resident-wish button { min-height: 44px; padding: 9px 12px; font-size: 13px; }
+.resident-wish button:first-child { background: #5b746b; color: #fff5da; }
+.resident-wish details { margin: 12px 0; font-size: 13px; }
+.resident-wish summary { min-height: 44px; cursor: pointer; }
+.resident-wish details strong { display: block; }
+.resident-wish pre { width: fit-content; padding: 10px 18px; border-radius: 8px; background: #d5ddcb; line-height: 1.7; letter-spacing: .3em; }
+.resident-wish details p { font-size: 13px; }
+.wish-visible .second-tide, .wish-visible .tide-thread { visibility: hidden; pointer-events: none; }
+.hud.touch-guide-open .resident-wish { visibility: hidden; pointer-events: none; }
+.voyage-choice { padding: 10px; border-left: 3px solid #5b746b; background: #fff1ce; }
+@media (max-width: 750px) {
+  .resident-wish { right: 12px; padding: 16px; }
+  .wish-visible:has(.citizen-card.show) .resident-wish { visibility: hidden; pointer-events: none; }
+}

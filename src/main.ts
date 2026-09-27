@@ -71,6 +71,7 @@ import { advanceCampaign, CAMPAIGN_LESSONS, chapterInfo, currentLesson, isNewPat
 import { renderCampaignCard, renderCampaignJourney } from './campaign-view';
 import { campaignGuidance, findCampaignWater, type CampaignGuidance, type GuidePoint } from './campaign-guidance';
 import { BuildingPicker, ConstructionHistory } from './build-tools';
+import { offerResidentWish, READING_FORMS, renderResidentWish, restoreResidentWish } from './resident-wish';
 import './style.css';
 
 installPresentationShading();
@@ -109,6 +110,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <div class="menu-section" role="group" aria-labelledby="menu-kicker-watch">
             <span class="menu-kicker" id="menu-kicker-watch">Watch</span>
             <button id="observe-toggle" class="menu-row menu-switch" style="--i:0" title="Observe town history" aria-label="Observe town history" aria-pressed="false"><span class="menu-icon" aria-hidden="true">◉</span><span class="menu-label">Observe<small>Pick a person or place to read its history</small></span><span class="menu-knob" aria-hidden="true"></span></button>
+            <button id="resident-wish-open" class="menu-row"><span class="menu-icon" aria-hidden="true">♡</span><span class="menu-label">Neighbor’s wish<small>A quiet reading place</small></span></button>
             <button id="music-toggle" class="menu-row menu-switch" style="--i:1" aria-label="Turn music off" aria-pressed="true" data-keep-open><span class="menu-icon music-state" aria-hidden="true">♫</span><span class="menu-label">Music</span><span class="menu-knob" aria-hidden="true"></span></button>
           </div>
           <div class="menu-section" role="group" aria-labelledby="menu-kicker-voyage">
@@ -197,6 +199,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <p id="thread-hint"></p>
       <div class="thread-progress" role="progressbar" aria-label="Discovery progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="thread-progress-fill"></i></div>
     </aside>
+    <aside class="resident-wish" id="resident-wish" aria-label="Neighbor’s wish" hidden></aside>
     <aside class="first-tide campaign-card" id="campaign-card" aria-label="Current Formation Voyage lesson"></aside>
     <div id="voyage-pointer" class="voyage-pointer" aria-live="polite"></div>
     <button id="voyage-reveal" class="voyage-reveal" data-campaign-action="view" aria-live="polite"></button>
@@ -324,7 +327,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 const loadedTown = (await loadSharedTown()) ?? loadTown();
 // Towns without Voyage state predate this experience and start fresh.
 const saved = loadedTown?.campaign?.version === 1 ? loadedTown : undefined;
-if (loadedTown && !saved) localStorage.removeItem(SANDBOX_UNLOCK_KEY);
+// Browser preferences survive new tides and incompatible town saves.
 let campaign = restoreCampaign(saved?.campaign, localStorage.getItem(SANDBOX_UNLOCK_KEY) === 'true');
 if (campaign.sandboxUnlocked) localStorage.setItem(SANDBOX_UNLOCK_KEY, 'true');
 const seed = saved?.seed ?? Math.floor(Math.random() * 2_000_000_000);
@@ -623,6 +626,7 @@ renderer.domElement.addEventListener('pointermove', (event) => {
     prompt.style.top = `${Math.min(innerHeight - 60, event.clientY + 24)}px`;
   }
 });
+let residentWish = restoreResidentWish(saved?.residentWish);
 let onboardingDismissed = saved?.onboardingDismissed ?? (Boolean(saved?.cells.length) || campaign.sandboxUnlocked);
 let placeIntroductionSeen = saved?.placeIntroductionSeen ?? Boolean(saved?.placeIdentities?.length);
 let confluenceIntroductionSeen = saved?.confluenceIntroductionSeen ?? Boolean(saved?.confluences?.length);
@@ -1181,6 +1185,7 @@ function currentTownData(): SavedTown {
     crafting: crafting.serialize(),
     formations: [...knownFormations],
     campaign,
+    residentWish,
     placeIdentities: [...knownPlaceIdentities],
     confluences: [...knownConfluences],
     harborLanterns: [...litHarborLanternIds],
@@ -1372,6 +1377,7 @@ function refreshFormations(announce: boolean) {
     if (formation && !voyageCompleting && !(campaign.mode === 'campaign' && formation.id === currentLesson(campaign)?.id)) showToast(`New formation: ${formation.title}. Recorded in the Atlas.`);
   }
   updateCampaign(announce);
+  updateNeighborWish();
   updateFirstTideGuide();
   updateSecondTideIntroduction();
   updateThirdTideIntroduction();
@@ -1426,6 +1432,10 @@ function updateCampaign(edited = false) {
     }
   }
   if (campaign !== previous) persistSoon();
+  if (campaign.sandboxUnlocked && !previous.sandboxUnlocked) {
+    localStorage.setItem(SANDBOX_UNLOCK_KEY, 'true');
+    voyageEvent('sandbox_unlocked');
+  }
   document.querySelector('.hud')!.classList.toggle('campaign-active', campaign.mode === 'campaign');
   document.querySelector('#campaign-open')!.setAttribute('aria-label', 'Open Formation Voyage');
   renderVoyage();
@@ -1452,7 +1462,7 @@ function updateCampaign(edited = false) {
   if (campaign.completed === 17 && campaign.ready && campaign.mode === 'campaign') {
     campaign = advanceCampaign(campaign, formationOccurrences);
     localStorage.setItem(SANDBOX_UNLOCK_KEY, 'true');
-    voyageEvent('sandbox_unlocked');
+    voyageEvent('voyage_completed');
     moveVoyageCamera(controls.target.clone(), true);
     if (!reducedVoyageMotion.matches) formationOccurrences.slice(0, 6).forEach((formation, index) => window.setTimeout(() => {
       city.celebrateAt(formation.x, formation.z);
@@ -1591,12 +1601,24 @@ document.querySelector('.hud')!.addEventListener('click', (event) => {
       voyageEvent('lesson_started');
       break;
     }
+    case 'explore':
+      if (campaign.completed !== 1 || !campaign.ready) return;
+      campaign = advanceCampaign(campaign, formationOccurrences);
+      voyageAnchor = undefined;
+      voyageFresh = true;
+      // Sea Arch is credited before leaving; resuming starts at High Bridge.
+    case 'dismiss':
     case 'sandbox':
-      if (!campaign.sandboxUnlocked) return;
-      campaign = { ...campaign, mode: 'sandbox' };
+      if (button.dataset.campaignAction === 'sandbox' && !campaign.sandboxUnlocked) return;
+      campaign = { ...campaign, mode: 'sandbox', sandboxUnlocked: true };
+      localStorage.setItem(SANDBOX_UNLOCK_KEY, 'true');
       onboardingDismissed = true;
+      voyageReveal = undefined;
+      voyageCameraMove = undefined;
+      voyageHelp = false;
+      voyageReturning = '';
       voyageEvent('sandbox_entered');
-      showToast('Free sandbox. Your harbor is yours to shape.');
+      showToast('Free sandbox. Resume the tutorial from Formation Voyage in the menu.');
       break;
     case 'restart':
     case 'replay':
@@ -1617,6 +1639,7 @@ document.querySelector('.hud')!.addEventListener('click', (event) => {
     default: return;
   }
   updateCampaign();
+  updateNeighborWish();
   updateFirstTideGuide();
   updateSecondTideIntroduction();
   setJournalOpen(false);
@@ -1625,6 +1648,93 @@ document.querySelector('.hud')!.addEventListener('click', (event) => {
     if (campaign.mode === 'campaign') document.querySelector<HTMLElement>('#campaign-card .campaign-fold > summary, #campaign-card h2')?.focus({ preventScroll: true });
     else document.querySelector<HTMLButtonElement>('#mobile-menu-toggle')!.focus();
   }
+});
+
+function updateNeighborWish() {
+  const previous = JSON.stringify(residentWish);
+  const residents = citizens.residents();
+  if (!residentWish && campaign.mode === 'sandbox') residentWish = offerResidentWish(residents);
+  if (residentWish && residentWish.status !== 'fulfilled'
+    && !residents.some((person) => person.id === residentWish!.residentId)) {
+    const replacement = offerResidentWish(residents);
+    if (replacement) residentWish = { ...replacement, status: residentWish.status === 'offered' ? 'offered' : 'accepted', hidden: residentWish.hidden };
+  }
+  if (residentWish?.status === 'visiting') {
+    const destination = residentWish.destination;
+    const stillExists = destination && formationOccurrences.some((form) => form.id === destination.id && form.x === destination.x && form.z === destination.z);
+    const visit = citizens.readingVisitStatus(residentWish.residentId);
+    if (!stillExists || visit === 'missing') {
+      citizens.finishReadingVisit();
+      residentWish = { ...residentWish, status: 'accepted', destination: undefined };
+    } else if (visit === 'arrived') {
+      citizens.finishReadingVisit();
+      residentWish = { ...residentWish, status: 'fulfilled' };
+      if (!reducedVoyageMotion.matches) city.celebrateAt(destination!.x, destination!.z);
+      showToast(`${residentWish.residentName} has settled down with a book. You made this little moment possible.`, 6500);
+      softTone(520, .2);
+    }
+  }
+  if (residentWish?.status === 'accepted' && campaign.mode === 'sandbox') {
+    for (const form of formationOccurrences.filter((form) => READING_FORMS.includes(form.id))) {
+      if (!citizens.visitReadingPlace(residentWish.residentId, form)) continue;
+      residentWish = { ...residentWish, status: 'visiting', destination: { id: form.id, x: form.x, z: form.z } };
+      showToast(`${residentWish.residentName} is walking to the reading place.`, 4200);
+      break;
+    }
+  }
+  const panel = document.querySelector<HTMLElement>('#resident-wish')!;
+  panel.hidden = !residentWish || residentWish.hidden || campaign.mode !== 'sandbox';
+  document.querySelector('.hud')!.classList.toggle('wish-visible', !panel.hidden);
+  const menuButton = document.querySelector<HTMLButtonElement>('#resident-wish-open')!;
+  menuButton.disabled = !residentWish || campaign.mode !== 'sandbox';
+  if (residentWish) renderResidentWish(panel, residentWish, simulationSpeed === 0);
+  if (JSON.stringify(residentWish) !== previous) persistSoon();
+}
+
+document.querySelector('#resident-wish-open')!.addEventListener('click', () => {
+  if (!residentWish) return;
+  residentWish = { ...residentWish, hidden: false };
+  updateNeighborWish();
+  persistSoon();
+});
+document.querySelector('#resident-wish')!.addEventListener('click', (event) => {
+  const action = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-wish-action]')?.dataset.wishAction;
+  if (!residentWish || !action) return;
+  if (action === 'accept') residentWish = { ...residentWish, status: 'accepted' };
+  if (action === 'hide') residentWish = { ...residentWish, hidden: true };
+  if (action === 'follow') {
+    const position = citizens.positionOf(residentWish.residentId);
+    if (position) {
+      selectedCitizenId = residentWish.residentId;
+      voyageCameraMove = undefined;
+      controls.target.copy(position).y += .55;
+      const angle = Math.atan2(camera.position.x - position.x, camera.position.z - position.z);
+      const sightline = new THREE.Raycaster();
+      let vantage: THREE.Vector3 | undefined;
+      // Courtyard walls can hide a seated neighbor. Look through an open side.
+      for (const height of [4, 7, 10]) {
+        for (const turn of [0, 1, -1, 2, -2, 3, -3, 4]) {
+          const theta = angle + turn * Math.PI / 4;
+          const candidate = controls.target.clone().add(new THREE.Vector3(Math.sin(theta) * 7, height, Math.cos(theta) * 7));
+          const direction = position.clone().add(new THREE.Vector3(0, .3, 0)).sub(candidate);
+          const distance = direction.length();
+          sightline.set(candidate, direction.normalize());
+          if (sightline.intersectObject(city.root, true).some((hit) => hit.distance < distance - .5)) continue;
+          vantage = candidate;
+          break;
+        }
+        if (vantage) break;
+      }
+      camera.position.copy(vantage ?? controls.target.clone().add(new THREE.Vector3(0, 10, 7)));
+      controls.update();
+      director.noteInput();
+      director.follow(() => citizens.positionOf(residentWish!.residentId));
+      updateCitizenCard();
+    } else showToast('This neighbor has moved away. Their reading-place memory stays with the harbor.');
+  }
+  updateNeighborWish();
+  persistSoon();
+  if (action === 'hide') renderer.domElement.focus({ preventScroll: true });
 });
 
 function onboardingStep() {
@@ -1911,7 +2021,8 @@ function commitDiscoveryEffect(effect: DiscoveryEffect, discovery: TriggeredDisc
     if (focus) city.celebrateAt(focus.x, focus.z);
     if (effect.action === 'decorate') {
       if (discovery.event.id === 'lantern-finale') city.setLanternFinaleRevealed(false);
-      city.setDiscoveryState(grow.discoveredIds());
+      // The evaluation/force caller applies the complete discovery set once.
+      // Rebuilding here repeats geometry work for each event in the same tick.
       citizens.setDiscoveries(grow.discoveredIds());
       if (discovery.event.id === 'lantern-finale') startLanternFinaleSequence(discovery);
     }
@@ -3568,6 +3679,7 @@ scene.add(ambience.root);
 renderJournal();
 updateThreadStatus();
 updateCampaign();
+updateNeighborWish();
 updateFirstTideGuide();
 updateSecondTideIntroduction();
 updateThirdTideIntroduction();
@@ -4121,7 +4233,7 @@ function captureRecorderFrame(deltaSeconds: number) {
 function updateAtmosphere(time: number, deltaSeconds: number) {
   const shownHour = renderHour();
   const shownRain = renderRain(weatherAt(seed, day * 24 + timeOfDay).intensity);
-  evaluateAtmosphere(shownHour, palette, shownRain, atmosphere);
+  evaluateAtmosphere(shownHour, palette, shownRain, atmosphere, day);
   sceneFog.color.copy(atmosphere.fogColor);
   const cameraDistance = camera.position.distanceTo(controls.target);
   const distantView = THREE.MathUtils.smoothstep(cameraDistance, 34, 64);
@@ -4266,6 +4378,7 @@ function animate() {
     profileStartedAt = performance.now();
   }
   if (businessCheckElapsed > .5) {
+    updateNeighborWish();
     const residentState = citizens.residents();
     applyBusinessUpdate(businesses.recordVisits(citizens.drainBusinessVisits(), residentState, absoluteHours), true);
     const businessUpdate = businesses.update(residentState, city.cells, absoluteHours);

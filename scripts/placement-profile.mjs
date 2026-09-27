@@ -55,6 +55,9 @@ try {
       await new Promise(resolve => requestAnimationFrame(() => resolve()));
       return { key, handlerMs, nextFrameMs: performance.now() - start };
     }, key));
+    if (process.argv.includes('--artifacts') && key !== 'ArrowRight') {
+      await page.screenshot({ path: `test-output/placement-transition-${timings.length}.png` });
+    }
     await page.waitForTimeout(550);
   }
   await page.waitForTimeout(1600);

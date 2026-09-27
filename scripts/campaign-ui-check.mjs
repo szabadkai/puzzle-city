@@ -64,7 +64,7 @@ try {
   assert.equal(await page.locator('#campaign-card h2').innerText(), 'Narrow Canal');
   await openVoyage(page);
   assert.equal(await page.locator('.campaign-lesson').count(), 18);
-  assert.equal(await page.locator('[data-campaign-action="sandbox"]').isDisabled(), true);
+  assert.equal(await page.locator('#journal-list [data-campaign-action="dismiss"]').isEnabled(), true);
   await page.locator('[data-campaign-action="return"]').click();
   await clickHome(page, -1, 0);
   assert.match(await page.locator('.voyage-checklist').innerText(), /Homes placed: 1 \/ 2/);
@@ -110,7 +110,46 @@ try {
   assert.ok(tabsFit, 'all three journal tabs fit at 320px');
   await page.waitForFunction(() => getComputedStyle(document.querySelector('#journal-scrim')).opacity === '1');
   await page.screenshot({ path: 'test-output/campaign-journey.png' });
+  await page.locator('#journal-close').click();
+  const beforeDismiss = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), storageKey);
+  await page.locator('.campaign-fold > summary').click();
+  await page.locator('#campaign-card [data-campaign-action="dismiss"]').focus();
+  await page.keyboard.press('Enter');
+  await page.locator('#campaign-card').waitFor({ state: 'hidden' });
+  const dismissed = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), storageKey);
+  assert.deepEqual(dismissed.cells, beforeDismiss.cells, 'dismissing keeps the town');
+  assert.equal(dismissed.campaign.completed, beforeDismiss.campaign.completed, 'dismissing keeps lesson progress');
+  assert.equal(dismissed.campaign.earned, beforeDismiss.campaign.earned, 'dismissing does not award stamps');
+  assert.equal(await page.locator('#voyage-pointer').isVisible(), false);
+  await page.reload();
+  await page.waitForFunction(() => Boolean(window.__littleTides));
+  assert.equal(await page.locator('#campaign-card').isVisible(), false, 'dismissal survives reload');
+  await openVoyage(page);
+  await page.locator('[data-campaign-action="campaign"]').click();
+  await page.locator('.campaign-fold > summary').click();
+  assert.equal(await page.locator('#campaign-card h2').innerText(), 'High Bridge', 'tutorial can be resumed');
   await first.context.close();
+
+  const skipped = await openTown(undefined, { viewport: { width: 320, height: 844 }, isMobile: true, hasTouch: true });
+  await skipped.page.locator('[data-campaign-action="help"]').tap();
+  await skipped.page.locator('#campaign-card [data-campaign-action="dismiss"]').tap();
+  await skipped.page.locator('#campaign-card').waitFor({ state: 'hidden' });
+  assert.equal(await skipped.page.locator('#first-tide').isVisible(), false, 'dismissal does not reveal the old guide');
+  await skipped.page.locator('#mobile-menu-toggle').click();
+  await skipped.page.locator('#reset').click();
+  await Promise.all([skipped.page.waitForEvent('load'), skipped.page.locator('#reset-confirm-yes').click()]);
+  await skipped.page.waitForFunction(() => Boolean(window.__littleTides));
+  assert.equal(await skipped.page.locator('#campaign-card').isVisible(), false, 'new tides remember dismissal');
+  const sameBrowser = await skipped.context.newPage();
+  await sameBrowser.goto(server.resolvedUrls.local[0]);
+  await sameBrowser.waitForFunction(() => Boolean(window.__littleTides));
+  assert.equal(await sameBrowser.locator('#campaign-card').isVisible(), false, 'another tab remembers dismissal');
+  await sameBrowser.close();
+  await skipped.page.evaluate((key) => localStorage.setItem(key, JSON.stringify({ version: 10, seed: 120, cells: [] })), storageKey);
+  await skipped.page.reload();
+  await skipped.page.waitForFunction(() => Boolean(window.__littleTides));
+  assert.equal(await skipped.page.locator('#campaign-card').isVisible(), false, 'legacy town replacement keeps browser preference');
+  await skipped.context.close();
 
   const touch = await openTown(undefined, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
   await touch.page.locator('[data-campaign-action="help"]').tap();
@@ -127,11 +166,23 @@ try {
   await clickHome(touch.page, 1, 0, 1);
   await touch.page.screenshot({ path: 'test-output/voyage-touch-arch.png' });
   assert.match(await touch.page.locator('#campaign-card').innerText(), /2 of 18 collected/);
+  assert.equal(await touch.page.locator('[data-campaign-action="explore"]').isVisible(), true);
   assert.equal(await touch.page.locator('.formation-stamp.collected').first().evaluate((stamp) => getComputedStyle(stamp).animationName), 'none', 'reduced motion removes stamp animation');
   const inputFocus = await touch.page.evaluate(() => document.activeElement?.tagName);
   assert.notEqual(inputFocus, 'H2', 'touch completion does not steal world focus');
   const funnel = await touch.page.evaluate(() => JSON.parse(localStorage.getItem('little-tides-voyage-events-v1')));
   assert.ok(['welcome_shown', 'welcome_started', 'first_home', 'formation_collected'].every((name) => funnel.some(({ event }) => event === name)));
+  await touch.page.locator('[data-campaign-action="explore"]').tap();
+  await touch.page.locator('#campaign-card').waitFor({ state: 'hidden' });
+  const explored = await touch.page.evaluate((key) => JSON.parse(localStorage.getItem(key)), storageKey);
+  assert.equal(explored.campaign.completed, 2, 'exploring credits Sea Arch');
+  assert.equal(explored.campaign.mode, 'sandbox');
+  await touch.page.reload();
+  await touch.page.waitForFunction(() => Boolean(window.__littleTides));
+  assert.equal(await touch.page.locator('#campaign-card').isVisible(), false);
+  await openVoyage(touch.page);
+  await touch.page.locator('[data-campaign-action="campaign"]').tap();
+  assert.equal(await touch.page.locator('#campaign-card h2').innerText(), 'High Bridge');
   await touch.context.close();
 
   const cells = [];
@@ -139,7 +190,7 @@ try {
     if (height) cells.push({ x: x - 2, z: z - 2, height, color: 0, placedAt: 0 });
   }));
   const finale = await openTown({ version: 10, seed: 221, cells, campaign: { version: 1, mode: 'campaign', completed: 17, ready: false, sandboxUnlocked: false } });
-  assert.match(await finale.page.locator('#campaign-card').innerText(), /Free sandbox is now open/);
+  assert.match(await finale.page.locator('#campaign-card').innerText(), /Your harbor is yours to keep shaping/);
   await finale.page.screenshot({ path: 'test-output/campaign-finale.png' });
   assert.equal(await finale.page.evaluate(() => localStorage.getItem('little-tides-sandbox-unlocked-v1')), 'true');
   await finale.page.locator('[data-campaign-action="sandbox"]').first().click();
@@ -207,7 +258,7 @@ try {
   assert.equal(fresh.campaign.sandboxUnlocked, false, 'legacy towns do not grant sandbox');
   await legacy.context.close();
   assert.deepEqual(errors, [], 'no browser runtime errors');
-  console.log('Campaign browser checks passed: real building input, reload, mobile layout, finale, menu restart, new tide, and legacy reset.');
+  console.log('Campaign browser checks passed: building input, tutorial dismissal and resume, browser persistence, mobile layout, finale, menu restart, new tide, and legacy reset.');
 } finally {
   await browser.close();
   await server.close();

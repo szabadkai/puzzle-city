@@ -26,7 +26,7 @@ for (const lesson of CAMPAIGN_LESSONS) {
   assert.ok(forms.some(({ id }) => id === lesson.id), `${lesson.id}: the displayed building plan must produce the actual formation`);
   state = observeCampaign(state, forms);
   assert.equal(state.ready, true);
-  assert.equal(state.sandboxUnlocked, false, 'sandbox stays locked until the final explicit completion');
+  assert.equal(state.sandboxUnlocked, CAMPAIGN_LESSONS.indexOf(lesson) >= 1, 'Sea Arch unlocks sandbox while further lessons stay optional');
   assert.equal(observeCampaign(state, []), state, 'reshaping a completed objective does not erase its credit');
   state = restoreCampaign(JSON.parse(JSON.stringify(state)), false);
   assert.equal(state.ready, true, 'reload preserves an unclaimed completion');
@@ -46,6 +46,8 @@ for (const invalid of [null, 'bad', {}, { version: 1, completed: -1 }, { version
   assert.equal(restoreCampaign(invalid, false).completed, 0);
 }
 assert.equal(restoreCampaign({ version: 1, mode: 'sandbox', completed: 0 }, false).mode, 'campaign', 'a locked save cannot switch into sandbox');
+assert.equal(restoreCampaign({ version: 1, mode: 'campaign', completed: 1, ready: true }, false).sandboxUnlocked, true, 'unclaimed Sea Arch also carries access through a postcard');
+assert.equal(restoreCampaign({ version: 1, mode: 'campaign', completed: 2 }, false).sandboxUnlocked, true, 'existing players past Sea Arch gain early access');
 console.log('Campaign checks passed: 18 buildable lessons, sequential progress, persistence, replay, and sandbox unlock.');
 
 const earlyShape = { id: 'sea-arch', x: 2, z: 0 };

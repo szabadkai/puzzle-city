@@ -17,13 +17,17 @@
     "test:harbor-spaces-ui": "node --experimental-strip-types scripts/harbor-spaces-ui-check.mjs",
     "test:formations": "node --experimental-strip-types scripts/formations-check.mjs",
     "test:water-routes": "node scripts/water-routes-check.mjs",
+    "test:navigation-index": "node --experimental-strip-types scripts/navigation-index-check.mjs",
     "test:placement": "node scripts/placement-profile.mjs",
     "test:render-structure": "node scripts/render-structure-check.mjs",
     "capture-test": "node scripts/capture-test.mjs",
     "menu-capture": "node scripts/menu-capture.mjs",
     "test:palettes": "node scripts/palette-check.mjs",
+    "test:celestial": "node scripts/celestial-check.mjs",
     "test:campaign": "node --experimental-strip-types scripts/campaign-check.mjs",
     "test:campaign-ui": "node --experimental-strip-types scripts/campaign-ui-check.mjs",
+    "test:resident-wish-ui": "node scripts/resident-wish-ui-check.mjs",
+    "test:resident-wish": "node scripts/resident-wish-check.mjs",
     "test:campaign-guidance": "node --experimental-strip-types scripts/campaign-guidance-check.mjs"
   },
   "dependencies": {

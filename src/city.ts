@@ -837,7 +837,10 @@ export class CityRenderer {
           group.userData.vegetationStage = stage;
           for (const child of group.children) {
             const requiredStage = child.userData.vegetationStage as number | undefined;
-            if (requiredStage !== undefined) child.visible = requiredStage <= stage;
+            if (requiredStage !== undefined) {
+              child.userData.scheduleVisible = requiredStage <= stage;
+              child.visible = requiredStage <= stage;
+            }
           }
           changedPieces.add(key);
         }
@@ -917,10 +920,12 @@ export class CityRenderer {
     this.wallVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .14);
     this.roofVertexMaterial.roughness = .82 - this.rainIntensity * .34;
     this.roofVertexMaterial.color.setHex(0xffffff).lerp(this.wetTint, this.rainIntensity * .2);
-    for (const group of this.pieces.values()) {
+    const changedPieces = new Set<string>();
+    for (const [key, group] of this.pieces) {
       const stormSignal = group.userData.stormSignal as THREE.Object3D | undefined;
-      if (stormSignal) {
-        const shown = this.rainIntensity > .65;
+      const shown = this.rainIntensity > .65;
+      if (stormSignal && stormSignal.visible !== shown) {
+        changedPieces.add(key);
         stormSignal.visible = shown;
         stormSignal.traverse((object) => {
           if (!(object instanceof THREE.Mesh)) return;
@@ -928,6 +933,10 @@ export class CityRenderer {
           object.visible = shown;
         });
       }
+    }
+    if (changedPieces.size) {
+      this.clearGlobalStaticBatch(changedPieces);
+      this.finishStaticBatchMutation(true);
     }
   }
 
@@ -1262,6 +1271,9 @@ export class CityRenderer {
     for (const child of statics) {
       if (child.parent !== group) continue;
       this.applyVertexBatchMaterial(child);
+      // These objects are addressed by the daily/weather schedule. Keep their
+      // source meshes intact; they can still join the town's reversible batch.
+      if (child.userData.scheduleVisible !== undefined) continue;
       const vegetationStage = child.userData.vegetationStage as number | undefined;
       const key = `${(child.material as THREE.Material).uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}:${vegetationStage ?? '-'}`;
       const bucket = buckets.get(key) ?? [];
@@ -1384,6 +1396,11 @@ export class CityRenderer {
       const { statics, cloth } = this.collectMeshes(group);
       for (const child of [...statics, ...cloth]) {
         if (!child.visible) continue;
+        let visible = true;
+        for (let parent = child.parent; parent && parent !== group; parent = parent.parent) {
+          if (!parent.visible) { visible = false; break; }
+        }
+        if (!visible) continue;
         const material = child.material as THREE.Material;
         const key = `${material.uuid}:${child.castShadow ? 1 : 0}:${child.receiveShadow ? 1 : 0}`;
         const bucket = buckets.get(key) ?? [];
@@ -1412,7 +1429,9 @@ export class CityRenderer {
       }
       let start = 0;
       for (const mesh of meshes) {
-        const count = keepIndexed ? mesh.geometry.index!.count : mesh.geometry.getAttribute('position').count;
+        // Indexed meshes expand to one vertex per index in a mixed bucket.
+        // Count the merged triangle stream, not the original shared vertices.
+        const count = mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count;
         const key = sourceKeys.get(mesh)!;
         const ranges = this.staticBatchRanges.get(key) ?? [];
         ranges.push({ indices: geometry.index!, start, count });
@@ -1577,9 +1596,9 @@ export class CityRenderer {
       && this.reserveFacadeDecoration(group, primaryFacadeDirection, 'balcony', 'composition', {
         sideMin: -.78, sideMax: .78, yMin: topY - .78, yMax: topY - .24,
       });
-    const festivalRibbonsPlanned = this.hasGeometryDiscovery('festival-ribbons')
-      && !clockFaceDirections.has(primaryFacadeDirection)
+    const festivalRibbonsPlanned = !clockFaceDirections.has(primaryFacadeDirection)
       && hash(this.seed, cell.x, cell.z, 1920) > .55
+      && this.hasGeometryDiscovery('festival-ribbons')
       && this.reserveFacadeDecoration(group, primaryFacadeDirection, 'festival-ribbons', 'composition', {
         sideMin: -.9, sideMax: .9, yMin: topY - .7, yMax: topY - .29,
       });
@@ -1717,7 +1736,7 @@ export class CityRenderer {
     }
     if (group.userData.flatTongLauRoof && !receivesTerrace) this.addTongLauRoofLife(group, cell, topY);
     if (balconyPlanned) this.addBalcony(group, cell, topY);
-    if (!receivesTerrace && this.hasGeometryDiscovery('rooftop-gardens') && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38) this.addHerbPots(group, topY, cell);
+    if (!receivesTerrace && count === 3 && hash(this.seed, cell.x, cell.z, 1910) > .38 && this.hasGeometryDiscovery('rooftop-gardens')) this.addHerbPots(group, topY, cell);
     if (festivalRibbonsPlanned) this.addFestivalRibbon(group, cell, topY);
     if (finaleLanternsPlanned) this.addFinaleLanterns(group, cell, topY);
     if (neighborhoodInfluence) {

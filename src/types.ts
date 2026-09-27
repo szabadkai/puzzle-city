@@ -16,6 +16,7 @@ export type SavedTown = {
   cells: Cell[];
   /** Guided formation lessons and the permanent sandbox reward. */
   campaign?: import('./campaign').CampaignSave;
+  residentWish?: import('./resident-wish').ResidentWish;
   timeOfDay?: number;
   day?: number;
   citizens?: CitizenSave[];

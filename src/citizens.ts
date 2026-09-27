@@ -13,7 +13,7 @@ import {
   TERRACE_STEP_COUNT, terraceStepOutward, terraceStepWalkY, roofWalkY,
 } from './spatial';
 import { hasDock } from './water';
-import { detectFormations, FORMATION_BY_ID, formationGatheringActivity } from './formations';
+import { detectFormations, FORMATION_BY_ID, formationGatheringActivity, type FormationOccurrence } from './formations';
 import { detectPlaceIdentities, PLACE_IDENTITY_BY_ID, placeIdentityActivity, placeLandmarkSocket } from './place-identities';
 import { CONFLUENCE_BY_ID, confluenceActivity, confluenceLandmarkSocket, confluenceSupersedesPlace, detectConfluences } from './confluences';
 
@@ -238,7 +238,7 @@ export function deriveLook(data: CitizenSave, seed: number): FigureLook {
 }
 
 /** What a figure does with its body while it stands somewhere. Walking is layered on top from the path. */
-export type ActivityKind = 'stand' | 'watch' | 'sit' | 'chat' | 'dance' | 'wave' | 'sweep' | 'knead' | 'hammer' | 'cast' | 'sleep';
+export type ActivityKind = 'stand' | 'watch' | 'sit' | 'read' | 'chat' | 'dance' | 'wave' | 'sweep' | 'knead' | 'hammer' | 'cast' | 'sleep';
 
 /** Free text arrives from discoveries and landmarks; this maps the few phrases that imply a body pose. */
 function kindFromText(activity: string): ActivityKind {
@@ -428,10 +428,16 @@ export class NavGraph {
   private readonly nodeBuckets = new Map<string, NavNode[]>();
   private readonly cells: Map<string, Cell>;
   private readonly seed: number;
+  private readonly formations: readonly FormationOccurrence[];
+  private readonly places: ReturnType<typeof detectPlaceIdentities>;
+  private readonly confluences: ReturnType<typeof detectConfluences>;
 
   constructor(cells: Map<string, Cell>, seed: number) {
     this.cells = cells;
     this.seed = seed;
+    this.formations = detectFormations(cells);
+    this.places = detectPlaceIdentities(this.formations);
+    this.confluences = detectConfluences(this.formations);
     this.build();
     this.indexNavigation();
     this.indexFormationPlaces();
@@ -464,60 +470,66 @@ export class NavGraph {
     }
   }
 
+  /** Find one destination per connected component without sorting every node. */
+  private nearestComponentNodes(points: readonly { x: number; z: number }[], radius: number, limit: number, elevated?: boolean) {
+    const centers = points.map((point) => ({ x: point.x * CELL, z: point.z * CELL }));
+    const maximum = radius;
+    const nearest = new Map<string, { node: NavNode; distance: number; order: number }>();
+    let order = 0;
+    for (const node of this.nodes.values()) {
+      const nodeOrder = order++;
+      if (elevated !== undefined && this.rooftops.has(node.key) !== elevated) continue;
+      let distance = Infinity;
+      for (const point of centers) {
+        const dx = node.position.x - point.x, dz = node.position.z - point.z;
+        distance = Math.min(distance, Math.hypot(dx, dz));
+      }
+      if (distance > maximum) continue;
+      const component = this.componentByNode.get(node.key);
+      if (!component) continue;
+      const previous = nearest.get(component);
+      if (!previous || distance < previous.distance) nearest.set(component, { node, distance, order: nodeOrder });
+    }
+    return [...nearest.values()].sort((a, b) => a.distance - b.distance || a.order - b.order)
+      .slice(0, limit).map(({ node }) => node);
+  }
+
+  private nearestLandmarkNode(x: number, z: number, elevated: boolean) {
+    let closest: NavNode | undefined, preferred: NavNode | undefined;
+    let closestDistance = Infinity, preferredDistance = Infinity;
+    for (const node of this.nodes.values()) {
+      const dx = node.position.x - x, dz = node.position.z - z;
+      const distance = Math.hypot(dx, dz);
+      if (distance < closestDistance) { closest = node; closestDistance = distance; }
+      if (this.rooftops.has(node.key) === elevated && distance < preferredDistance) {
+        preferred = node; preferredDistance = distance;
+      }
+    }
+    return preferred ?? closest;
+  }
+
   private indexFormationPlaces() {
-    for (const occurrence of detectFormations(this.cells)) {
+    for (const occurrence of this.formations) {
       const definition = FORMATION_BY_ID.get(occurrence.id);
       if (!definition) continue;
-      const distanceToForm = (node: NavNode) => Math.min(...(occurrence.footprint ?? [occurrence]).map((point) =>
-        Math.hypot(node.position.x - point.x * CELL, node.position.z - point.z * CELL)));
       const elevated = definition.family === 'rooftop' || definition.family === 'terrace' || occurrence.id === 'roof-promenade';
-      const nearby = [...this.nodes.values()]
-        .filter((node) => distanceToForm(node) <= CELL * 2.35)
-        .filter((node) => elevated ? this.rooftops.has(node.key) : !this.rooftops.has(node.key))
-        .sort((a, b) => distanceToForm(a) - distanceToForm(b));
-      const representedComponents = new Set<string>();
-      for (const node of nearby) {
-        const component = this.componentByNode.get(node.key);
-        if (!component || representedComponents.has(component)) continue;
-        representedComponents.add(component);
+      for (const node of this.nearestComponentNodes(occurrence.footprint ?? [occurrence], CELL * 2.35, 4, elevated)) {
         this.formationPlaces.set(node.key, occurrence.id);
-        if (representedComponents.size >= 4) break;
       }
     }
   }
 
   private indexPlaceIdentities() {
-    const formations = detectFormations(this.cells);
-    const confluences = detectConfluences(formations);
-    for (const occurrence of detectPlaceIdentities(formations).filter((place) =>
-      !confluences.some((confluence) => confluenceSupersedesPlace(confluence, place)))) {
-      const nearby = [...this.nodes.values()]
-        .filter((node) => Math.hypot(node.position.x - occurrence.x * CELL, node.position.z - occurrence.z * CELL) <= CELL * 2.8)
-        .sort((a, b) => {
-          const distanceA = Math.hypot(a.position.x - occurrence.x * CELL, a.position.z - occurrence.z * CELL);
-          const distanceB = Math.hypot(b.position.x - occurrence.x * CELL, b.position.z - occurrence.z * CELL);
-          return distanceA - distanceB;
-        });
-      const representedComponents = new Set<string>();
-      for (const node of nearby) {
-        const component = this.componentByNode.get(node.key);
-        if (!component || representedComponents.has(component)) continue;
-        representedComponents.add(component);
+    for (const occurrence of this.places.filter((place) =>
+      !this.confluences.some((confluence) => confluenceSupersedesPlace(confluence, place)))) {
+      for (const node of this.nearestComponentNodes([occurrence], CELL * 2.8, 4)) {
         this.identityPlaces.set(node.key, occurrence.id);
-        if (representedComponents.size >= 4) break;
       }
       const landmark = placeLandmarkSocket(occurrence);
       const elevated = ['roof-hall', 'signal-beacon', 'wind-loom', 'tide-bell', 'post-house', 'star-dial', 'kite-loft'].includes(landmark.kind);
       const landmarkX = landmark.x * CELL + (landmark.kind === 'lantern-theatre' ? CELL / 2 : 0);
       const landmarkZ = landmark.z * CELL + (landmark.kind === 'lantern-theatre' ? CELL / 2 - .48 : 0);
-      const allNodes = [...this.nodes.values()];
-      const preferredNodes = allNodes.filter((node) => elevated ? this.rooftops.has(node.key) : !this.rooftops.has(node.key));
-      const landmarkNode = (preferredNodes.length ? preferredNodes : allNodes)
-        .sort((a, b) => {
-          const distanceA = Math.hypot(a.position.x - landmarkX, a.position.z - landmarkZ);
-          const distanceB = Math.hypot(b.position.x - landmarkX, b.position.z - landmarkZ);
-          return distanceA - distanceB;
-        })[0];
+      const landmarkNode = this.nearestLandmarkNode(landmarkX, landmarkZ, elevated);
       if (landmarkNode) {
         this.identityPlaces.set(landmarkNode.key, occurrence.id);
         this.identityLandmarkPlaces.set(landmarkNode.key, occurrence.id);
@@ -526,32 +538,13 @@ export class NavGraph {
   }
 
   private indexConfluences() {
-    for (const occurrence of detectConfluences(detectFormations(this.cells))) {
-      const nearby = [...this.nodes.values()]
-        .filter((node) => Math.hypot(node.position.x - occurrence.x * CELL, node.position.z - occurrence.z * CELL) <= CELL * 3.2)
-        .sort((a, b) => {
-          const distanceA = Math.hypot(a.position.x - occurrence.x * CELL, a.position.z - occurrence.z * CELL);
-          const distanceB = Math.hypot(b.position.x - occurrence.x * CELL, b.position.z - occurrence.z * CELL);
-          return distanceA - distanceB;
-        });
-      const representedComponents = new Set<string>();
-      for (const node of nearby) {
-        const component = this.componentByNode.get(node.key);
-        if (!component || representedComponents.has(component)) continue;
-        representedComponents.add(component);
+    for (const occurrence of this.confluences) {
+      for (const node of this.nearestComponentNodes([occurrence], CELL * 3.2, 5)) {
         this.confluencePlaces.set(node.key, occurrence.id);
-        if (representedComponents.size >= 5) break;
       }
       const landmark = confluenceLandmarkSocket(occurrence);
       const elevated = ['observatory-beacon', 'banner-house', 'harbor-archive'].includes(landmark.kind);
-      const allNodes = [...this.nodes.values()];
-      const preferredNodes = allNodes.filter((node) => elevated ? this.rooftops.has(node.key) : !this.rooftops.has(node.key));
-      const landmarkNode = (preferredNodes.length ? preferredNodes : allNodes)
-        .sort((a, b) => {
-          const distanceA = Math.hypot(a.position.x - landmark.x * CELL, a.position.z - landmark.z * CELL);
-          const distanceB = Math.hypot(b.position.x - landmark.x * CELL, b.position.z - landmark.z * CELL);
-          return distanceA - distanceB;
-        })[0];
+      const landmarkNode = this.nearestLandmarkNode(landmark.x * CELL, landmark.z * CELL, elevated);
       if (landmarkNode) {
         this.confluencePlaces.set(landmarkNode.key, occurrence.id);
         this.confluenceLandmarkPlaces.set(landmarkNode.key, occurrence.id);
@@ -574,7 +567,7 @@ export class NavGraph {
   private build() {
     const spaces = analyzeHarborSpaces(this.cells);
     const plazaAnchors = findPlazaAnchors(this.cells);
-    const lanternTheatreAnchors = new Set(detectPlaceIdentities(detectFormations(this.cells))
+    const lanternTheatreAnchors = new Set(this.places
       .filter((identity) => identity.id === 'lantern-square')
       .map((identity) => {
         const landmark = placeLandmarkSocket(identity);
@@ -965,6 +958,16 @@ export class NavGraph {
   }
 }
 
+function readingBookGeometry() {
+  const cover = colorGeometry(new THREE.BoxGeometry(.2, .008, .14), 0x457b78);
+  const pages = [-1, 1].map((side) => colorGeometry(new THREE.BoxGeometry(.09, .015, .12), 0xffefcf)
+    .rotateZ(side * .13).translate(side * .048, .014, 0));
+  const parts = [cover, ...pages];
+  const geometry = mergeGeometries(parts, false)!;
+  parts.forEach((part) => part.dispose());
+  return geometry;
+}
+
 export class CitizenSystem {
   readonly root = new THREE.Group();
   readonly debugRoot = new THREE.Group();
@@ -1010,6 +1013,8 @@ export class CitizenSystem {
   private readonly cargoOffset = new THREE.Matrix4().makeTranslation(.05, -.19, .06);
   private rainIntensity = 0;
   private night = false;
+  private readingVisit: { residentId: string; targetKey: string; title: string } | undefined;
+  private readonly readingBook = new THREE.Mesh(readingBookGeometry(), FIGURE_MATERIAL);
 
   constructor(seed: number, cells: Map<string, Cell>, saved: CitizenSave[]) {
     this.seed = seed;
@@ -1021,6 +1026,9 @@ export class CitizenSystem {
     this.debugRoot.name = 'citizen-navigation';
     this.debugRoot.visible = false;
     this.root.add(this.renderRoot, this.debugRoot);
+    this.readingBook.visible = false;
+    this.readingBook.name = 'neighbors-reading-book';
+    this.root.add(this.readingBook);
     for (const data of saved) this.restoreCitizen(data);
     this.nextCitizen = this.citizens.reduce((largest, citizen) => Math.max(largest, citizenIndex(citizen.id)), -1) + 1;
     this.reconcileHomes();
@@ -1034,6 +1042,7 @@ export class CitizenSystem {
   }
 
   rebuild(cells: Map<string, Cell>) {
+    this.readingVisit = undefined;
     this.cells = cells;
     this.graph = new NavGraph(cells, this.seed);
     for (const citizen of this.citizens) {
@@ -1250,6 +1259,11 @@ export class CitizenSystem {
         const scale = Math.min(targetScale, citizen.model.scale.x + deltaSeconds * 1.8);
         citizen.model.scale.setScalar(scale);
       }
+      if (this.readingVisit?.residentId === citizen.id) {
+        citizen.nextDecisionAt = absoluteHours + 1.2;
+        citizen.activity = citizen.path.length ? `walking to read at ${this.readingVisit.title}` : `reading a book at ${this.readingVisit.title}`;
+        citizen.kind = 'read';
+      }
       if (!citizen.path.length && absoluteHours >= citizen.nextDecisionAt) this.chooseRoutine(citizen, timeOfDay, absoluteHours);
       if (!citizen.path.length) this.loiter(citizen, realTime);
       this.walk(citizen, deltaSeconds);
@@ -1261,6 +1275,12 @@ export class CitizenSystem {
       this.relationshipAccumulator = 0;
     }
     this.updateRenderInstances();
+    const reader = this.citizens.find((citizen) => citizen.kind === 'read' && !citizen.path.length);
+    this.readingBook.visible = Boolean(reader);
+    if (reader) {
+      this.readingBook.position.set(0, .24, .15).applyQuaternion(reader.model.quaternion).add(reader.model.position);
+      this.readingBook.quaternion.copy(reader.model.quaternion);
+    }
   }
 
   /** Asleep residents are indoors, so they leave the street empty instead of standing at the door all night. */
@@ -1789,12 +1809,14 @@ export class CitizenSystem {
           else if (citizen.idleVariant === 1 || kind === 'watch') target.headYaw = Math.sin(time * .6) * .5 + Math.sin(time * .23) * .3;
           else target.roll = Math.sin(time * .35) > 0 ? .03 : -.03;
           break;
+        case 'read':
         case 'sit':
           target.crouch = .16;
           target.legL = target.legR = -Math.PI / 2 + .1;
           target.armLX = target.armRX = -.55;
           target.lean = .12;
-          target.headYaw = Math.sin(time * .4) * .25;
+          target.headYaw = kind === 'read' ? 0 : Math.sin(time * .4) * .25;
+          if (kind === 'read') { target.headPitch = .3; target.armLX = target.armRX = -1; }
           break;
         case 'chat':
           target.headPitch = Math.sin(time * 3.1) * .05;
@@ -1905,7 +1927,7 @@ export class CitizenSystem {
     if (!source || !destination || !this.graph.canReach(source.key, destination.key)) return null;
     const owners = new Set(this.businesses.map((business) => business.ownerId));
     const candidates = this.citizens
-      .filter((citizen) => citizen.ageGroup !== 'child' && citizen.residentKind !== 'visitor' && !citizen.carryingGood && !owners.has(citizen.id))
+      .filter((citizen) => citizen.id !== this.readingVisit?.residentId && citizen.kind !== 'read' && citizen.ageGroup !== 'child' && citizen.residentKind !== 'visitor' && !citizen.carryingGood && !owners.has(citizen.id))
       .map((citizen) => ({ citizen, from: this.graph.closest(citizen.model.position) }))
       .filter((entry): entry is { citizen: Citizen; from: NavNode } => Boolean(entry.from && this.graph.canReach(entry.from.key, source.key)))
       .sort((a, b) => Number(b.citizen.occupation === 'Caretaker') - Number(a.citizen.occupation === 'Caretaker'));
@@ -1939,6 +1961,7 @@ export class CitizenSystem {
       const bz = Math.floor(first.model.position.z / bucketSize);
       for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
         for (const second of buckets.get(`${bx + dx},${bz + dz}`) ?? []) {
+          if (first.kind === 'read' || second.kind === 'read') continue;
           if (first.id >= second.id || comparisons++ >= 480) continue;
           if (first.model.position.distanceToSquared(second.model.position) > .16) continue;
           const key = `${first.id}|${second.id}`;
@@ -1999,6 +2022,7 @@ export class CitizenSystem {
 
   noticeDiscovery(activity: string) {
     for (const citizen of this.citizens.slice(0, 3)) {
+      if (citizen.id === this.readingVisit?.residentId || citizen.kind === 'read') continue;
       citizen.activity = activity;
       citizen.kind = kindFromText(activity);
       citizen.path = [];
@@ -2011,7 +2035,8 @@ export class CitizenSystem {
       ? new Set(this.businesses.filter((business) => business.type === filter.favoriteBusinessType).map((business) => business.id))
       : null;
     const participants = this.citizens.filter((citizen) =>
-      (!filter.occupation || citizen.occupation === filter.occupation)
+      citizen.id !== this.readingVisit?.residentId && citizen.kind !== 'read'
+      && (!filter.occupation || citizen.occupation === filter.occupation)
       && (!filter.ageGroup || citizen.ageGroup === filter.ageGroup)
       && (!favoriteBusinesses || Boolean(citizen.favoriteBusinessId && favoriteBusinesses.has(citizen.favoriteBusinessId))),
     );
@@ -2085,6 +2110,7 @@ export class CitizenSystem {
     const center = this.graph.closest(focus);
     if (!center) return;
     this.citizens.forEach((citizen, index) => {
+      if (citizen.id === this.readingVisit?.residentId || citizen.kind === 'read') return;
       const from = this.graph.closest(citizen.model.position);
       if (!from || !this.graph.canReach(from.key, center.key)) return;
       const target = this.graph.randomNode((index * .173) % 1, from.key, (node) => node.position.distanceToSquared(center.position) < 5.5) ?? center;
@@ -2095,6 +2121,54 @@ export class CitizenSystem {
       citizen.facePoint = center.position;
       citizen.nextDecisionAt = this.currentHours + 1.2;
     });
+  }
+
+  /** Uses actual reachable formation nodes; never teleports across open water. */
+  visitReadingPlace(residentId: string, formation: FormationOccurrence): boolean {
+    const citizen = this.citizens.find((person) => person.id === residentId);
+    const from = citizen && this.graph.closest(citizen.model.position);
+    if (!citizen || !from) return false;
+    let target = [...this.graph.formationPlaces]
+      .filter(([key, id]) => id === formation.id && this.graph.canReach(from.key, key))
+      .map(([key]) => this.graph.nodes.get(key)!)
+      .filter((node) => Math.hypot(node.position.x / CELL - formation.x, node.position.z / CELL - formation.z) <= 2.35)
+      .sort((a, b) => a.position.distanceToSquared(new THREE.Vector3(formation.x * CELL, a.position.y, formation.z * CELL))
+        - b.position.distanceToSquared(new THREE.Vector3(formation.x * CELL, b.position.y, formation.z * CELL)))[0];
+    if (!target) return false;
+    if (FORMATION_BY_ID.get(formation.id)?.family === 'courtyard') {
+      // The center node runs through the garden tree. Read at its paved edge.
+      const centerX = formation.x * CELL, centerZ = formation.z * CELL;
+      const distance = (node: NavNode) => Math.hypot(node.position.x - centerX, node.position.z - centerZ);
+      const clearance = (node: NavNode) => Math.min(...[...this.cells.values()].map((cell) =>
+        Math.hypot(node.position.x - cell.x * CELL, node.position.z - cell.z * CELL)));
+      target = [...this.graph.nodes.values()]
+        .filter((node) => !this.graph.rooftops.has(node.key) && this.graph.canReach(from.key, node.key)
+          && Math.abs(node.position.x - centerX) <= CELL * .51
+          && Math.abs(node.position.z - centerZ) <= CELL * .51
+          && distance(node) >= CELL * .3)
+        .sort((a, b) => clearance(b) - clearance(a) || distance(b) - distance(a))[0] ?? target;
+    }
+    const title = FORMATION_BY_ID.get(formation.id)!.title;
+    citizen.path = this.graph.path(from.key, target.key);
+    citizen.targetKey = target.key;
+    citizen.carryingGood = null;
+    citizen.pendingParcelBusinessId = null;
+    citizen.carryingParcel = false;
+    citizen.activity = `walking to read at ${title}`;
+    citizen.kind = 'read';
+    citizen.nextDecisionAt = this.currentHours + 1.2;
+    this.readingVisit = { residentId, targetKey: target.key, title };
+    return true;
+  }
+
+  readingVisitStatus(residentId: string): 'missing' | 'walking' | 'arrived' {
+    const citizen = this.citizens.find((person) => person.id === residentId);
+    if (!citizen || this.readingVisit?.residentId !== residentId || citizen.targetKey !== this.readingVisit.targetKey) return 'missing';
+    return citizen.path.length ? 'walking' : 'arrived';
+  }
+
+  finishReadingVisit() {
+    this.readingVisit = undefined;
   }
 
   drainBusinessVisits() {

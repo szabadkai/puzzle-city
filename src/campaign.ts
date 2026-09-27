@@ -57,7 +57,7 @@ export function restoreCampaign(raw: unknown, profileUnlocked: boolean): Campaig
   const valid = value.version === 1;
   const completed = valid && Number.isInteger(value.completed) && value.completed! >= 0 && value.completed! <= CAMPAIGN_LESSONS.length
     ? value.completed! : 0;
-  const sandboxUnlocked = profileUnlocked || (valid && value.sandboxUnlocked === true) || completed === CAMPAIGN_LESSONS.length;
+  const sandboxUnlocked = profileUnlocked || (valid && value.sandboxUnlocked === true) || completed >= 2 || (completed === 1 && value.ready === true);
   return {
     version: 1,
     mode: sandboxUnlocked && (valid ? value.mode === 'sandbox' : true) ? 'sandbox' : 'campaign',
@@ -106,7 +106,9 @@ export function observeCampaign(state: CampaignSave, occurrences: readonly Forma
   if (state.mode !== 'campaign' || state.started === false || state.ready || !lesson) return state;
   const active = occurrences.filter(({ id }) => id === lesson.id).map(occurrenceKey);
   const existing = (state.existing ?? []).filter((key) => active.includes(key));
-  if (active.some((key) => !existing.includes(key))) return { ...state, existing, ready: true, earned: Math.max(state.earned ?? 0, state.completed + 1) };
+  if (active.some((key) => !existing.includes(key))) return { ...state, existing, ready: true,
+    sandboxUnlocked: state.sandboxUnlocked || state.completed === 1,
+    earned: Math.max(state.earned ?? 0, state.completed + 1) };
   return existing.length !== (state.existing ?? []).length ? { ...state, existing } : state;
 }
 
@@ -117,7 +119,7 @@ export function advanceCampaign(state: CampaignSave, occurrences: readonly Forma
   return { ...state, completed, ready: false, earned: Math.max(state.earned ?? 0, completed),
     planExpanded: isNewPattern(completed),
     existing: occurrences.filter(({ id }) => id === next?.id).map(occurrenceKey),
-    sandboxUnlocked: state.sandboxUnlocked || completed === CAMPAIGN_LESSONS.length };
+    sandboxUnlocked: state.sandboxUnlocked || completed >= 2 };
 }
 
 export function replayCampaign(state: CampaignSave, occurrences: readonly FormationOccurrence[] = []): CampaignSave {

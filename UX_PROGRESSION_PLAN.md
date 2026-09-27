@@ -1,5 +1,7 @@
 # Formation Voyage: onboarding and progression UX plan
 
+> Current implementation update: the welcome and all lessons can be dismissed. Sea Arch now permanently unlocks sandbox and offers **Keep exploring** or **Continue the Voyage**. The remaining lessons are optional mastery goals; the historical 18-lesson sandbox gate below is superseded. Sandbox also offers one optional resident reading-place wish, fulfilled through a real walk to a courtyard or shared rooftop.
+
 ## Product promise
 
 Formation Voyage teaches the player how Little Tides reads space. Across one persistent harbor, the player learns all 18 formations, one family at a time. Completing the voyage unlocks free sandbox permanently for this and future tides.

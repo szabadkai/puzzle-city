@@ -334,6 +334,22 @@ try {
   const originalPieces = new Map(editCity.pieces);
   const batchRoot = editCity.root.getObjectByName('town-static-batches');
   const originalBatches = [...batchRoot.children];
+  // Every triangle in a settled batch must belong to exactly one source piece.
+  // Mixed indexed/non-indexed meshes expand vertices during merging; using the
+  // pre-expansion vertex count makes edits erase portions of neighboring homes.
+  for (const batch of batchRoot.children) {
+    const indices = batch.geometry.index;
+    const ranges = [...editCity.staticBatchRanges.values()].flat()
+      .filter((range) => range.indices === indices).sort((a, b) => a.start - b.start);
+    let cursor = 0;
+    for (const range of ranges) {
+      assert.equal(range.start, cursor, 'batch ranges must neither overlap nor leave gaps');
+      assert.equal(range.count % 3, 0, 'a retired range must contain whole triangles');
+      cursor += range.count;
+    }
+    assert.equal(cursor, indices.count, 'every merged triangle must have a source owner');
+  }
+
   editCity.setDiscoveryState(['first-neighbor']);
   assert.deepEqual(new Map(editCity.pieces), originalPieces, 'journal discoveries must retain every piece');
   assert.deepEqual(batchRoot.children, originalBatches, 'journal discoveries must retain GPU batches');
@@ -343,6 +359,7 @@ try {
   editCity.setDiscoveryState(['first-neighbor']);
   const stable = pieceAt(5, 0);
   const batchesBeforeEdit = [...batchRoot.children];
+  const originalTriangles = new Map(batchesBeforeEdit.map(batch => [batch, batch.geometry.index.array.slice()]));
   const stableRanges = editCity.staticBatchRanges.get('5,0').map(({ indices, start, count }) => ({
     indices, start, count, before: indices.array.slice(start, start + count),
   }));
@@ -355,6 +372,14 @@ try {
   }
   for (const { indices, start, count } of retiredRanges) {
     assert.ok(indices.array.subarray(start, start + count).every((index) => index === 0), 'old edited geometry must disappear immediately');
+  }
+  for (const [batch, original] of originalTriangles) {
+    const current = batch.geometry.index.array;
+    for (let offset = 0; offset < current.length; offset += 3) {
+      if (current[offset] === 0 && current[offset + 1] === 0 && current[offset + 2] === 0) continue;
+      assert.deepEqual(current.subarray(offset, offset + 3), original.subarray(offset, offset + 3),
+        'editing must retire whole triangles without stretching surviving faces');
+    }
   }
   editCity.rebuildGlobalStaticBatch(true);
   for (const batch of batchesBeforeEdit) assert.ok(batchRoot.children.includes(batch), 'incremental batching must preserve stable GPU buffers');
@@ -375,6 +400,21 @@ try {
   const incrementalShape = batchShape();
   editCity.rebuildAll(false);
   assert.deepEqual(batchShape(), incrementalShape, 'rapid raise/lower/undo must settle to the same geometry as a full rebuild');
+
+  const scheduleCity = new CityRenderer(seed);
+  scheduleCity.load([{ x: 0, z: 0, height: 2, color: 1, placedAt: 0 }]);
+  scheduleCity.setBusinesses([{ ...businesses[6], cellKey: '0,0', type: 'restaurant' }]);
+  const restaurant = scheduleCity.pieces.get('0,0');
+  const furniture = restaurant.userData.dryEveningFurniture;
+  assert.ok(furniture.length > 0);
+  assert.ok(furniture.every(object => object.parent === restaurant), 'scheduled furniture must retain live source objects');
+  scheduleCity.update(1, 18);
+  assert.ok(furniture.every(object => object.userData.hiddenByStaticBatch), 'evening furniture should render in the shared batch');
+  scheduleCity.update(2, 12);
+  scheduleCity.rebuildGlobalStaticBatch();
+  assert.ok(furniture.every(object => !object.visible && !object.userData.hiddenByStaticBatch), 'daytime furniture must disappear from both source meshes and batches');
+  scheduleCity.update(3, 18);
+  assert.ok(furniture.every(object => object.userData.hiddenByStaticBatch && !object.visible), 'returning furniture must draw exactly once');
 
   const cellMap = new Map(cells.map((cell) => [`${cell.x},${cell.z}`, cell]));
   const people = new CitizenSystem(seed, cellMap, citizens);
@@ -908,6 +948,21 @@ try {
       if (theatreLights.length !== 2 || (nightGlows?.geometry?.getAttribute('position').count ?? 0) < 9) {
         throw new Error('The Lantern Theatre is missing its local lamps or layered night glows.');
       }
+    }
+    if (landmarkCase.id === 'high-harbor') {
+      // Stop the arrival animation so the weather signal can be batched.
+      delete animatedLandmark.userData.morphStartedAt;
+      animatedLandmark.scale.y = 1;
+      const signal = animatedLandmark.userData.stormSignal;
+      assert.ok(signal);
+      landmarkCity.setWeather(.8);
+      landmarkCity.rebuildGlobalStaticBatch();
+      assert.ok(signal.children.every(object => object.userData.hiddenByStaticBatch && !object.visible));
+      landmarkCity.setWeather(.9);
+      assert.ok(signal.children.every(object => !object.visible), 'changing rain intensity must not reveal already batched signals');
+      landmarkCity.setWeather(0);
+      landmarkCity.rebuildGlobalStaticBatch();
+      assert.ok(signal.children.every(object => !object.visible && !object.userData.hiddenByStaticBatch), 'ending a storm must retire its signals');
     }
     if (landmarkCase.id === 'canal-market') {
       const barge = animatedLandmark.getObjectByName('market-barge-model');
